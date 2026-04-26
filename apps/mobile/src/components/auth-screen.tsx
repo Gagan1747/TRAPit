@@ -1,0 +1,340 @@
+import { getMobileDashboardPath, normalSignupRole, roleLabels, USER_ROLES, type UserRole } from "@trapit/auth";
+import { Redirect, type Href, useRouter } from "expo-router";
+import { useState } from "react";
+import {
+  Pressable,
+  SafeAreaView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
+
+import { useAuth } from "../auth/auth-context";
+import { getMobileAuthSetupMessage, isMobileAuthConfigured } from "../auth/auth-config";
+
+type AuthScreenProps = {
+  mode: "sign-in" | "sign-up";
+};
+
+export function AuthScreen({ mode }: AuthScreenProps) {
+  const router = useRouter();
+  const { confirmSignUp, isLoading, session, signIn, signUp } = useAuth();
+  const authConfigured = isMobileAuthConfigured();
+  const [confirmationCode, setConfirmationCode] = useState("");
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isPending, setIsPending] = useState(false);
+  const [password, setPassword] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [role, setRole] = useState<UserRole>(
+    mode === "sign-up" ? normalSignupRole : "user",
+  );
+  const [signUpState, setSignUpState] = useState<{
+    destination?: string | null;
+    requiresConfirmation?: boolean;
+    warning?: string;
+  } | null>(null);
+
+  if (!isLoading && session) {
+    return <Redirect href={getMobileDashboardPath(session.role) as Href} />;
+  }
+
+  async function handleSubmit() {
+    setErrorMessage(null);
+
+    if (!authConfigured) {
+      setErrorMessage(getMobileAuthSetupMessage());
+      return;
+    }
+
+    if (!phoneNumber || !password) {
+      setErrorMessage("Phone number and password are required.");
+      return;
+    }
+
+    setIsPending(true);
+
+    try {
+      if (mode === "sign-up") {
+        const result = await signUp(phoneNumber, password);
+        setSignUpState({
+          destination: result.deliveryDestination,
+          requiresConfirmation: result.requiresConfirmation,
+          warning: result.warning,
+        });
+
+        if (!result.requiresConfirmation) {
+          router.push("/sign-in");
+        }
+
+        return;
+      }
+
+      const nextSession = await signIn(phoneNumber, password, role);
+      router.replace(getMobileDashboardPath(nextSession.role) as Href);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Authentication failed.");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  async function handleConfirmSignUp() {
+    setErrorMessage(null);
+
+    if (!authConfigured) {
+      setErrorMessage(getMobileAuthSetupMessage());
+      return;
+    }
+
+    if (!phoneNumber || !confirmationCode) {
+      setErrorMessage("Phone number and confirmation code are required.");
+      return;
+    }
+
+    setIsPending(true);
+
+    try {
+      await confirmSignUp(phoneNumber, confirmationCode);
+      router.push("/sign-in");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Confirmation failed.");
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.screen}>
+        <View style={styles.hero}>
+          <Text style={styles.eyebrow}>TRAPit mobile</Text>
+          <Text style={styles.title}>
+            {mode === "sign-up" ? "Create your user account" : "Sign in to continue"}
+          </Text>
+          <Text style={styles.copy}>
+            {mode === "sign-up"
+              ? "Normal users can sign up here. Admins should be provisioned separately."
+              : "Use the same role claim you plan to enforce from Cognito."}
+          </Text>
+          {!authConfigured ? <Text style={styles.metaText}>{getMobileAuthSetupMessage()}</Text> : null}
+        </View>
+
+        <View style={styles.card}>
+          <View style={styles.field}>
+            <Text style={styles.label}>Phone number</Text>
+            <TextInput
+              autoCapitalize="none"
+              keyboardType="phone-pad"
+              placeholder="+14155550123"
+              placeholderTextColor="#8e7d70"
+              style={styles.input}
+              editable={authConfigured}
+              value={phoneNumber}
+              onChangeText={setPhoneNumber}
+            />
+          </View>
+
+          <View style={styles.field}>
+            <Text style={styles.label}>Password</Text>
+            <TextInput
+              placeholder="At least 8 characters"
+              placeholderTextColor="#8e7d70"
+              secureTextEntry
+              style={styles.input}
+              editable={authConfigured}
+              value={password}
+              onChangeText={setPassword}
+            />
+          </View>
+
+          {mode === "sign-up" && signUpState?.requiresConfirmation ? (
+            <View style={styles.field}>
+              <Text style={styles.label}>Confirmation code</Text>
+              <TextInput
+                placeholder="Enter the code from SMS"
+                placeholderTextColor="#8e7d70"
+                style={styles.input}
+                editable={authConfigured}
+                value={confirmationCode}
+                onChangeText={setConfirmationCode}
+              />
+            </View>
+          ) : null}
+
+          {mode === "sign-in" ? (
+            <View style={styles.field}>
+              <Text style={styles.label}>Role</Text>
+              <View style={styles.roleRow}>
+                {USER_ROLES.map((option) => (
+                  <Pressable
+                    key={option}
+                    style={[styles.roleChip, role === option && styles.roleChipActive]}
+                    disabled={!authConfigured}
+                    onPress={() => setRole(option)}
+                  >
+                    <Text
+                      style={[
+                        styles.roleChipText,
+                        role === option && styles.roleChipTextActive,
+                      ]}
+                    >
+                      {roleLabels[option]}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : null}
+
+          {signUpState?.requiresConfirmation ? (
+            <Text style={styles.metaText}>
+              SMS code sent{signUpState.destination ? ` to ${signUpState.destination}` : ""}. Confirm the account before signing in.
+            </Text>
+          ) : null}
+
+          {signUpState?.warning ? <Text style={styles.metaText}>{signUpState.warning}</Text> : null}
+
+          {errorMessage ? <Text style={styles.metaText}>{errorMessage}</Text> : null}
+
+          <Pressable style={styles.primaryButton} disabled={!authConfigured || isPending} onPress={handleSubmit}>
+            <Text style={styles.primaryButtonText}>
+              {isPending
+                ? "Working..."
+                : !authConfigured
+                  ? "Auth setup pending"
+                  : mode === "sign-up"
+                    ? "Create user account"
+                    : "Sign in"}
+            </Text>
+          </Pressable>
+
+          {mode === "sign-up" && signUpState?.requiresConfirmation ? (
+            <Pressable style={styles.secondaryButton} disabled={!authConfigured || isPending} onPress={handleConfirmSignUp}>
+              <Text style={styles.secondaryButtonText}>Confirm account</Text>
+            </Pressable>
+          ) : null}
+
+          <Pressable
+            style={styles.secondaryButton}
+            onPress={() => router.push(mode === "sign-up" ? "/sign-in" : "/sign-up")}
+          >
+            <Text style={styles.secondaryButtonText}>
+              {mode === "sign-up" ? "Already have an account? Sign in" : "Need an account? Sign up"}
+            </Text>
+          </Pressable>
+        </View>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: "#efe3d2",
+  },
+  screen: {
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: 20,
+    paddingVertical: 24,
+    backgroundColor: "#efe3d2",
+  },
+  hero: {
+    marginBottom: 18,
+    gap: 8,
+  },
+  eyebrow: {
+    textTransform: "uppercase",
+    letterSpacing: 2,
+    color: "#8e3f2c",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  title: {
+    fontSize: 34,
+    lineHeight: 38,
+    color: "#231712",
+    fontWeight: "700",
+  },
+  copy: {
+    color: "#6d5a4e",
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  card: {
+    backgroundColor: "rgba(255, 248, 240, 0.92)",
+    borderRadius: 24,
+    padding: 18,
+    gap: 16,
+  },
+  field: {
+    gap: 8,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#231712",
+  },
+  input: {
+    minHeight: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#d7c3af",
+    backgroundColor: "#fffaf5",
+    paddingHorizontal: 14,
+    fontSize: 15,
+  },
+  roleRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  roleChip: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#d7c3af",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fffaf5",
+  },
+  roleChipActive: {
+    borderColor: "#b44c2f",
+    backgroundColor: "#b44c2f",
+  },
+  roleChipText: {
+    color: "#3b2d26",
+    fontWeight: "600",
+  },
+  roleChipTextActive: {
+    color: "#ffffff",
+  },
+  primaryButton: {
+    minHeight: 50,
+    borderRadius: 999,
+    backgroundColor: "#b44c2f",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  primaryButtonText: {
+    color: "#ffffff",
+    fontWeight: "700",
+    fontSize: 15,
+  },
+  secondaryButton: {
+    minHeight: 44,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  secondaryButtonText: {
+    color: "#6d5a4e",
+    fontWeight: "600",
+  },
+  metaText: {
+    color: "#6d5a4e",
+    fontSize: 14,
+    lineHeight: 20,
+  },
+});

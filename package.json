@@ -1,0 +1,24 @@
+{
+  "name": "trapit",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "corepack pnpm --filter @trapit/web dev",
+    "dev:mobile": "corepack pnpm --filter @trapit/mobile start",
+    "build": "corepack pnpm --filter @trapit/web build && corepack pnpm --filter @trapit/mobile typecheck",
+    "lint": "corepack pnpm --filter @trapit/web lint && corepack pnpm --filter @trapit/mobile lint",
+    "typecheck": "corepack pnpm --filter @trapit/auth typecheck && corepack pnpm --filter @trapit/web typecheck && corepack pnpm --filter @trapit/mobile typecheck"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.1",
+    "pnpm": "9.15.0",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

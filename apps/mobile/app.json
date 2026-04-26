@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "TRAPit Mobile",
+    "slug": "trapit-mobile",
+    "scheme": "trapit",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "experiments": {
+      "typedRoutes": true
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#f5eadb"
+      }
+    }
+  }
+}
