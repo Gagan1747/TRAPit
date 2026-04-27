@@ -144,6 +144,8 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
+The checked-in Nginx config includes larger proxy header buffers for Cognito sign-in responses. If you already had a live config before this change, copy the updated file to the server again and reload Nginx so the buffer settings take effect.
+
 At this stage HTTP should work, but HTTPS will not until the certificate is created.
 
 ## 9. Issue the HTTPS certificate
