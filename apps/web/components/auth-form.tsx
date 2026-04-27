@@ -13,6 +13,21 @@ type AuthFormProps = {
   mode: "sign-in" | "sign-up";
 };
 
+async function readAuthResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    return (await response.json()) as T;
+  }
+
+  const payload = await response.text();
+  const htmlTitleMatch = payload.match(/<h1[^>]*>(.*?)<\/h1>/i);
+  const htmlText = htmlTitleMatch?.[1]?.trim();
+  const textPayload = payload.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+
+  throw new Error(htmlText || textPayload || fallbackMessage);
+}
+
 export function AuthForm({ mode }: AuthFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -68,12 +83,12 @@ export function AuthForm({ mode }: AuthFormProps) {
           },
           method: "POST",
         });
-        const payload = (await response.json()) as {
+        const payload = await readAuthResponse<{
           deliveryDestination?: string | null;
           error?: string;
           requiresConfirmation?: boolean;
           warning?: string;
-        };
+        }>(response, "Sign-up failed.");
 
         if (!response.ok) {
           throw new Error(payload.error ?? "Sign-up failed.");
@@ -99,10 +114,10 @@ export function AuthForm({ mode }: AuthFormProps) {
         },
         method: "POST",
       });
-      const payload = (await response.json()) as {
+      const payload = await readAuthResponse<{
         error?: string;
         redirectTo?: string;
-      };
+      }>(response, "Sign-in failed.");
 
       if (!response.ok || !payload.redirectTo) {
         throw new Error(payload.error ?? "Sign-in failed.");
@@ -142,7 +157,10 @@ export function AuthForm({ mode }: AuthFormProps) {
         },
         method: "POST",
       });
-      const payload = (await response.json()) as { error?: string };
+      const payload = await readAuthResponse<{ error?: string }>(
+        response,
+        "Confirmation failed.",
+      );
 
       if (!response.ok) {
         throw new Error(payload.error ?? "Confirmation failed.");
