@@ -6,7 +6,7 @@ import { isWebAuthConfigured } from "../../lib/auth-config";
 import { requireWebSession } from "../../lib/session";
 
 export default async function UserPage() {
-  const session = await requireWebSession("user");
+  const session = await requireWebSession(["user", "admin"]);
   const authConfigured = isWebAuthConfigured();
   const sessionIdentifier = getSessionIdentifier(session);
   const displayName = getSessionDisplayName(session) ?? "User";

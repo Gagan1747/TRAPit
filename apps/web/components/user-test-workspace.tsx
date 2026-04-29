@@ -2,7 +2,9 @@
 
 import {
   formatElapsedTime,
+  type GroupJoinRequest,
   type ObjectiveQuestion,
+  type ParticipantGroup,
   type TestHistoryEntry,
   type TestResult,
 } from "@trapit/testing";
@@ -29,15 +31,34 @@ type AvailableTest = {
 
 type DashboardResponse = {
   availableTests: AvailableTest[];
+  groupJoinRequests: GroupJoinRequest[];
   history: TestHistoryEntry[];
   identifier: string;
   usingFallbackIdentifier: boolean;
+};
+
+type GroupSearchResponse = {
+  groupJoinRequests: GroupJoinRequest[];
+  participantGroups: ParticipantGroup[];
 };
 
 type AttemptResponse = {
   attempt: {
     result: TestResult;
   };
+};
+
+type UserTestReviewResponse = {
+  review: Array<{
+    correctOptionIndex: number;
+    options: string[];
+    prompt: string;
+    questionId: string;
+    selectedOptionIndex?: number;
+  }>;
+  submittedAt: string | null;
+  testId: string;
+  testTitle: string;
 };
 
 const statusPriority: Record<AvailableTest["status"], number> = {
@@ -51,7 +72,7 @@ type UserTestWorkspaceProps = {
   defaultParticipantIdentifier: string | null;
 };
 
-type UserWorkspaceSection = "tests";
+type UserWorkspaceSection = "groups" | "tests";
 
 type ShuffledQuestion = {
   displayOptions: string[];
@@ -112,13 +133,22 @@ export function UserTestWorkspace({
   const [availableTests, setAvailableTests] = useState<AvailableTest[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [groupJoinRequests, setGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
+  const [groupSearchFeedback, setGroupSearchFeedback] = useState<string | null>(null);
+  const [groupSearchPhoneNumber, setGroupSearchPhoneNumber] = useState("");
+  const [groupSearchResults, setGroupSearchResults] = useState<ParticipantGroup[]>([]);
   const [history, setHistory] = useState<TestHistoryEntry[]>([]);
   const [identifier, setIdentifier] = useState(defaultParticipantIdentifier ?? "");
   const [isLoading, setIsLoading] = useState(false);
+  const [isSearchingGroups, setIsSearchingGroups] = useState(false);
+  const [isSendingGroupRequest, setIsSendingGroupRequest] = useState<string | null>(null);
   const [openSection, setOpenSection] = useState<UserWorkspaceSection | null>("tests");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [participantNamesByTest, setParticipantNamesByTest] = useState<Record<string, string>>({});
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
+  const [reviewByTestId, setReviewByTestId] = useState<Record<string, UserTestReviewResponse>>({});
+  const [reviewLoadingByTestId, setReviewLoadingByTestId] = useState<Record<string, boolean>>({});
+  const [visibleReviewTestIds, setVisibleReviewTestIds] = useState<string[]>([]);
   const [result, setResult] = useState<TestResult | null>(null);
   const [startedAt, setStartedAt] = useState<string | null>(null);
   const answersRef = useRef<Record<string, number | undefined>>({});
@@ -181,6 +211,7 @@ export function UserTestWorkspace({
       );
 
       setAvailableTests(payload.availableTests);
+      setGroupJoinRequests(payload.groupJoinRequests);
       setHistory(payload.history);
       setIdentifier(payload.identifier);
       setFeedback(null);
@@ -221,6 +252,102 @@ export function UserTestWorkspace({
     setOpenSection((currentSection) =>
       currentSection === section ? null : section,
     );
+  }
+
+  function toggleReviewVisibility(testId: string) {
+    setVisibleReviewTestIds((currentIds) =>
+      currentIds.includes(testId)
+        ? currentIds.filter((currentId) => currentId !== testId)
+        : [...currentIds, testId],
+    );
+  }
+
+  async function handleLoadReview(testId: string) {
+    if (reviewByTestId[testId]) {
+      toggleReviewVisibility(testId);
+      return;
+    }
+
+    setReviewLoadingByTestId((currentState) => ({
+      ...currentState,
+      [testId]: true,
+    }));
+
+    try {
+      const payload = await readJson<UserTestReviewResponse>(
+        await fetch(`/api/user/tests/${testId}/review`),
+      );
+
+      setReviewByTestId((currentReviews) => ({
+        ...currentReviews,
+        [testId]: payload,
+      }));
+      setVisibleReviewTestIds((currentIds) => [...new Set([...currentIds, testId])]);
+      setFeedback(null);
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to load the test review.");
+    } finally {
+      setReviewLoadingByTestId((currentState) => ({
+        ...currentState,
+        [testId]: false,
+      }));
+    }
+  }
+
+  async function handleSearchGroups() {
+    if (!groupSearchPhoneNumber.trim()) {
+      setGroupSearchFeedback("Enter the admin phone number to search for groups.");
+      setGroupSearchResults([]);
+      return;
+    }
+
+    setIsSearchingGroups(true);
+
+    try {
+      const payload = await readJson<GroupSearchResponse>(
+        await fetch(`/api/user/groups?phone=${encodeURIComponent(groupSearchPhoneNumber.trim())}`),
+      );
+
+      setGroupSearchResults(payload.participantGroups);
+      setGroupJoinRequests(payload.groupJoinRequests);
+      setGroupSearchFeedback(
+        payload.participantGroups.length
+          ? null
+          : "No groups were found for that admin phone number.",
+      );
+    } catch (error) {
+      setGroupSearchResults([]);
+      setGroupSearchFeedback(
+        error instanceof Error ? error.message : "Unable to search for admin groups.",
+      );
+    } finally {
+      setIsSearchingGroups(false);
+    }
+  }
+
+  async function handleRequestGroup(groupId: string) {
+    setIsSendingGroupRequest(groupId);
+
+    try {
+      const payload = await readJson<{ groupJoinRequests: GroupJoinRequest[] }>(
+        await fetch("/api/user/groups", {
+          body: JSON.stringify({ adminGroupId: groupId }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setGroupJoinRequests(payload.groupJoinRequests);
+      setGroupSearchFeedback("Request sent to the admin for review.");
+    } catch (error) {
+      setGroupSearchFeedback(
+        error instanceof Error ? error.message : "Unable to send the group request.",
+      );
+    } finally {
+      setIsSendingGroupRequest(null);
+    }
   }
 
   async function submitTest(options?: { dueToTimer?: boolean }) {
@@ -343,8 +470,115 @@ export function UserTestWorkspace({
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   }
 
+  function getLatestGroupRequest(groupId: string) {
+    return groupJoinRequests.find((request) => request.adminGroupId === groupId);
+  }
+
+  function formatAnswerLabel(optionIndex: number | undefined, options: string[]) {
+    if (typeof optionIndex !== "number" || optionIndex < 0 || optionIndex >= options.length) {
+      return "Not answered";
+    }
+
+    return `Option ${optionIndex + 1}: ${options[optionIndex]}`;
+  }
+
   return (
     <div className="workspace-stack">
+      <CollapsibleWorkspaceSection
+        description="Search an admin by phone number and request access to their groups"
+        eyebrow=""
+        isOpen={openSection === "groups"}
+        sectionId="user-group-requests"
+        title="Join Groups"
+        onToggle={() => toggleSection("groups")}
+      >
+        {authConfigured ? (
+          <div className="form-stack">
+            <div className="field-row align-end">
+              <div className="field grow-field">
+                <label htmlFor="admin-phone-search">Admin phone number</label>
+                <input
+                  id="admin-phone-search"
+                  placeholder="Search using the admin account phone number"
+                  value={groupSearchPhoneNumber}
+                  onChange={(event) => setGroupSearchPhoneNumber(event.target.value)}
+                />
+              </div>
+              <button className="button" disabled={isSearchingGroups} type="button" onClick={() => void handleSearchGroups()}>
+                {isSearchingGroups ? "Searching..." : "Search groups"}
+              </button>
+            </div>
+
+            {groupSearchFeedback ? <p className="muted-text">{groupSearchFeedback}</p> : null}
+
+            {groupSearchResults.length ? (
+              <div className="question-list">
+                {groupSearchResults.map((group) => {
+                  const latestRequest = getLatestGroupRequest(group.id);
+
+                  return (
+                    <article className="question-card nested-card" key={`group-search-${group.id}`}>
+                      <div className="question-head">
+                        <strong>{group.name}</strong>
+                        {latestRequest ? (
+                          <span className={`status-chip ${latestRequest.status === "accepted" ? "success" : latestRequest.status === "rejected" ? "warning" : ""}`}>
+                            {latestRequest.status}
+                          </span>
+                        ) : null}
+                      </div>
+                      <p className="muted-text">{group.participantIds.length} current member{group.participantIds.length === 1 ? "" : "s"}</p>
+                      <div className="inline-actions">
+                        <button
+                          className="button"
+                          disabled={Boolean(latestRequest) || isSendingGroupRequest === group.id}
+                          type="button"
+                          onClick={() => void handleRequestGroup(group.id)}
+                        >
+                          {isSendingGroupRequest === group.id
+                            ? "Sending..."
+                            : latestRequest
+                              ? latestRequest.status === "pending"
+                                ? "Request pending"
+                                : latestRequest.status === "accepted"
+                                  ? "Request accepted"
+                                  : "Request sent"
+                              : "Request access"}
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : null}
+
+            {groupJoinRequests.length ? (
+              <div className="question-card">
+                <div className="question-head">
+                  <strong>Your latest group requests</strong>
+                  <span className="status-chip success">{groupJoinRequests.length}</span>
+                </div>
+                <div className="request-list">
+                  {groupJoinRequests.map((request) => (
+                    <article className="request-card" key={request.id}>
+                      <strong>{request.adminGroupName}</strong>
+                      <p className="muted-text">Requested as {request.requesterLabel}</p>
+                      <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
+                      <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
+                        {request.status}
+                      </span>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div className="empty-state">
+            <p className="muted-text">Group requests require a signed-in account.</p>
+          </div>
+        )}
+      </CollapsibleWorkspaceSection>
+
       <CollapsibleWorkspaceSection
         description="Live, Scheduled and Upcoming"
         eyebrow=""
@@ -470,7 +704,23 @@ export function UserTestWorkspace({
 
                     {isCompleted ? (
                       historyEntry?.status === "missed" ? (
-                        <p className="muted-text">This test closed without a submission.</p>
+                        <>
+                          <p className="muted-text">This test closed without a submission.</p>
+                          <div className="inline-actions">
+                            <button
+                              className="button-secondary small-button"
+                              disabled={reviewLoadingByTestId[test.id]}
+                              type="button"
+                              onClick={() => void handleLoadReview(test.id)}
+                            >
+                              {reviewLoadingByTestId[test.id]
+                                ? "Loading..."
+                                : visibleReviewTestIds.includes(test.id)
+                                  ? "Hide review"
+                                  : "Review questions"}
+                            </button>
+                          </div>
+                        </>
                       ) : historyEntry ? (
                         <>
                           <p className="muted-text">
@@ -488,6 +738,20 @@ export function UserTestWorkspace({
                               Topper {test.topPerformer.participantName}: {test.topPerformer.correctCount}/{historyEntry.totalCount} in {formatElapsedTime(test.topPerformer.elapsedMs)}
                             </p>
                           ) : null}
+                          <div className="inline-actions">
+                            <button
+                              className="button-secondary small-button"
+                              disabled={reviewLoadingByTestId[test.id]}
+                              type="button"
+                              onClick={() => void handleLoadReview(test.id)}
+                            >
+                              {reviewLoadingByTestId[test.id]
+                                ? "Loading..."
+                                : visibleReviewTestIds.includes(test.id)
+                                  ? "Hide review"
+                                  : "Review questions"}
+                            </button>
+                          </div>
                         </>
                       ) : (
                         <>
@@ -497,6 +761,20 @@ export function UserTestWorkspace({
                               Topper {test.topPerformer.participantName}: {test.topPerformer.correctCount}/{test.questionCount} in {formatElapsedTime(test.topPerformer.elapsedMs)}
                             </p>
                           ) : null}
+                          <div className="inline-actions">
+                            <button
+                              className="button-secondary small-button"
+                              disabled={reviewLoadingByTestId[test.id]}
+                              type="button"
+                              onClick={() => void handleLoadReview(test.id)}
+                            >
+                              {reviewLoadingByTestId[test.id]
+                                ? "Loading..."
+                                : visibleReviewTestIds.includes(test.id)
+                                  ? "Hide review"
+                                  : "Review questions"}
+                            </button>
+                          </div>
                         </>
                       )
                     ) : (
@@ -531,6 +809,34 @@ export function UserTestWorkspace({
                         </div>
                       </>
                     )}
+
+                    {visibleReviewTestIds.includes(test.id) && reviewByTestId[test.id] ? (
+                      <div className="review-list">
+                        {reviewByTestId[test.id].review.map((question, reviewIndex) => (
+                          <article className="question-card nested-card" key={`${test.id}-review-${question.questionId}`}>
+                            <div className="question-head">
+                              <strong>Question {reviewIndex + 1}</strong>
+                              <span className="status-chip success">
+                                Correct option {question.correctOptionIndex + 1}
+                              </span>
+                            </div>
+                            <p>{question.prompt}</p>
+                            <ol className="question-options compact-question-options">
+                              {question.options.map((option, optionIndex) => (
+                                <li key={`${question.questionId}-${optionIndex}`}>
+                                  {option}
+                                  {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
+                                  {optionIndex === question.selectedOptionIndex ? " (your answer)" : ""}
+                                </li>
+                              ))}
+                            </ol>
+                            <p className="muted-text">
+                              Your response: {formatAnswerLabel(question.selectedOptionIndex, question.options)}
+                            </p>
+                          </article>
+                        ))}
+                      </div>
+                    ) : null}
                   </article>
                 );
               })()

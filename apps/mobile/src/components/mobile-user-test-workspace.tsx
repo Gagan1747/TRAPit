@@ -1,6 +1,7 @@
 import {
   formatElapsedTime,
   scoreObjectiveTest,
+  type PersistentQuestion,
   type TestResult,
 } from "@trapit/testing";
 import { useState } from "react";
@@ -11,10 +12,16 @@ import { MobileCollapsibleSection } from "./mobile-collapsible-section";
 
 type MobileUserSection = "results" | "tests";
 
+type SubmittedReview = {
+  answers: Record<string, number | undefined>;
+  questions: PersistentQuestion[];
+};
+
 export function MobileUserTestWorkspace() {
   const { isReady, questions } = useQuestionBank();
   const [answers, setAnswers] = useState<Record<string, number | undefined>>({});
   const [isActive, setIsActive] = useState(false);
+  const [latestReview, setLatestReview] = useState<SubmittedReview | null>(null);
   const [openSection, setOpenSection] = useState<MobileUserSection | null>(null);
   const [result, setResult] = useState<TestResult | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
@@ -40,8 +47,13 @@ export function MobileUserTestWorkspace() {
       return;
     }
 
+    setLatestReview({
+      answers: { ...answers },
+      questions: [...questions],
+    });
     setResult(scoreObjectiveTest(questions, answers, startedAt, Date.now()));
     setIsActive(false);
+    setOpenSection("results");
   }
 
   return (
@@ -133,6 +145,54 @@ export function MobileUserTestWorkspace() {
             <Text style={styles.meta}>Correct answers: {result.correctCount} / {result.totalCount}</Text>
             <Text style={styles.meta}>Attempted: {result.attemptedCount}</Text>
             <Text style={styles.meta}>Time taken: {formatElapsedTime(result.elapsedMs)}</Text>
+
+            {latestReview ? (
+              <View style={styles.reviewList}>
+                {latestReview.questions.map((question, index) => {
+                  const selectedOptionIndex = latestReview.answers[question.id];
+
+                  return (
+                    <View key={`review-${question.id}`} style={styles.reviewCard}>
+                      <View style={styles.reviewHead}>
+                        <Text style={styles.cardTitle}>Question {index + 1}</Text>
+                        <Text style={styles.reviewChip}>
+                          Correct option {question.correctOptionIndex + 1}
+                        </Text>
+                      </View>
+                      <Text style={styles.questionPrompt}>{question.prompt}</Text>
+                      <View style={styles.list}>
+                        {question.options.map((option, optionIndex) => {
+                          const isCorrect = optionIndex === question.correctOptionIndex;
+                          const isSelected = optionIndex === selectedOptionIndex;
+
+                          return (
+                            <View
+                              key={`${question.id}-review-option-${optionIndex}`}
+                              style={[
+                                styles.reviewOption,
+                                isCorrect && styles.reviewOptionCorrect,
+                                isSelected && styles.reviewOptionSelected,
+                              ]}
+                            >
+                              <Text style={styles.answerOptionText}>
+                                {option}
+                                {isCorrect ? " (correct)" : ""}
+                                {isSelected ? " (your answer)" : ""}
+                              </Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                      <Text style={styles.meta}>
+                        Your response: {typeof selectedOptionIndex === "number"
+                          ? `Option ${selectedOptionIndex + 1}: ${question.options[selectedOptionIndex]}`
+                          : "Not answered"}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
           </View>
         ) : (
           <Text style={styles.meta}>Your latest score will appear here after you submit a test.</Text>
@@ -220,6 +280,42 @@ const styles = StyleSheet.create({
     color: "#231712",
     fontSize: 15,
     lineHeight: 22,
+  },
+  reviewCard: {
+    backgroundColor: "rgba(255, 248, 240, 0.92)",
+    borderRadius: 18,
+    gap: 10,
+    padding: 14,
+  },
+  reviewChip: {
+    color: "#6d5a4e",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  reviewHead: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  reviewList: {
+    gap: 12,
+    marginTop: 10,
+  },
+  reviewOption: {
+    backgroundColor: "#fffaf5",
+    borderColor: "#d7c3af",
+    borderRadius: 14,
+    borderWidth: 1,
+    minHeight: 42,
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  reviewOptionCorrect: {
+    borderColor: "#788d5e",
+    backgroundColor: "rgba(120, 141, 94, 0.14)",
+  },
+  reviewOptionSelected: {
+    borderColor: "#b44c2f",
   },
   resultCard: {
     backgroundColor: "#fffaf5",

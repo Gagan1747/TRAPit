@@ -23,9 +23,11 @@ export default async function AdminPage() {
                 : "Auth setup pending. Admin area is open for feature work."}
             </p>
           </div>
-          {authConfigured ? <SignOutButton /> : null}
+          <div className="inline-actions">
+            {authConfigured ? <SignOutButton /> : null}
+          </div>
         </div>
-        <AdminQuestionWorkspace />
+        <AdminQuestionWorkspace currentAdminIdentifier={sessionIdentifier} />
       </section>
     </main>
   );

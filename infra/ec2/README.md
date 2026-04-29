@@ -96,11 +96,36 @@ NEXT_PUBLIC_COGNITO_REGION=...
 NEXT_PUBLIC_COGNITO_USER_POOL_ID=...
 NEXT_PUBLIC_COGNITO_WEB_CLIENT_ID=...
 EXPO_PUBLIC_API_BASE_URL=https://trapit.in
+TRAPIT_DATA_DIR=/var/lib/trapit
 ```
 
 If you want automatic user group assignment in Cognito, also provide AWS credentials on the instance with permission for `cognito-idp:AdminAddUserToGroup`.
 
 One common EC2 approach is to attach an IAM role to the instance instead of storing AWS keys in env files.
+
+`TRAPIT_DATA_DIR` moves the web app data file outside the Git checkout so deployments do not overwrite test history, group data, or results. The live file becomes `/var/lib/trapit/testing-workspace.json`.
+
+## 5.1 Create the persistent application data directory
+
+Run this once on the server:
+
+```bash
+sudo mkdir -p /var/lib/trapit
+sudo chown -R $USER:$USER /var/lib/trapit
+```
+
+If you already have live data inside the repo, migrate it before the next deploy:
+
+```bash
+mkdir -p /var/lib/trapit
+cp /var/www/trapit/apps/web/data/testing-workspace.json /var/lib/trapit/testing-workspace.json
+```
+
+Verify the file exists:
+
+```bash
+ls -l /var/lib/trapit/testing-workspace.json
+```
 
 ## 6. Install dependencies and build
 
@@ -121,6 +146,8 @@ pm2 start /var/www/trapit/ecosystem.config.cjs
 pm2 save
 pm2 startup systemd
 ```
+
+The checked-in PM2 config already sets `TRAPIT_DATA_DIR=/var/lib/trapit`.
 
 After `pm2 startup systemd`, run the command PM2 prints to finish startup registration.
 
@@ -191,12 +218,32 @@ Expected behavior:
 When you push new code to the server:
 
 ```bash
+cp /var/lib/trapit/testing-workspace.json /var/lib/trapit/testing-workspace.backup-$(date +%F-%H%M%S).json
 cd /var/www/trapit
 git pull
 corepack pnpm install --frozen-lockfile
 corepack pnpm --filter @trapit/web build
 pm2 restart trapit-web
 ```
+
+After restart, verify the app still points at the external data file:
+
+```bash
+pm2 logs trapit-web --lines 50
+ls -l /var/lib/trapit/testing-workspace.json
+```
+
+Do not keep production data in `/var/www/trapit/apps/web/data/testing-workspace.json` after migration. That file lives inside the repo checkout and can be replaced during future updates.
+
+## Safe next deployment checklist
+
+For your next deployment on the current server, use this order:
+
+1. Back up the live repo-scoped data file if it still contains the latest history.
+2. Copy that file into `/var/lib/trapit/testing-workspace.json`.
+3. Set `TRAPIT_DATA_DIR=/var/lib/trapit` in `apps/web/.env.production` or the PM2 config.
+4. Rebuild and restart PM2.
+5. Confirm recent test history is still visible in the browser.
 
 ## Common issues
 

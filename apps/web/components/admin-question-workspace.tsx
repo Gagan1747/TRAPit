@@ -3,6 +3,7 @@
 import {
   createEmptyTestingWorkspaceState,
   formatElapsedTime,
+  type GroupJoinRequest,
   validateQuestionDraft,
   type BulkImportPreview,
   type ParticipantGroup,
@@ -19,6 +20,19 @@ import { formatShortDate, formatShortDateTime } from "../lib/date-format";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 
 const MANUAL_OPTION_COUNT = 5;
+
+const AI_OCR_PROMPT = `convert the image/text to questions in the following format
+-add colon after question, each options, answer
+-question, each options and answer should be in separate line
+-Each set of 'question, each options and answer' should be separated from other set by a spacing of line`;
+
+const AI_OCR_EXAMPLE = `Question: 5+3?
+Option A: 10
+Option B: 6
+Option C: 9
+Option D: 8
+Option E: 7
+Answer: 8`;
 
 function createEmptyOptions(count: number) {
   return Array.from({ length: count }, () => "");
@@ -65,6 +79,7 @@ type PoolsResponse = {
 };
 
 type ParticipantsResponse = {
+  groupJoinRequests: GroupJoinRequest[];
   participantGroups: ParticipantGroup[];
   participants: ParticipantProfile[];
 };
@@ -86,7 +101,22 @@ type HistoryResponse = {
   };
 };
 
+type AdminTestReviewResponse = {
+  review: Array<{
+    correctOptionIndex: number;
+    optionSelectionCounts: number[];
+    options: string[];
+    prompt: string;
+    questionId: string;
+    totalResponses: number;
+  }>;
+  submittedCount: number;
+  testId: string;
+  testTitle: string;
+};
+
 type AdminWorkspaceSection =
+  | "assigned-tests"
   | "author"
   | "history"
   | "participants"
@@ -283,7 +313,11 @@ function ParticipantSearchPicker({
   );
 }
 
-export function AdminQuestionWorkspace() {
+type AdminQuestionWorkspaceProps = {
+  currentAdminIdentifier: string | null;
+};
+
+export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestionWorkspaceProps) {
   const [authorMode, setAuthorMode] = useState<AuthorMode>("manual");
   const [correctOptionIndex, setCorrectOptionIndex] = useState(0);
   const [editingGroupDraft, setEditingGroupDraft] = useState<EditableGroupDraft | null>(null);
@@ -292,6 +326,7 @@ export function AdminQuestionWorkspace() {
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [groupFeedback, setGroupFeedback] = useState<string | null>(null);
+  const [groupJoinRequests, setGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
   const [groupName, setGroupName] = useState("");
   const [history, setHistory] = useState<TestHistoryEntry[]>([]);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
@@ -314,6 +349,8 @@ export function AdminQuestionWorkspace() {
   const [questions, setQuestions] = useState<PersistentQuestion[]>(
     createEmptyTestingWorkspaceState().questions,
   );
+  const [reviewByTestId, setReviewByTestId] = useState<Record<string, AdminTestReviewResponse>>({});
+  const [reviewLoadingByTestId, setReviewLoadingByTestId] = useState<Record<string, boolean>>({});
   const [scheduleDurationMinutes, setScheduleDurationMinutes] = useState("30");
   const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
   const [scheduleParticipantGroupIds, setScheduleParticipantGroupIds] = useState<string[]>([]);
@@ -332,6 +369,7 @@ export function AdminQuestionWorkspace() {
     questions: 0,
     scheduledTests: 0,
   });
+  const [visibleReviewTestIds, setVisibleReviewTestIds] = useState<string[]>([]);
 
   async function loadWorkspace() {
     setIsLoading(true);
@@ -350,6 +388,7 @@ export function AdminQuestionWorkspace() {
       setPools(poolsPayload.pools);
       setParticipants(participantsPayload.participants);
       setParticipantGroups(participantsPayload.participantGroups);
+      setGroupJoinRequests(participantsPayload.groupJoinRequests);
       setScheduledTests(testsPayload.scheduledTests);
       setHistory(historyPayload.history);
       setLeaderboards(historyPayload.leaderboards);
@@ -439,6 +478,14 @@ export function AdminQuestionWorkspace() {
     );
   }
 
+  function toggleReviewVisibility(testId: string) {
+    setVisibleReviewTestIds((currentIds) =>
+      currentIds.includes(testId)
+        ? currentIds.filter((currentId) => currentId !== testId)
+        : [...currentIds, testId],
+    );
+  }
+
   async function mutateWorkspace(work: () => Promise<void>) {
     setIsMutating(true);
 
@@ -447,6 +494,38 @@ export function AdminQuestionWorkspace() {
       await loadWorkspace();
     } finally {
       setIsMutating(false);
+    }
+  }
+
+  async function handleLoadReview(testId: string) {
+    if (reviewByTestId[testId]) {
+      toggleReviewVisibility(testId);
+      return;
+    }
+
+    setReviewLoadingByTestId((currentState) => ({
+      ...currentState,
+      [testId]: true,
+    }));
+
+    try {
+      const payload = await readJson<AdminTestReviewResponse>(
+        await fetch(`/api/admin/tests/${testId}/review`),
+      );
+
+      setReviewByTestId((currentReviews) => ({
+        ...currentReviews,
+        [testId]: payload,
+      }));
+      setVisibleReviewTestIds((currentIds) => [...new Set([...currentIds, testId])]);
+      setFeedback(null);
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to load the test review.");
+    } finally {
+      setReviewLoadingByTestId((currentState) => ({
+        ...currentState,
+        [testId]: false,
+      }));
     }
   }
 
@@ -882,6 +961,62 @@ export function AdminQuestionWorkspace() {
   const filteredQuestionBankQuestions = selectedQuestionBankPoolId
     ? questions.filter((question) => question.poolIds.includes(selectedQuestionBankPoolId))
     : [];
+  const scheduledTestsByStatus: Array<{
+    description: string;
+    key: ScheduledTest["status"];
+    label: string;
+    tests: ScheduledTest[];
+  }> = [
+    {
+      description: "Currently open tests and in-progress submissions",
+      key: "live",
+      label: "Live tests",
+      tests: sortedScheduledTests.filter((test) => test.status === "live"),
+    },
+    {
+      description: "Tests that are scheduled but not open yet",
+      key: "scheduled",
+      label: "Upcoming tests",
+      tests: sortedScheduledTests.filter((test) => test.status === "scheduled"),
+    },
+    {
+      description: "Completed tests with final results and question review",
+      key: "completed",
+      label: "Completed tests",
+      tests: sortedScheduledTests.filter((test) => test.status === "completed"),
+    },
+  ];
+  const assignedTests = currentAdminIdentifier
+    ? sortedScheduledTests.filter((test) =>
+        test.resolvedParticipantIdentifiers.some((identifier) =>
+          participantIdentifiersMatch(identifier, currentAdminIdentifier),
+        ),
+      )
+    : [];
+
+  function handleResolveGroupRequest(requestId: string, decision: "accept" | "reject") {
+    void mutateWorkspace(async () => {
+      await readJson<ParticipantsResponse>(
+        await fetch("/api/admin/participants", {
+          body: JSON.stringify({
+            decision,
+            mode: "resolve-request",
+            requestId,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setGroupFeedback(
+        decision === "accept" ? "Request accepted and participant added to the group." : "Request rejected.",
+      );
+    }).catch((error) => {
+      setGroupFeedback(error instanceof Error ? error.message : "Unable to update the request.");
+    });
+  }
 
   return (
     <div className="workspace-stack">
@@ -1051,16 +1186,37 @@ export function AdminQuestionWorkspace() {
                   <p className="eyebrow">OCR import</p>
                   <h2 className="section-title">Import, preview, and clean pasted text</h2>
                 </div>
-                <p className="muted-text">
-                  Paste OCR text in blocks separated by blank lines. Use lines like Question:, Option A: through Option E:, and Answer: C.
-                </p>
+                <div className="form-stack">
+                  <p className="muted-text">
+                    If the questions are on paper or already in text, send the photo or text to AI and use this exact prompt.
+                  </p>
+                  <div className="field textarea-field">
+                    <label htmlFor="meta-ai-prompt">AI prompt</label>
+                    <textarea
+                      id="meta-ai-prompt"
+                      readOnly
+                      value={AI_OCR_PROMPT}
+                    />
+                  </div>
+                  <p className="muted-text">
+                    Expected output example:
+                  </p>
+                  <div className="field textarea-field">
+                    <label htmlFor="meta-ai-example">Example format</label>
+                    <textarea
+                      id="meta-ai-example"
+                      readOnly
+                      value={AI_OCR_EXAMPLE}
+                    />
+                  </div>
+                </div>
               </div>
 
               <div className="field textarea-field">
                 <label htmlFor="import-text">OCR text</label>
                 <textarea
                   id="import-text"
-                  placeholder={"Question: What is 2 + 2?\nOption A: 3\nOption B: 4\nOption C: 5\nOption D: 6\nOption E: 7\nAnswer: B"}
+                  placeholder={AI_OCR_EXAMPLE}
                   value={importText}
                   onChange={(event) => setImportText(event.target.value)}
                 />
@@ -1378,6 +1534,53 @@ export function AdminQuestionWorkspace() {
 
           <div className="question-card">
             <div className="question-head">
+              <strong>Incoming access requests</strong>
+              <span className="status-chip success">{groupJoinRequests.filter((request) => request.status === "pending").length} pending</span>
+            </div>
+            {groupJoinRequests.length ? (
+              <div className="request-list">
+                {groupJoinRequests.map((request) => (
+                  <article className="request-card" key={request.id}>
+                    <div>
+                      <strong>{request.requesterLabel}</strong>
+                      <p className="muted-text">{request.requesterId}</p>
+                      <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
+                    </div>
+                    <div className="inline-actions">
+                      <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
+                        {request.status}
+                      </span>
+                      {request.status === "pending" ? (
+                        <>
+                          <button
+                            className="button-secondary small-button"
+                            disabled={isMutating}
+                            type="button"
+                            onClick={() => handleResolveGroupRequest(request.id, "accept")}
+                          >
+                            Accept
+                          </button>
+                          <button
+                            className="button-secondary small-button"
+                            disabled={isMutating}
+                            type="button"
+                            onClick={() => handleResolveGroupRequest(request.id, "reject")}
+                          >
+                            Reject
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="muted-text">No access requests have been submitted for your groups yet.</p>
+            )}
+          </div>
+
+          <div className="question-card">
+            <div className="question-head">
               <strong>Already created groups</strong>
               <span className="status-chip success">{participantGroups.length} total</span>
             </div>
@@ -1543,6 +1746,10 @@ export function AdminQuestionWorkspace() {
             </p>
           ) : null}
 
+          <p className="muted-text">
+            Directory users listed here can be assigned individually, including admins who should take a test as participants.
+          </p>
+
           <div className="field">
             <label>Start mode</label>
             <div className="selection-grid">
@@ -1634,8 +1841,18 @@ export function AdminQuestionWorkspace() {
         onToggle={() => toggleSection("history")}
       >
         {sortedScheduledTests.length ? (
-          <div className="question-list">
-            {sortedScheduledTests.map((scheduledTest) => {
+          <div className="result-status-stack">
+            {scheduledTestsByStatus.map((statusGroup) => (
+              <details className="status-group" key={statusGroup.key} open={statusGroup.key !== "scheduled"}>
+                <summary className="status-group-summary">
+                  <span>{statusGroup.label}</span>
+                  <span className="status-chip success">{statusGroup.tests.length}</span>
+                </summary>
+                <p className="muted-text status-group-copy">{statusGroup.description}</p>
+
+                {statusGroup.tests.length ? (
+                  <div className="question-list">
+                    {statusGroup.tests.map((scheduledTest) => {
               const leaderboard = leaderboards.find((entry) => entry.testId === scheduledTest.id);
               const submittedIdentifiers = new Set(
                 (leaderboard?.entries ?? []).map((entry) =>
@@ -1736,13 +1953,105 @@ export function AdminQuestionWorkspace() {
                   ) : (
                     <p className="muted-text">No submissions were recorded before this test closed.</p>
                   )}
+
+                  {scheduledTest.status === "completed" ? (
+                    <div className="form-stack">
+                      <div className="inline-actions">
+                        <button
+                          className="button-secondary small-button"
+                          disabled={reviewLoadingByTestId[scheduledTest.id]}
+                          type="button"
+                          onClick={() => void handleLoadReview(scheduledTest.id)}
+                        >
+                          {reviewLoadingByTestId[scheduledTest.id]
+                            ? "Loading..."
+                            : visibleReviewTestIds.includes(scheduledTest.id)
+                              ? "Hide review"
+                              : "Review questions"}
+                        </button>
+                      </div>
+
+                      {visibleReviewTestIds.includes(scheduledTest.id) && reviewByTestId[scheduledTest.id] ? (
+                        <div className="review-list">
+                          {reviewByTestId[scheduledTest.id].review.map((question, questionIndex) => (
+                            <article className="question-card nested-card" key={`${scheduledTest.id}-${question.questionId}`}>
+                              <div className="question-head">
+                                <strong>Question {questionIndex + 1}</strong>
+                                <span className="status-chip success">
+                                  {question.totalResponses} response{question.totalResponses === 1 ? "" : "s"}
+                                </span>
+                              </div>
+                              <p>{question.prompt}</p>
+                              <ol className="question-options compact-question-options">
+                                {question.options.map((option, optionIndex) => (
+                                  <li key={`${question.questionId}-${optionIndex}`}>
+                                    {option}
+                                    {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
+                                    {` - ${question.optionSelectionCounts[optionIndex] ?? 0} response${(question.optionSelectionCounts[optionIndex] ?? 0) === 1 ? "" : "s"}`}
+                                  </li>
+                                ))}
+                              </ol>
+                            </article>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </article>
               );
-            })}
+                    })}
+                  </div>
+                ) : (
+                  <div className="empty-state compact-empty-state">
+                    <p className="muted-text">No tests are in this section yet.</p>
+                  </div>
+                )}
+              </details>
+            ))}
           </div>
         ) : (
           <div className="empty-state">
             <p className="muted-text">Scheduled tests will appear here once created.</p>
+          </div>
+        )}
+      </CollapsibleWorkspaceSection>
+
+      <CollapsibleWorkspaceSection
+        eyebrow=""
+        isOpen={openSection === "assigned-tests"}
+        sectionId="admin-assigned-tests"
+        title="Assigned Test"
+        onToggle={() => toggleSection("assigned-tests")}
+      >
+        {assignedTests.length ? (
+          <div className="question-list">
+            {assignedTests.map((scheduledTest) => (
+              <article className="question-card" key={`assigned-${scheduledTest.id}`}>
+                <div className="question-head">
+                  <strong>{scheduledTest.title}</strong>
+                  <span
+                    className={`status-chip ${scheduledTest.status === "live" ? "success" : "warning"}`}
+                  >
+                    {scheduledTest.status}
+                  </span>
+                </div>
+                <p className="muted-text">
+                  Pool: {pools.find((pool) => pool.id === scheduledTest.poolId)?.name ?? "Unknown pool"}
+                </p>
+                <p className="muted-text">Starts: {formatShortDateTime(scheduledTest.startsAt)}</p>
+                <p className="muted-text">Duration: {scheduledTest.durationMinutes} min</p>
+                <p className="muted-text">Questions: {scheduledTest.questionIds.length}</p>
+                <div className="inline-actions">
+                  <a className="button-secondary small-button" href="/user">
+                    Open test workspace
+                  </a>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact-empty-state">
+            <p className="muted-text">No tests are currently assigned to this admin account.</p>
           </div>
         )}
       </CollapsibleWorkspaceSection>

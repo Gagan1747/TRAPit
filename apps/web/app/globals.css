@@ -324,6 +324,14 @@ main {
   align-items: end;
 }
 
+.auth-password-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.auth-password-row input {
+  width: 100%;
+}
+
 .grow-field {
   min-width: 0;
 }
@@ -532,6 +540,44 @@ main {
   font-size: 0.95rem;
 }
 
+.request-list,
+.review-list,
+.result-status-stack {
+  display: grid;
+  gap: 12px;
+}
+
+.request-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.status-group {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.44);
+}
+
+.status-group-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.status-group-copy {
+  margin: 12px 0 0;
+}
+
 .small-button {
   min-height: 38px;
 }
@@ -669,6 +715,11 @@ button:disabled {
   .question-bank-summary {
     grid-template-columns: 1fr;
     display: grid;
+  }
+
+  .request-card {
+    align-items: start;
+    flex-direction: column;
   }
 }
 

@@ -6,8 +6,11 @@ import { listRegisteredDirectoryUsers } from "../../../../lib/cognito";
 import {
   createGroup,
   createParticipant,
+  listGroupJoinRequestsForAdmin,
+  listParticipantGroupsForOwner,
   listParticipantGroups,
   listParticipants,
+  resolveGroupJoinRequest,
   syncParticipants,
   updateGroup,
 } from "../../../../lib/testing-store";
@@ -17,6 +20,11 @@ type ParticipantBody =
       identifier?: string;
       label?: string;
       mode?: "create-participant";
+    }
+  | {
+      decision?: "accept" | "reject";
+      mode?: "resolve-request";
+      requestId?: string;
     }
   | {
       description?: string;
@@ -43,6 +51,12 @@ function isUpdateGroupBody(
   return body.mode === "update-group";
 }
 
+function isResolveRequestBody(
+  body: ParticipantBody,
+): body is Extract<ParticipantBody, { mode?: "resolve-request" }> {
+  return body.mode === "resolve-request";
+}
+
 export async function GET() {
   const actor = await getAdminActor();
 
@@ -61,12 +75,15 @@ export async function GET() {
     }
   }
 
-  const [participants, participantGroups] = await Promise.all([
+  const [participants, participantGroups, groupJoinRequests] = await Promise.all([
     participantsPromise,
-    listParticipantGroups(),
+    actor.identifier
+      ? listParticipantGroupsForOwner(actor.identifier, { includeUnowned: true })
+      : listParticipantGroups(),
+    actor.identifier ? listGroupJoinRequestsForAdmin(actor.identifier) : Promise.resolve([]),
   ]);
 
-  return NextResponse.json({ participantGroups, participants });
+  return NextResponse.json({ groupJoinRequests, participantGroups, participants });
 }
 
 export async function POST(request: Request) {
@@ -86,11 +103,15 @@ export async function POST(request: Request) {
     const participantGroups = await createGroup({
       description: body.description,
       name: body.name,
+      ownerIdentifier: actor.identifier,
       participantIds: body.participantIds ?? [],
     });
     const participants = await listParticipants();
+    const groupJoinRequests = actor.identifier
+      ? await listGroupJoinRequestsForAdmin(actor.identifier)
+      : [];
 
-    return NextResponse.json({ participantGroups, participants });
+    return NextResponse.json({ groupJoinRequests, participantGroups, participants });
   }
 
   if (isUpdateGroupBody(body)) {
@@ -106,14 +127,49 @@ export async function POST(request: Request) {
       const participantGroups = await updateGroup({
         groupId: body.groupId,
         name: body.name,
+        ownerIdentifier: actor.identifier,
         participantIds: body.participantIds ?? [],
       });
       const participants = await listParticipants();
+      const groupJoinRequests = actor.identifier
+        ? await listGroupJoinRequestsForAdmin(actor.identifier)
+        : [];
 
-      return NextResponse.json({ participantGroups, participants });
+      return NextResponse.json({ groupJoinRequests, participantGroups, participants });
     } catch (error) {
       return NextResponse.json(
         { error: error instanceof Error ? error.message : "Unable to update the group." },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (isResolveRequestBody(body)) {
+    if (!body.requestId?.trim() || !body.decision) {
+      return NextResponse.json(
+        { error: "Request id and decision are required." },
+        { status: 400 },
+      );
+    }
+
+    if (!actor.identifier) {
+      return NextResponse.json(
+        { error: "Admin identifier is required to manage requests." },
+        { status: 400 },
+      );
+    }
+
+    try {
+      const payload = await resolveGroupJoinRequest({
+        adminIdentifier: actor.identifier,
+        decision: body.decision,
+        requestId: body.requestId,
+      });
+
+      return NextResponse.json(payload);
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Unable to update the request." },
         { status: 400 },
       );
     }
@@ -127,7 +183,12 @@ export async function POST(request: Request) {
     identifier: body.identifier,
     label: body.label,
   });
-  const participantGroups = await listParticipantGroups();
+  const participantGroups = actor.identifier
+    ? await listParticipantGroupsForOwner(actor.identifier, { includeUnowned: true })
+    : await listParticipantGroups();
+  const groupJoinRequests = actor.identifier
+    ? await listGroupJoinRequestsForAdmin(actor.identifier)
+    : [];
 
-  return NextResponse.json({ participantGroups, participants });
+  return NextResponse.json({ groupJoinRequests, participantGroups, participants });
 }

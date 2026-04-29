@@ -35,6 +35,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
   const [password, setPassword] = useState("");
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState("");
   const [role, setRole] = useState<UserRole>(
     mode === "sign-up" ? normalSignupRole : "user",
@@ -203,14 +204,24 @@ export function AuthForm({ mode }: AuthFormProps) {
 
       <div className="field">
         <label htmlFor="password">Password</label>
-        <input
-          id="password"
-          type="password"
-          placeholder="At least 8 characters"
-          disabled={!authConfigured}
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-        />
+        <div className="field-row auth-password-row">
+          <input
+            id="password"
+            type={isPasswordVisible ? "text" : "password"}
+            placeholder="At least 8 characters"
+            disabled={!authConfigured}
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+          />
+          <button
+            className="button-secondary small-button"
+            disabled={!authConfigured}
+            type="button"
+            onClick={() => setIsPasswordVisible((currentValue) => !currentValue)}
+          >
+            {isPasswordVisible ? "Hide" : "Show"}
+          </button>
+        </div>
       </div>
 
       {mode === "sign-up" && signUpState?.requiresConfirmation ? (

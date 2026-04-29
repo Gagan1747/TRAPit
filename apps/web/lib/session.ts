@@ -81,7 +81,9 @@ export async function getWebSession(): Promise<AuthSession | null> {
   }
 }
 
-export async function requireWebSession(role: UserRole) {
+export async function requireWebSession(role: UserRole | UserRole[]) {
+  const allowedRoles = Array.isArray(role) ? role : [role];
+
   if (!isWebAuthConfigured()) {
     return {
       displayIdentifier: getWebAuthSetupMessage(),
@@ -89,7 +91,7 @@ export async function requireWebSession(role: UserRole) {
       email: getWebAuthSetupMessage(),
       expiresAt: null,
       phoneNumber: null,
-      role,
+      role: allowedRoles[0],
       sub: null,
     };
   }
@@ -100,7 +102,7 @@ export async function requireWebSession(role: UserRole) {
     redirect("/sign-in?error=session");
   }
 
-  if (session.role !== role) {
+  if (!allowedRoles.includes(session.role)) {
     redirect(getDashboardPath(session.role));
   }
 

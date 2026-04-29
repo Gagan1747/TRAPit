@@ -24,6 +24,7 @@ export function AuthScreen({ mode }: AuthScreenProps) {
   const [confirmationCode, setConfirmationCode] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isPending, setIsPending] = useState(false);
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [password, setPassword] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [role, setRole] = useState<UserRole>(
@@ -137,15 +138,26 @@ export function AuthScreen({ mode }: AuthScreenProps) {
 
           <View style={styles.field}>
             <Text style={styles.label}>Password</Text>
-            <TextInput
-              placeholder="At least 8 characters"
-              placeholderTextColor="#8e7d70"
-              secureTextEntry
-              style={styles.input}
-              editable={authConfigured}
-              value={password}
-              onChangeText={setPassword}
-            />
+            <View style={styles.passwordRow}>
+              <TextInput
+                placeholder="At least 8 characters"
+                placeholderTextColor="#8e7d70"
+                secureTextEntry={!isPasswordVisible}
+                style={[styles.input, styles.passwordInput]}
+                editable={authConfigured}
+                value={password}
+                onChangeText={setPassword}
+              />
+              <Pressable
+                style={styles.passwordToggle}
+                disabled={!authConfigured}
+                onPress={() => setIsPasswordVisible((currentValue) => !currentValue)}
+              >
+                <Text style={styles.passwordToggleText}>
+                  {isPasswordVisible ? "Hide" : "Show"}
+                </Text>
+              </Pressable>
+            </View>
           </View>
 
           {mode === "sign-up" && signUpState?.requiresConfirmation ? (
@@ -285,6 +297,28 @@ const styles = StyleSheet.create({
     backgroundColor: "#fffaf5",
     paddingHorizontal: 14,
     fontSize: 15,
+  },
+  passwordRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  passwordInput: {
+    flex: 1,
+  },
+  passwordToggle: {
+    minWidth: 76,
+    minHeight: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#d7c3af",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.72)",
+    paddingHorizontal: 14,
+  },
+  passwordToggleText: {
+    color: "#6d5a4e",
+    fontWeight: "600",
   },
   roleRow: {
     flexDirection: "row",

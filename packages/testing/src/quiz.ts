@@ -57,8 +57,23 @@ export type ParticipantGroup = {
   description: string;
   id: string;
   name: string;
+  ownerIdentifier: string | null;
   participantIds: string[];
   updatedAt: string;
+};
+
+export type GroupJoinRequestStatus = "pending" | "accepted" | "rejected";
+
+export type GroupJoinRequest = {
+  adminGroupId: string;
+  adminIdentifier: string;
+  adminGroupName: string;
+  id: string;
+  requestedAt: string;
+  requesterId: string;
+  requesterLabel: string;
+  resolvedAt: string | null;
+  status: GroupJoinRequestStatus;
 };
 
 export type ScheduledTestStatus = "scheduled" | "live" | "completed";
@@ -130,6 +145,7 @@ export type TestLeaderboard = {
 
 export type TestingWorkspaceState = {
   attempts: TestAttempt[];
+  groupJoinRequests: GroupJoinRequest[];
   participantGroups: ParticipantGroup[];
   participants: ParticipantProfile[];
   pools: QuestionPool[];
@@ -246,6 +262,7 @@ export function createParticipantProfile(input: {
 export function createParticipantGroup(input: {
   description?: string;
   name: string;
+  ownerIdentifier?: string | null;
   participantIds: string[];
 }): ParticipantGroup {
   const timestamp = new Date().toISOString();
@@ -255,8 +272,29 @@ export function createParticipantGroup(input: {
     description: input.description?.trim() ?? "",
     id: createEntityId("group"),
     name: input.name.trim(),
+    ownerIdentifier: input.ownerIdentifier?.trim() || null,
     participantIds: Array.from(new Set(input.participantIds)),
     updatedAt: timestamp,
+  };
+}
+
+export function createGroupJoinRequest(input: {
+  adminGroupId: string;
+  adminIdentifier: string;
+  adminGroupName: string;
+  requesterId: string;
+  requesterLabel: string;
+}): GroupJoinRequest {
+  return {
+    adminGroupId: input.adminGroupId,
+    adminIdentifier: input.adminIdentifier.trim(),
+    adminGroupName: input.adminGroupName.trim(),
+    id: createEntityId("group-request"),
+    requestedAt: new Date().toISOString(),
+    requesterId: input.requesterId.trim(),
+    requesterLabel: input.requesterLabel.trim(),
+    resolvedAt: null,
+    status: "pending",
   };
 }
 
@@ -451,6 +489,7 @@ export function formatElapsedTime(elapsedMs: number) {
 export function createEmptyTestingWorkspaceState(): TestingWorkspaceState {
   return {
     attempts: [],
+    groupJoinRequests: [],
     participantGroups: [],
     participants: [],
     pools: [],
