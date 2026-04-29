@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 import { getAdminRoleMismatchMessage } from "../../../../lib/admin-access-contact";
 import { getCognitoErrorMessage, signInWithCognito, verifyWebTokens } from "../../../../lib/cognito";
-import { createWebSession } from "../../../../lib/session";
+import { createWebSession, getWebSession } from "../../../../lib/session";
 
 export async function POST(request: Request) {
   try {
@@ -24,11 +24,26 @@ export async function POST(request: Request) {
 
     const tokens = await signInWithCognito(phoneNumber, password);
     const session = await verifyWebTokens(tokens);
+    const existingSession = await getWebSession();
 
     if (body.role && session.role !== body.role) {
       return NextResponse.json(
         { error: getAdminRoleMismatchMessage(session.role, body.role) },
         { status: 403 },
+      );
+    }
+
+    if (
+      existingSession &&
+      ((existingSession.sub && session.sub && existingSession.sub !== session.sub) ||
+        (!existingSession.sub && !session.sub && existingSession.phoneNumber !== session.phoneNumber))
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "This device is already signed in to another account. Please sign out first before using a different account.",
+        },
+        { status: 409 },
       );
     }
 

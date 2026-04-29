@@ -638,7 +638,7 @@ button:disabled {
 
 .metric-row {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -649,6 +649,7 @@ button:disabled {
   border-radius: 20px;
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.55);
+  min-width: 0;
 }
 
 .metric-card strong {

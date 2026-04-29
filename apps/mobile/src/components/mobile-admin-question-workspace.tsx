@@ -5,11 +5,6 @@ import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useQuestionBank } from "../testing/question-bank-context";
 import { MobileCollapsibleSection } from "./mobile-collapsible-section";
 
-const AI_OCR_PROMPT = `convert the image/text to questions in the following format
--add colon after question, each options, answer
--question, each options and answer should be in separate line
--Each set of 'question, each options and answer' should be separated from other set by a spacing of line`;
-
 const AI_OCR_EXAMPLE = `Question: 5+3?
 Option A: 10
 Option B: 6
@@ -17,6 +12,14 @@ Option C: 9
 Option D: 8
 Option E: 7
 Answer: 8`;
+
+const AI_OCR_PROMPT = `convert the image/text to questions in the following format
+-add colon after question, each options, answer
+-question, each options and answer should be in separate line
+-Each set of 'question, each options and answer' should be separated from other set by a spacing of line
+
+Example:
+${AI_OCR_EXAMPLE}`;
 
 function createEmptyOptions(count: number) {
   return Array.from({ length: count }, () => "");
@@ -229,8 +232,6 @@ export function MobileAdminQuestionWorkspace() {
             If the questions are on paper or already in text, send the photo or text to AI and use this exact prompt.
           </Text>
           <Text style={styles.promptBlock}>{AI_OCR_PROMPT}</Text>
-          <Text style={styles.meta}>Expected output example:</Text>
-          <Text style={styles.promptBlock}>{AI_OCR_EXAMPLE}</Text>
         </View>
 
         <View style={styles.field}>

@@ -21,11 +21,6 @@ import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 
 const MANUAL_OPTION_COUNT = 5;
 
-const AI_OCR_PROMPT = `convert the image/text to questions in the following format
--add colon after question, each options, answer
--question, each options and answer should be in separate line
--Each set of 'question, each options and answer' should be separated from other set by a spacing of line`;
-
 const AI_OCR_EXAMPLE = `Question: 5+3?
 Option A: 10
 Option B: 6
@@ -33,6 +28,14 @@ Option C: 9
 Option D: 8
 Option E: 7
 Answer: 8`;
+
+const AI_OCR_PROMPT = `convert the image/text to questions in the following format
+-add colon after question, each options, answer
+-question, each options and answer should be in separate line
+-Each set of 'question, each options and answer' should be separated from other set by a spacing of line
+
+Example:
+${AI_OCR_EXAMPLE}`;
 
 function createEmptyOptions(count: number) {
   return Array.from({ length: count }, () => "");
@@ -84,6 +87,16 @@ type ParticipantsResponse = {
   participants: ParticipantProfile[];
 };
 
+type GroupSearchResponse = {
+  groupJoinRequests: GroupJoinRequest[];
+  participantGroups: ParticipantGroup[];
+};
+
+type UserDashboardResponse = {
+  groupJoinRequests: GroupJoinRequest[];
+  identifier: string;
+};
+
 type ScheduledTestsResponse = {
   scheduledTests: ScheduledTest[];
 };
@@ -119,6 +132,7 @@ type AdminWorkspaceSection =
   | "assigned-tests"
   | "author"
   | "history"
+  | "join-groups"
   | "participants"
   | "pools"
   | "question-bank"
@@ -233,6 +247,13 @@ function matchesParticipantSearch(participant: ParticipantProfile, query: string
     .some((value) => value.toLowerCase().includes(normalizedQuery));
 }
 
+function getParticipantSecondaryText(participant: ParticipantProfile) {
+  const label = participant.label.trim();
+  const identifier = participant.identifier.trim();
+
+  return label && label !== identifier ? identifier : null;
+}
+
 function ParticipantSearchPicker({
   emptyMessage,
   inputId,
@@ -243,13 +264,16 @@ function ParticipantSearchPicker({
   onChange,
 }: ParticipantSearchPickerProps) {
   const [searchQuery, setSearchQuery] = useState("");
+  const hasSearchQuery = searchQuery.trim().length > 0;
   const selectedParticipants = selectedIds
     .map((participantId) => participants.find((participant) => participant.id === participantId))
     .filter((participant): participant is ParticipantProfile => Boolean(participant));
-  const filteredParticipants = participants
-    .filter((participant) => !selectedIds.includes(participant.id))
-    .filter((participant) => matchesParticipantSearch(participant, searchQuery))
-    .slice(0, 8);
+  const filteredParticipants = hasSearchQuery
+    ? participants
+        .filter((participant) => !selectedIds.includes(participant.id))
+        .filter((participant) => matchesParticipantSearch(participant, searchQuery))
+        .slice(0, 8)
+    : [];
 
   function addParticipant(participantId: string) {
     onChange([...selectedIds, participantId]);
@@ -281,11 +305,13 @@ function ParticipantSearchPicker({
                 onClick={() => addParticipant(participant.id)}
               >
                 <span>{participant.label}</span>
-                <span className="muted-text">{participant.identifier}</span>
+                {getParticipantSecondaryText(participant) ? (
+                  <span className="muted-text">{getParticipantSecondaryText(participant)}</span>
+                ) : null}
               </button>
             ))}
           </div>
-        ) : searchQuery.trim() ? (
+        ) : hasSearchQuery ? (
           <p className="muted-text">No matching participants found.</p>
         ) : null
       ) : (
@@ -302,7 +328,10 @@ function ParticipantSearchPicker({
               onClick={() => removeParticipant(participant.id)}
             >
               <span>{participant.label}</span>
-              <span className="muted-text">{participant.identifier}</span>
+              {getParticipantSecondaryText(participant) ? (
+                <span className="muted-text">{getParticipantSecondaryText(participant)}</span>
+              ) : null}
+              <span className="muted-text">Remove</span>
             </button>
           ))}
         </div>
@@ -327,6 +356,9 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
   const [feedback, setFeedback] = useState<string | null>(null);
   const [groupFeedback, setGroupFeedback] = useState<string | null>(null);
   const [groupJoinRequests, setGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
+  const [groupSearchFeedback, setGroupSearchFeedback] = useState<string | null>(null);
+  const [groupSearchPhoneNumber, setGroupSearchPhoneNumber] = useState("");
+  const [groupSearchResults, setGroupSearchResults] = useState<ParticipantGroup[]>([]);
   const [groupName, setGroupName] = useState("");
   const [history, setHistory] = useState<TestHistoryEntry[]>([]);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
@@ -335,8 +367,11 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
   const [isImporting, setIsImporting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isMutating, setIsMutating] = useState(false);
+  const [isSearchingGroups, setIsSearchingGroups] = useState(false);
+  const [isSendingGroupRequest, setIsSendingGroupRequest] = useState<string | null>(null);
   const [leaderboards, setLeaderboards] = useState<TestLeaderboard[]>([]);
   const [openSection, setOpenSection] = useState<AdminWorkspaceSection | null>(null);
+  const [outgoingGroupJoinRequests, setOutgoingGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
   const [options, setOptions] = useState<string[]>(createEmptyOptions(MANUAL_OPTION_COUNT));
   const [participantGroups, setParticipantGroups] = useState<ParticipantGroup[]>([]);
   const [participants, setParticipants] = useState<ParticipantProfile[]>([]);
@@ -375,13 +410,14 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
     setIsLoading(true);
 
     try {
-      const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload] =
+      const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, userDashboardPayload] =
         await Promise.all([
           readJson<QuestionApiResponse>(await fetch("/api/admin/questions")),
           readJson<PoolsResponse>(await fetch("/api/admin/pools")),
           readJson<ParticipantsResponse>(await fetch("/api/admin/participants")),
           readJson<ScheduledTestsResponse>(await fetch("/api/admin/tests")),
           readJson<HistoryResponse>(await fetch("/api/admin/history")),
+          readJson<UserDashboardResponse>(await fetch("/api/user/dashboard")),
         ]);
 
       setQuestions(questionsPayload.questions);
@@ -389,6 +425,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       setParticipants(participantsPayload.participants);
       setParticipantGroups(participantsPayload.participantGroups);
       setGroupJoinRequests(participantsPayload.groupJoinRequests);
+      setOutgoingGroupJoinRequests(userDashboardPayload.groupJoinRequests);
       setScheduledTests(testsPayload.scheduledTests);
       setHistory(historyPayload.history);
       setLeaderboards(historyPayload.leaderboards);
@@ -486,6 +523,10 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
     );
   }
 
+  function getLatestOutgoingGroupRequest(groupId: string) {
+    return outgoingGroupJoinRequests.find((request) => request.adminGroupId === groupId);
+  }
+
   async function mutateWorkspace(work: () => Promise<void>) {
     setIsMutating(true);
 
@@ -526,6 +567,62 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
         ...currentState,
         [testId]: false,
       }));
+    }
+  }
+
+  async function handleSearchGroups() {
+    if (!groupSearchPhoneNumber.trim()) {
+      setGroupSearchFeedback("Enter the admin phone number to search for groups.");
+      setGroupSearchResults([]);
+      return;
+    }
+
+    setIsSearchingGroups(true);
+
+    try {
+      const payload = await readJson<GroupSearchResponse>(
+        await fetch(`/api/user/groups?phone=${encodeURIComponent(groupSearchPhoneNumber.trim())}`),
+      );
+
+      setGroupSearchResults(payload.participantGroups);
+      setOutgoingGroupJoinRequests(payload.groupJoinRequests);
+      setGroupSearchFeedback(
+        payload.participantGroups.length
+          ? null
+          : "No groups were found for that admin phone number.",
+      );
+    } catch (error) {
+      setGroupSearchResults([]);
+      setGroupSearchFeedback(
+        error instanceof Error ? error.message : "Unable to search for admin groups.",
+      );
+    } finally {
+      setIsSearchingGroups(false);
+    }
+  }
+
+  async function handleRequestGroup(groupId: string) {
+    setIsSendingGroupRequest(groupId);
+
+    try {
+      const payload = await readJson<{ groupJoinRequests: GroupJoinRequest[] }>(
+        await fetch("/api/user/groups", {
+          body: JSON.stringify({ adminGroupId: groupId }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setOutgoingGroupJoinRequests(payload.groupJoinRequests);
+      setGroupSearchFeedback("Request sent to the admin for review.");
+    } catch (error) {
+      setGroupSearchFeedback(
+        error instanceof Error ? error.message : "Unable to send the group request.",
+      );
+    } finally {
+      setIsSendingGroupRequest(null);
     }
   }
 
@@ -993,6 +1090,8 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
         ),
       )
     : [];
+  const completedTestsCount = scheduledTestsByStatus.find((group) => group.key === "completed")?.tests.length ?? 0;
+  const upcomingTestsCount = scheduledTestsByStatus.find((group) => group.key === "scheduled")?.tests.length ?? 0;
 
   function handleResolveGroupRequest(requestId: string, decision: "accept" | "reject") {
     void mutateWorkspace(async () => {
@@ -1024,12 +1123,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
         <div className="section-head compact-head">
           <div>
             <p className="eyebrow">Web admin rollout</p>
-            <h2 className="section-title">Questions, pools, scheduling, and history</h2>
-          </div>
-          <div className="metric-inline">
-            <span className="status-chip success">{summary.questions} questions</span>
-            <span className="status-chip success">{summary.pools} pools</span>
-            <span className="status-chip success">{summary.scheduledTests} tests</span>
+            <h2 className="section-title">Questions, Test, Results</h2>
           </div>
         </div>
 
@@ -1039,12 +1133,24 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
             <span>participants</span>
           </div>
           <div className="metric-card">
-            <strong>{summary.groups}</strong>
-            <span>groups or classes</span>
+            <strong>{summary.questions}</strong>
+            <span>questions</span>
           </div>
           <div className="metric-card">
-            <strong>{summary.attempts}</strong>
-            <span>submitted attempts</span>
+            <strong>{upcomingTestsCount}</strong>
+            <span>test upcoming</span>
+          </div>
+          <div className="metric-card">
+            <strong>{summary.groups}</strong>
+            <span>groups</span>
+          </div>
+          <div className="metric-card">
+            <strong>{summary.pools}</strong>
+            <span>pools</span>
+          </div>
+          <div className="metric-card">
+            <strong>{completedTestsCount}</strong>
+            <span>test completed</span>
           </div>
         </div>
       </section>
@@ -1058,10 +1164,10 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       >
         <div className="form-stack">
           <div className="field">
-            <label>Assign questions to pools</label>
+            <label>Select or create question pool</label>
             <div className="question-list">
               <div className="field compact-field">
-                <label htmlFor="author-pool">Question pool</label>
+                <label htmlFor="author-pool">Select or create question pool</label>
                 <select
                   className="select-field"
                   id="author-pool"
@@ -1078,7 +1184,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
               </div>
               <div className="role-option role-option-create">
                 <div className="field compact-field">
-                  <label htmlFor="pool-name-inline">Create question pool</label>
+                  <label htmlFor="pool-name-inline">Create New Pool</label>
                   <input
                     id="pool-name-inline"
                     placeholder="Pool name"
@@ -1196,17 +1302,6 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                       id="meta-ai-prompt"
                       readOnly
                       value={AI_OCR_PROMPT}
-                    />
-                  </div>
-                  <p className="muted-text">
-                    Expected output example:
-                  </p>
-                  <div className="field textarea-field">
-                    <label htmlFor="meta-ai-example">Example format</label>
-                    <textarea
-                      id="meta-ai-example"
-                      readOnly
-                      value={AI_OCR_EXAMPLE}
                     />
                   </div>
                 </div>
@@ -1503,14 +1598,11 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       >
         <div className="stack-grid">
           <div className="question-card form-stack">
-            <div className="question-head">
-              <strong>Create a group</strong>
-            </div>
             <div className="field">
-              <label htmlFor="group-name">Name of the group</label>
+              <label htmlFor="group-name">Enter group name</label>
               <input
                 id="group-name"
-                placeholder="Enter group or class name"
+                placeholder="Enter group name"
                 value={groupName}
                 onChange={(event) => setGroupName(event.target.value)}
               />
@@ -1519,7 +1611,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
               emptyMessage="No participants selected for this group yet."
               inputId="group-participant-search"
               participants={participants}
-              searchPlaceholder="Search participants by name, phone number, roll number, or username"
+              searchPlaceholder="Search participants by phone number"
               selectedIds={selectedGroupParticipantIds}
               selectionLabel="Select participants"
               onChange={setSelectedGroupParticipantIds}
@@ -1534,64 +1626,27 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
 
           <div className="question-card">
             <div className="question-head">
-              <strong>Incoming access requests</strong>
-              <span className="status-chip success">{groupJoinRequests.filter((request) => request.status === "pending").length} pending</span>
-            </div>
-            {groupJoinRequests.length ? (
-              <div className="request-list">
-                {groupJoinRequests.map((request) => (
-                  <article className="request-card" key={request.id}>
-                    <div>
-                      <strong>{request.requesterLabel}</strong>
-                      <p className="muted-text">{request.requesterId}</p>
-                      <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
-                    </div>
-                    <div className="inline-actions">
-                      <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
-                        {request.status}
-                      </span>
-                      {request.status === "pending" ? (
-                        <>
-                          <button
-                            className="button-secondary small-button"
-                            disabled={isMutating}
-                            type="button"
-                            onClick={() => handleResolveGroupRequest(request.id, "accept")}
-                          >
-                            Accept
-                          </button>
-                          <button
-                            className="button-secondary small-button"
-                            disabled={isMutating}
-                            type="button"
-                            onClick={() => handleResolveGroupRequest(request.id, "reject")}
-                          >
-                            Reject
-                          </button>
-                        </>
-                      ) : null}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <p className="muted-text">No access requests have been submitted for your groups yet.</p>
-            )}
-          </div>
-
-          <div className="question-card">
-            <div className="question-head">
-              <strong>Already created groups</strong>
+              <strong>My groups</strong>
               <span className="status-chip success">{participantGroups.length} total</span>
             </div>
-              {participantGroups.length ? (
-                <div className="question-list">
-                  {participantGroups.map((group) => (
+            {participantGroups.length ? (
+              <div className="question-list">
+                {participantGroups.map((group) => {
+                  const requestsForGroup = groupJoinRequests.filter(
+                    (request) => request.adminGroupId === group.id,
+                  );
+
+                  return (
                     <article className="question-card nested-card" key={group.id}>
                       <div className="question-head">
                         <strong>{group.name}</strong>
                         <div className="inline-actions">
                           <span className="status-chip success">{group.participantIds.length} members</span>
+                          {requestsForGroup.length ? (
+                            <span className="status-chip success">
+                              {requestsForGroup.length} request{requestsForGroup.length === 1 ? "" : "s"}
+                            </span>
+                          ) : null}
                           <button
                             className="button-secondary small-button"
                             disabled={isMutating}
@@ -1644,6 +1699,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                                 )
                               }
                             />
+                            <p className="muted-text">Selected members appear below. Click Remove on any member to take them out of the group.</p>
                           </div>
                           <div className="inline-actions">
                             <button
@@ -1673,7 +1729,9 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                               return participant ? (
                                 <div className="role-option" key={`${group.id}-${participant.id}`}>
                                   <span>{participant.label}</span>
-                                  <span className="muted-text">{participant.identifier}</span>
+                                  {getParticipantSecondaryText(participant) ? (
+                                    <span className="muted-text">{getParticipantSecondaryText(participant)}</span>
+                                  ) : null}
                                 </div>
                               ) : null;
                             })
@@ -1682,12 +1740,52 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                           )}
                         </div>
                       )}
+
+                      {requestsForGroup.length ? (
+                        <div className="request-list">
+                          {requestsForGroup.map((request) => (
+                            <article className="request-card" key={request.id}>
+                              <div>
+                                <strong>{request.requesterLabel}</strong>
+                                <p className="muted-text">{request.requesterId}</p>
+                                <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
+                              </div>
+                              <div className="inline-actions">
+                                <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
+                                  {request.status}
+                                </span>
+                                {request.status === "pending" ? (
+                                  <>
+                                    <button
+                                      className="button-secondary small-button"
+                                      disabled={isMutating}
+                                      type="button"
+                                      onClick={() => handleResolveGroupRequest(request.id, "accept")}
+                                    >
+                                      Accept
+                                    </button>
+                                    <button
+                                      className="button-secondary small-button"
+                                      disabled={isMutating}
+                                      type="button"
+                                      onClick={() => handleResolveGroupRequest(request.id, "reject")}
+                                    >
+                                      Reject
+                                    </button>
+                                  </>
+                                ) : null}
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      ) : null}
                     </article>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted-text">Create a group or class to assign many participants at once.</p>
-              )}
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="muted-text">Create a group to assign many participants at once.</p>
+            )}
           </div>
         </div>
       </CollapsibleWorkspaceSection>
@@ -1731,7 +1829,6 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
             <div className="field">
               <label htmlFor="schedule-duration">Duration in minutes</label>
               <input
-                id="schedule-duration"
                 min={1}
                 type="number"
                 value={scheduleDurationMinutes}
@@ -1745,10 +1842,6 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
               Selected pool has {selectedPool.questionIds.length} question{selectedPool.questionIds.length === 1 ? "" : "s"}.
             </p>
           ) : null}
-
-          <p className="muted-text">
-            Directory users listed here can be assigned individually, including admins who should take a test as participants.
-          </p>
 
           <div className="field">
             <label>Start mode</label>
@@ -2014,6 +2107,96 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
             <p className="muted-text">Scheduled tests will appear here once created.</p>
           </div>
         )}
+      </CollapsibleWorkspaceSection>
+
+      <CollapsibleWorkspaceSection
+        eyebrow=""
+        isOpen={openSection === "join-groups"}
+        sectionId="admin-join-groups"
+        title="Join Groups"
+        onToggle={() => toggleSection("join-groups")}
+      >
+        <div className="form-stack">
+          <div className="field-row align-end">
+            <div className="field grow-field">
+              <label htmlFor="admin-dashboard-phone-search">Admin phone number</label>
+              <input
+                id="admin-dashboard-phone-search"
+                placeholder="Search using the admin account phone number"
+                value={groupSearchPhoneNumber}
+                onChange={(event) => setGroupSearchPhoneNumber(event.target.value)}
+              />
+            </div>
+            <button className="button" disabled={isSearchingGroups} type="button" onClick={() => void handleSearchGroups()}>
+              {isSearchingGroups ? "Searching..." : "Search groups"}
+            </button>
+          </div>
+
+          {groupSearchFeedback ? <p className="muted-text">{groupSearchFeedback}</p> : null}
+
+          {groupSearchResults.length ? (
+            <div className="question-list">
+              {groupSearchResults.map((group) => {
+                const latestRequest = getLatestOutgoingGroupRequest(group.id);
+
+                return (
+                  <article className="question-card nested-card" key={`admin-group-search-${group.id}`}>
+                    <div className="question-head">
+                      <strong>{group.name}</strong>
+                      {latestRequest ? (
+                        <span className={`status-chip ${latestRequest.status === "accepted" ? "success" : latestRequest.status === "rejected" ? "warning" : ""}`}>
+                          {latestRequest.status}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="muted-text">
+                      {group.participantIds.length} current member{group.participantIds.length === 1 ? "" : "s"}
+                    </p>
+                    <div className="inline-actions">
+                      <button
+                        className="button"
+                        disabled={Boolean(latestRequest) || isSendingGroupRequest === group.id}
+                        type="button"
+                        onClick={() => void handleRequestGroup(group.id)}
+                      >
+                        {isSendingGroupRequest === group.id
+                          ? "Sending..."
+                          : latestRequest
+                            ? latestRequest.status === "pending"
+                              ? "Request pending"
+                              : latestRequest.status === "accepted"
+                                ? "Request accepted"
+                                : "Request sent"
+                            : "Request access"}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : null}
+
+          {outgoingGroupJoinRequests.length ? (
+            <div className="question-card">
+              <div className="question-head">
+                <strong>My group requests</strong>
+                <span className="status-chip success">{outgoingGroupJoinRequests.length}</span>
+              </div>
+              <div className="request-list">
+                {outgoingGroupJoinRequests.map((request) => (
+                  <article className="request-card" key={`admin-request-${request.id}`}>
+                    <strong>{request.adminGroupName}</strong>
+                    <p className="muted-text">Requested as {request.requesterLabel}</p>
+                    <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
+                    <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
+                      {request.status}
+                    </span>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
       </CollapsibleWorkspaceSection>
 
       <CollapsibleWorkspaceSection
