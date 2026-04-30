@@ -1,7 +1,6 @@
-import { getDashboardPath, type UserRole } from "@trapit/auth";
+import { getDashboardPath } from "@trapit/auth";
 import { NextResponse } from "next/server";
 
-import { getAdminRoleMismatchMessage } from "../../../../lib/admin-access-contact";
 import { getCognitoErrorMessage, signInWithCognito, verifyWebTokens } from "../../../../lib/cognito";
 import { createWebSession, getWebSession } from "../../../../lib/session";
 
@@ -10,7 +9,6 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       phoneNumber?: string;
       password?: string;
-      role?: UserRole;
     };
     const phoneNumber = body.phoneNumber?.trim();
     const password = body.password?.trim();
@@ -25,13 +23,6 @@ export async function POST(request: Request) {
     const tokens = await signInWithCognito(phoneNumber, password);
     const session = await verifyWebTokens(tokens);
     const existingSession = await getWebSession();
-
-    if (body.role && session.role !== body.role) {
-      return NextResponse.json(
-        { error: getAdminRoleMismatchMessage(session.role, body.role) },
-        { status: 403 },
-      );
-    }
 
     if (
       existingSession &&

@@ -1,6 +1,5 @@
 "use client";
 
-import { normalSignupRole, roleLabels, USER_ROLES, type UserRole } from "@trapit/auth";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
@@ -33,13 +32,11 @@ export function AuthForm({ mode }: AuthFormProps) {
   const searchParams = useSearchParams();
   const [confirmationCode, setConfirmationCode] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [fullName, setFullName] = useState("");
   const [isPending, setIsPending] = useState(false);
   const [password, setPassword] = useState("");
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState("");
-  const [role, setRole] = useState<UserRole>(
-    mode === "sign-up" ? normalSignupRole : "user",
-  );
   const [signUpState, setSignUpState] = useState<{
     destination: string | null;
     requiresConfirmation: boolean;
@@ -68,8 +65,17 @@ export function AuthForm({ mode }: AuthFormProps) {
       return;
     }
 
+    if (mode === "sign-up" && !fullName.trim()) {
+      setErrorMessage("Full name, phone number, and password are required.");
+      return;
+    }
+
     if (!phoneNumber || !password) {
-      setErrorMessage("Phone number and password are required.");
+      setErrorMessage(
+        mode === "sign-up"
+          ? "Full name, phone number, and password are required."
+          : "Phone number and password are required.",
+      );
       return;
     }
 
@@ -78,7 +84,7 @@ export function AuthForm({ mode }: AuthFormProps) {
     try {
       if (mode === "sign-up") {
         const response = await fetch("/api/auth/sign-up", {
-          body: JSON.stringify({ phoneNumber, password }),
+          body: JSON.stringify({ fullName, phoneNumber, password }),
           headers: {
             "Content-Type": "application/json",
           },
@@ -109,7 +115,7 @@ export function AuthForm({ mode }: AuthFormProps) {
       }
 
       const response = await fetch("/api/auth/sign-in", {
-        body: JSON.stringify({ phoneNumber, password, role }),
+        body: JSON.stringify({ phoneNumber, password }),
         headers: {
           "Content-Type": "application/json",
         },
@@ -189,6 +195,20 @@ export function AuthForm({ mode }: AuthFormProps) {
         {!authConfigured ? <p className="muted-text">{getPublicWebAuthSetupMessage()}</p> : null}
       </div>
 
+      {mode === "sign-up" ? (
+        <div className="field">
+          <label htmlFor="full-name">Full name</label>
+          <input
+            id="full-name"
+            type="text"
+            placeholder="Enter your full name"
+            disabled={!authConfigured}
+            value={fullName}
+            onChange={(event) => setFullName(event.target.value)}
+          />
+        </div>
+      ) : null}
+
       <div className="field">
         <label htmlFor="phone-number">Phone number</label>
         <input
@@ -234,27 +254,6 @@ export function AuthForm({ mode }: AuthFormProps) {
             value={confirmationCode}
             onChange={(event) => setConfirmationCode(event.target.value)}
           />
-        </div>
-      ) : null}
-
-      {mode === "sign-in" ? (
-        <div className="radio-row">
-          <span>Role</span>
-          <div className="role-options">
-            {USER_ROLES.map((option) => (
-              <label className="role-option" key={option}>
-                <input
-                  checked={role === option}
-                  disabled={!authConfigured}
-                  name="role"
-                  type="radio"
-                  value={option}
-                  onChange={() => setRole(option)}
-                />
-                {roleLabels[option]}
-              </label>
-            ))}
-          </div>
         </div>
       ) : null}
 

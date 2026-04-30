@@ -19,8 +19,6 @@ import { useEffect, useState } from "react";
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 
-const MANUAL_OPTION_COUNT = 5;
-
 const AI_OCR_EXAMPLE = `Question: 5+3?
 Option A: 10
 Option B: 6
@@ -70,11 +68,6 @@ type QuestionMutationPayload =
       }>;
       mode: "import";
       poolIds: string[];
-    }
-  | {
-      mode: "sample-set";
-      poolIds: string[];
-      replaceExisting?: boolean;
     };
 
 type PoolsResponse = {
@@ -137,8 +130,6 @@ type AdminWorkspaceSection =
   | "pools"
   | "question-bank"
   | "schedule";
-
-type AuthorMode = "manual" | "ocr";
 
 type EditableQuestionDraft = {
   correctOptionIndex: number;
@@ -347,8 +338,6 @@ type AdminQuestionWorkspaceProps = {
 };
 
 export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestionWorkspaceProps) {
-  const [authorMode, setAuthorMode] = useState<AuthorMode>("manual");
-  const [correctOptionIndex, setCorrectOptionIndex] = useState(0);
   const [editingGroupDraft, setEditingGroupDraft] = useState<EditableGroupDraft | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingQuestionDraft, setEditingQuestionDraft] = useState<EditableQuestionDraft | null>(null);
@@ -372,14 +361,14 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
   const [leaderboards, setLeaderboards] = useState<TestLeaderboard[]>([]);
   const [openSection, setOpenSection] = useState<AdminWorkspaceSection | null>(null);
   const [outgoingGroupJoinRequests, setOutgoingGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
-  const [options, setOptions] = useState<string[]>(createEmptyOptions(MANUAL_OPTION_COUNT));
   const [participantGroups, setParticipantGroups] = useState<ParticipantGroup[]>([]);
   const [participants, setParticipants] = useState<ParticipantProfile[]>([]);
   const [poolFeedback, setPoolFeedback] = useState<string | null>(null);
   const [poolName, setPoolName] = useState("");
   const [pools, setPools] = useState<QuestionPool[]>([]);
-  const [prompt, setPrompt] = useState("");
   const [authorPoolId, setAuthorPoolId] = useState("");
+  const [isOcrImportOpen, setIsOcrImportOpen] = useState(false);
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
   const [selectedQuestionBankPoolId, setSelectedQuestionBankPoolId] = useState<string | null>(null);
   const [questions, setQuestions] = useState<PersistentQuestion[]>(
     createEmptyTestingWorkspaceState().questions,
@@ -435,10 +424,6 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
         setSchedulePoolId(poolsPayload.pools[0].id);
       }
 
-      if (!authorPoolId && poolsPayload.pools.length) {
-        setAuthorPoolId(poolsPayload.pools[0].id);
-      }
-
       setSelectedQuestionBankPoolId((currentPoolId) =>
         currentPoolId && poolsPayload.pools.some((pool) => pool.id === currentPoolId)
           ? currentPoolId
@@ -455,19 +440,11 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
     void loadWorkspace();
   }, []);
 
-  function resetQuestionForm(nextCount = MANUAL_OPTION_COUNT) {
-    setPrompt("");
-    setOptions(createEmptyOptions(nextCount));
-    setCorrectOptionIndex(0);
-  }
-
-  function updateOption(index: number, value: string) {
-    setOptions((currentOptions) =>
-      currentOptions.map((option, optionIndex) =>
-        optionIndex === index ? value : option,
-      ),
-    );
-  }
+  useEffect(() => {
+    if (!authorPoolId) {
+      setIsOcrImportOpen(false);
+    }
+  }, [authorPoolId]);
 
   function updateEditableOption(index: number, value: string) {
     setEditingQuestionDraft((currentDraft) => {
@@ -626,57 +603,88 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
     }
   }
 
-  function handleAddQuestion() {
-    if (!pools.length || !authorPoolId) {
-      setFeedback("Create a pool and select a question pool before saving a question.");
-      return;
-    }
-
-    const draft = {
-      correctOptionIndex,
-      options,
-      prompt,
-    };
-    const validationError = validateQuestionDraft(draft);
-
-    if (validationError) {
-      setFeedback(validationError);
+  function handleDeleteQuestion(questionId: string) {
+    if (!window.confirm("Remove this question from the shared bank?")) {
       return;
     }
 
     void mutateWorkspace(async () => {
       await readJson<QuestionApiResponse>(
         await fetch("/api/admin/questions", {
-          body: JSON.stringify({
-            draft,
-            mode: "create",
-            poolIds: [authorPoolId],
-          } satisfies QuestionMutationPayload),
+          body: JSON.stringify({ questionIds: [questionId] }),
           headers: {
             "Content-Type": "application/json",
           },
-          method: "POST",
-        }),
-      );
-
-      setFeedback("Question saved to the shared admin bank.");
-      resetQuestionForm();
-    }).catch((error) => {
-      setFeedback(error instanceof Error ? error.message : "Unable to save the question.");
-    });
-  }
-
-  function handleDeleteQuestion(questionId: string) {
-    void mutateWorkspace(async () => {
-      await readJson<QuestionApiResponse>(
-        await fetch(`/api/admin/questions/${questionId}`, {
           method: "DELETE",
         }),
       );
 
+      setSelectedQuestionIds((currentIds) =>
+        currentIds.filter((currentId) => currentId !== questionId),
+      );
       setFeedback("Question removed from the shared bank.");
     }).catch((error) => {
       setFeedback(error instanceof Error ? error.message : "Unable to remove the question.");
+    });
+  }
+
+  function toggleQuestionSelection(questionId: string) {
+    setSelectedQuestionIds((currentIds) => toggleArrayValue(currentIds, questionId));
+  }
+
+  function handleToggleSelectAllQuestions(questionIds: string[]) {
+    if (!questionIds.length) {
+      return;
+    }
+
+    const allSelected = questionIds.every((questionId) => selectedQuestionIds.includes(questionId));
+
+    setSelectedQuestionIds((currentIds) =>
+      allSelected
+        ? currentIds.filter((questionId) => !questionIds.includes(questionId))
+        : [...new Set([...currentIds, ...questionIds])],
+    );
+  }
+
+  function handleDeleteSelectedQuestions(questionIds: string[]) {
+    if (!questionIds.length) {
+      setFeedback("Select at least one question to remove.");
+      return;
+    }
+
+    const questionCount = questionIds.length;
+    const confirmationMessage =
+      questionCount === 1
+        ? "Remove the selected question from the shared bank?"
+        : `Remove ${questionCount} selected questions from the shared bank?`;
+
+    if (!window.confirm(confirmationMessage)) {
+      return;
+    }
+
+    void mutateWorkspace(async () => {
+      await readJson<QuestionApiResponse>(
+        await fetch("/api/admin/questions", {
+          body: JSON.stringify({ questionIds }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "DELETE",
+        }),
+      );
+
+      setSelectedQuestionIds((currentIds) =>
+        currentIds.filter((questionId) => !questionIds.includes(questionId)),
+      );
+      setFeedback(
+        questionCount === 1
+          ? "Question removed from the shared bank."
+          : `${questionCount} questions removed from the shared bank.`,
+      );
+    }).catch((error) => {
+      setFeedback(
+        error instanceof Error ? error.message : "Unable to remove the selected questions.",
+      );
     });
   }
 
@@ -723,33 +731,6 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       setFeedback("Question updated.");
     }).catch((error) => {
       setFeedback(error instanceof Error ? error.message : "Unable to update the question.");
-    });
-  }
-
-  function handleLoadSamples() {
-    if (!pools.length || !authorPoolId) {
-      setFeedback("Create a pool and select a question pool before loading sample questions.");
-      return;
-    }
-
-    void mutateWorkspace(async () => {
-      await readJson<QuestionApiResponse>(
-        await fetch("/api/admin/questions", {
-          body: JSON.stringify({
-            mode: "sample-set",
-            poolIds: [authorPoolId],
-            replaceExisting: true,
-          } satisfies QuestionMutationPayload),
-          headers: {
-            "Content-Type": "application/json",
-          },
-          method: "POST",
-        }),
-      );
-
-      setFeedback("Loaded the sample set into the shared admin bank.");
-    }).catch((error) => {
-      setFeedback(error instanceof Error ? error.message : "Unable to load the sample set.");
     });
   }
 
@@ -1058,6 +1039,13 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
   const filteredQuestionBankQuestions = selectedQuestionBankPoolId
     ? questions.filter((question) => question.poolIds.includes(selectedQuestionBankPoolId))
     : [];
+  const filteredQuestionBankQuestionIds = filteredQuestionBankQuestions.map((question) => question.id);
+  const selectedVisibleQuestionIds = filteredQuestionBankQuestionIds.filter((questionId) =>
+    selectedQuestionIds.includes(questionId),
+  );
+  const areAllVisibleQuestionsSelected =
+    filteredQuestionBankQuestionIds.length > 0 &&
+    filteredQuestionBankQuestionIds.every((questionId) => selectedQuestionIds.includes(questionId));
   const scheduledTestsByStatus: Array<{
     description: string;
     key: ScheduledTest["status"];
@@ -1092,6 +1080,22 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
     : [];
   const completedTestsCount = scheduledTestsByStatus.find((group) => group.key === "completed")?.tests.length ?? 0;
   const upcomingTestsCount = scheduledTestsByStatus.find((group) => group.key === "scheduled")?.tests.length ?? 0;
+
+  useEffect(() => {
+    const visibleQuestionIds = new Set(
+      selectedQuestionBankPoolId
+        ? questions
+            .filter((question) => question.poolIds.includes(selectedQuestionBankPoolId))
+            .map((question) => question.id)
+        : [],
+    );
+
+    setSelectedQuestionIds((currentIds) => {
+      const nextIds = currentIds.filter((questionId) => visibleQuestionIds.has(questionId));
+
+      return nextIds.length === currentIds.length ? currentIds : nextIds;
+    });
+  }, [questions, selectedQuestionBankPoolId]);
 
   function handleResolveGroupRequest(requestId: string, decision: "accept" | "reject") {
     void mutateWorkspace(async () => {
@@ -1164,7 +1168,6 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       >
         <div className="form-stack">
           <div className="field">
-            <label>Select or create question pool</label>
             <div className="question-list">
               <div className="field compact-field">
                 <label htmlFor="author-pool">Select or create question pool</label>
@@ -1202,90 +1205,26 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
           {poolFeedback ? <p className="muted-text">{poolFeedback}</p> : null}
           {feedback ? <p className="muted-text">{feedback}</p> : null}
 
-          <div className="field">
-            <label>Question input method</label>
-            <div className="inline-actions">
-              <label className="radio-chip">
-                <input
-                  checked={authorMode === "manual"}
-                  name="author-mode"
-                  type="radio"
-                  onChange={() => setAuthorMode("manual")}
-                />
-                Manual entry
-              </label>
-              <label className="radio-chip">
-                <input
-                  checked={authorMode === "ocr"}
-                  name="author-mode"
-                  type="radio"
-                  onChange={() => setAuthorMode("ocr")}
-                />
-                OCR import
-              </label>
+          <div className="question-bank-summary">
+            <div>
+              <strong>OCR import</strong>
+              <p className="muted-text question-bank-summary-copy">
+                Select or create a pool first, then use OCR import to preview and clean pasted text before saving.
+              </p>
             </div>
+            <button
+              className="button-secondary small-button"
+              disabled={!authorPoolId}
+              type="button"
+              onClick={() => setIsOcrImportOpen((currentState) => !currentState)}
+            >
+              {isOcrImportOpen ? "Hide OCR import" : "Show OCR import"}
+            </button>
           </div>
 
-          {authorMode === "manual" ? (
-            <>
-              <div className="field textarea-field">
-                <label htmlFor="question-prompt">Question</label>
-                <textarea
-                  id="question-prompt"
-                  placeholder="Type the question exactly as users should see it."
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                />
-              </div>
+          {!authorPoolId ? <p className="muted-text">Select or create a pool to enable OCR import.</p> : null}
 
-              <div className="option-list">
-                {options.map((option, index) => (
-                  <div className="option-editor" key={`option-${index}`}>
-                    <div className="field">
-                      <label htmlFor={`option-${index}`}>Option {index + 1}</label>
-                      <input
-                        id={`option-${index}`}
-                        placeholder={`Type option ${index + 1}`}
-                        value={option}
-                        onChange={(event) => updateOption(index, event.target.value)}
-                      />
-                    </div>
-                    <label className="radio-chip">
-                      <input
-                        checked={correctOptionIndex === index}
-                        name="correct-option"
-                        type="radio"
-                        onChange={() => setCorrectOptionIndex(index)}
-                      />
-                      Correct
-                    </label>
-                  </div>
-                ))}
-              </div>
-
-              <div className="inline-actions">
-                <button className="button" disabled={isMutating} type="button" onClick={handleAddQuestion}>
-                  Save question
-                </button>
-                <button
-                  className="button-secondary"
-                  disabled={isMutating}
-                  type="button"
-                  onClick={() => resetQuestionForm()}
-                >
-                  Reset form
-                </button>
-                <button
-                  className="button-secondary"
-                  disabled={isMutating}
-                  type="button"
-                  onClick={handleLoadSamples}
-                >
-                  Load sample set
-                </button>
-              </div>
-            </>
-          ) : (
+          {authorPoolId && isOcrImportOpen ? (
             <div className="form-stack import-card">
               <div className="section-head">
                 <div>
@@ -1382,7 +1321,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                 </div>
               ) : null}
             </div>
-          )}
+          ) : null}
         </div>
       </CollapsibleWorkspaceSection>
 
@@ -1425,9 +1364,28 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                     {selectedQuestionBankPool.description || "No description added for this pool yet."}
                   </p>
                 </div>
-                <span className="status-chip success">
-                  {filteredQuestionBankQuestions.length} visible
-                </span>
+                <div className="inline-actions">
+                  <label className="radio-chip">
+                    <input
+                      checked={areAllVisibleQuestionsSelected}
+                      disabled={!filteredQuestionBankQuestionIds.length}
+                      type="checkbox"
+                      onChange={() => handleToggleSelectAllQuestions(filteredQuestionBankQuestionIds)}
+                    />
+                    Select all
+                  </label>
+                  <button
+                    className="button-secondary small-button"
+                    disabled={!selectedVisibleQuestionIds.length || isMutating}
+                    type="button"
+                    onClick={() => handleDeleteSelectedQuestions(selectedVisibleQuestionIds)}
+                  >
+                    Remove selected
+                  </button>
+                  <span className="status-chip success">
+                    {filteredQuestionBankQuestions.length} visible
+                  </span>
+                </div>
               </div>
             ) : (
               <div className="empty-state compact-empty-state">
@@ -1440,7 +1398,17 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                 {filteredQuestionBankQuestions.map((question, index) => (
                   <article className="question-card compact-question-card" key={question.id}>
                     <div className="question-head compact-question-head">
-                      <strong>Q{index + 1}</strong>
+                      <div className="inline-actions">
+                        <label className="radio-chip">
+                          <input
+                            checked={selectedQuestionIds.includes(question.id)}
+                            type="checkbox"
+                            onChange={() => toggleQuestionSelection(question.id)}
+                          />
+                          Select
+                        </label>
+                        <strong>Q{index + 1}</strong>
+                      </div>
                       <div className="inline-actions">
                         <button
                           className="button-secondary small-button"

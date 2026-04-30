@@ -353,45 +353,6 @@ export async function importQuestions(
   return state.questions;
 }
 
-export async function loadSampleQuestions(
-  actorId: string | null,
-  replaceExisting = true,
-  poolIds: string[] = [],
-) {
-  const state = await readStore();
-  const normalizedPoolIds = dedupe(poolIds);
-  const seededQuestions = sampleQuestions.map((question) => {
-    const timestamp = new Date().toISOString();
-
-    return {
-      ...question,
-      createdAt: timestamp,
-      createdBy: actorId,
-      poolIds: normalizedPoolIds,
-      source: "sample" as const,
-      updatedAt: timestamp,
-    } satisfies PersistentQuestion;
-  });
-
-  state.questions = replaceExisting ? seededQuestions : [...seededQuestions, ...state.questions];
-
-  if (replaceExisting) {
-    state.pools = state.pools.map((pool) => ({
-      ...pool,
-      questionIds: [],
-      updatedAt: new Date().toISOString(),
-    }));
-  }
-
-  for (const question of seededQuestions) {
-    syncQuestionPoolMemberships(state, question.id, question.poolIds);
-  }
-
-  await writeStore(state);
-
-  return state.questions;
-}
-
 export async function updateQuestionPools(questionId: string, poolIds: string[]) {
   const state = await readStore();
   syncQuestionPoolMemberships(state, questionId, poolIds);
@@ -445,6 +406,30 @@ export async function deleteQuestion(questionId: string) {
   state.pools = state.pools.map((pool) => ({
     ...pool,
     questionIds: pool.questionIds.filter((savedId) => savedId !== questionId),
+    updatedAt: new Date().toISOString(),
+  }));
+  await writeStore(state);
+
+  return state.questions;
+}
+
+export async function deleteQuestions(questionIds: string[]) {
+  const normalizedQuestionIds = dedupe(questionIds);
+
+  if (!normalizedQuestionIds.length) {
+    return listQuestions();
+  }
+
+  const state = await readStore();
+
+  state.questions = state.questions.filter(
+    (question) => !normalizedQuestionIds.includes(question.id),
+  );
+  state.pools = state.pools.map((pool) => ({
+    ...pool,
+    questionIds: pool.questionIds.filter(
+      (savedId) => !normalizedQuestionIds.includes(savedId),
+    ),
     updatedAt: new Date().toISOString(),
   }));
   await writeStore(state);

@@ -6,28 +6,29 @@ export default function HomePage() {
 
   return (
     <AuthShell
-      eyebrow="Cross-platform auth"
-      title="One identity flow for web and mobile."
+      eyebrow="Welcome to TRAPit"
+      title="Test and Poll made easier"
       description={
         authConfigured
-          ? "Use this starter to separate public user sign-up from admin sign-in, then plug the forms into Cognito."
+          ? "Sign in or create an account to continue. TRAPit will route you based on your Cognito access."
           : "Authentication is paused for now, so you can work directly on the user and admin experiences."
       }
+      showHeroLinks={false}
     >
       <div className="form-stack">
         <div>
-          <h2>What is already wired</h2>
+          <h2>Welcome to TRAPit</h2>
           <p className="muted-text">
-            Web and mobile share role definitions, route separation, and a Cognito-ready environment contract.
+            Test and Poll made easier.
           </p>
         </div>
         {authConfigured ? (
           <>
-            <a className="button" href="/sign-up">
-              Start user sign-up
+            <a className="button" href="/sign-in">
+              Sign in
             </a>
-            <a className="button-secondary" href="/sign-in">
-              Continue to sign-in
+            <a className="button-secondary" href="/sign-up">
+              Sign up
             </a>
           </>
         ) : (

@@ -1,5 +1,3 @@
-import { type UserRole } from "@trapit/auth";
-
 type SignUpResponse = {
   deliveryDestination?: string | null;
   error?: string;
@@ -120,9 +118,13 @@ export async function mobileSignIn(phoneNumber: string, password: string) {
   } satisfies MobileTokens;
 }
 
-export async function mobileSignUp(phoneNumber: string, password: string) {
+export async function mobileSignUp(fullName: string, phoneNumber: string, password: string) {
   const response = await fetch(`${getApiBaseUrl()}/api/auth/sign-up`, {
-    body: JSON.stringify({ phoneNumber: normalizePhoneNumber(phoneNumber), password }),
+    body: JSON.stringify({
+      fullName,
+      phoneNumber: normalizePhoneNumber(phoneNumber),
+      password,
+    }),
     headers: {
       "Content-Type": "application/json",
     },
@@ -152,8 +154,4 @@ export async function mobileConfirmSignUp(phoneNumber: string, code: string) {
   }
 
   return payload;
-}
-
-export function getExpectedRoleError(expectedRole: UserRole, actualRole: UserRole) {
-  return `This account is signed in as ${actualRole}, not ${expectedRole}.`;
 }

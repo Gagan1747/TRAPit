@@ -1,10 +1,8 @@
-import type { UserRole } from "@trapit/auth";
 import { createContext, useContext, useEffect, useState } from "react";
 
 import { getMobileAuthSetupMessage, isMobileAuthConfigured } from "./auth-config";
 import { mobileConfirmSignUp, mobileSignIn, mobileSignUp } from "./cognito";
 import {
-  assertExpectedRole,
   clearStoredSession,
   persistSession,
   readStoredSession,
@@ -21,9 +19,9 @@ type AuthContextValue = {
   isLoading: boolean;
   session: MobileAuthSession | null;
   confirmSignUp: (phoneNumber: string, code: string) => Promise<void>;
-  signIn: (phoneNumber: string, password: string, expectedRole: UserRole) => Promise<MobileAuthSession>;
+  signIn: (phoneNumber: string, password: string) => Promise<MobileAuthSession>;
   signOut: () => Promise<void>;
-  signUp: (phoneNumber: string, password: string) => Promise<SignUpResult>;
+  signUp: (fullName: string, phoneNumber: string, password: string) => Promise<SignUpResult>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -58,7 +56,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [authConfigured]);
 
-  async function signIn(phoneNumber: string, password: string, expectedRole: UserRole) {
+  async function signIn(phoneNumber: string, password: string) {
     if (!authConfigured) {
       throw new Error(getMobileAuthSetupMessage());
     }
@@ -70,17 +68,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       throw new Error("Could not persist the mobile session.");
     }
 
-    assertExpectedRole(expectedRole, nextSession.role);
     setSession(nextSession);
     return nextSession;
   }
 
-  async function signUp(phoneNumber: string, password: string) {
+  async function signUp(fullName: string, phoneNumber: string, password: string) {
     if (!authConfigured) {
       throw new Error(getMobileAuthSetupMessage());
     }
 
-    return mobileSignUp(phoneNumber, password);
+    return mobileSignUp(fullName, phoneNumber, password);
   }
 
   async function confirmSignUp(phoneNumber: string, code: string) {

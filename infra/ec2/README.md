@@ -4,6 +4,22 @@ This guide deploys the Next.js web app from this monorepo to one Ubuntu EC2 inst
 
 The Expo mobile app is not hosted on EC2. Only the web app under `apps/web` is deployed here.
 
+## Important persistence constraint
+
+TRAPit web currently stores admin questions, groups, schedules, attempts, and history in one JSON file on disk, not in a database.
+
+That means this deployment guide is safe for:
+
+1. One EC2 instance
+2. One PM2 app process
+3. Persistent data stored outside the Git checkout
+
+That also means this guide is not safe for:
+
+1. Multiple EC2 instances behind a load balancer
+2. Multiple PM2 cluster workers writing the same file
+3. Auto-scaling without moving persistence to a real database
+
 ## Recommended architecture
 
 1. EC2 instance runs the Next.js server on port `3000`.
@@ -112,13 +128,8 @@ Run this once on the server:
 ```bash
 sudo mkdir -p /var/lib/trapit
 sudo chown -R $USER:$USER /var/lib/trapit
-```
-
-If you already have live data inside the repo, migrate it before the next deploy:
-
-```bash
-mkdir -p /var/lib/trapit
-cp /var/www/trapit/apps/web/data/testing-workspace.json /var/lib/trapit/testing-workspace.json
+chmod +x infra/ec2/prepare-persistent-data.sh infra/ec2/backup-data.sh infra/ec2/restore-data.sh infra/ec2/deploy-web.sh
+./infra/ec2/prepare-persistent-data.sh
 ```
 
 Verify the file exists:
@@ -126,6 +137,8 @@ Verify the file exists:
 ```bash
 ls -l /var/lib/trapit/testing-workspace.json
 ```
+
+If the script reports that no file exists yet, that is acceptable on a brand new deployment. The app will create the file on first write.
 
 ## 6. Install dependencies and build
 
@@ -138,11 +151,10 @@ corepack pnpm --filter @trapit/web build
 
 ## 7. Start the app with PM2
 
-Copy the PM2 config from this folder and start it:
+Start the app with the checked-in PM2 config:
 
 ```bash
-cp infra/ec2/ecosystem.config.cjs /var/www/trapit/ecosystem.config.cjs
-pm2 start /var/www/trapit/ecosystem.config.cjs
+pm2 start /var/www/trapit/infra/ec2/ecosystem.config.cjs --only trapit-web
 pm2 save
 pm2 startup systemd
 ```
@@ -215,25 +227,43 @@ Expected behavior:
 
 ## Updating after code changes
 
-When you push new code to the server:
+When you push new code to the server, use the deployment script so the live data file is backed up before the app is rebuilt and restarted:
 
 ```bash
-cp /var/lib/trapit/testing-workspace.json /var/lib/trapit/testing-workspace.backup-$(date +%F-%H%M%S).json
 cd /var/www/trapit
-git pull
-corepack pnpm install --frozen-lockfile
-corepack pnpm --filter @trapit/web build
-pm2 restart trapit-web
+./infra/ec2/deploy-web.sh
 ```
 
-After restart, verify the app still points at the external data file:
+What the script does:
+
+1. Ensures the persistent data directory exists
+2. Migrates repo-scoped data to `/var/lib/trapit/testing-workspace.json` if needed
+3. Creates a timestamped backup in `/var/backups/trapit`
+4. Pulls the latest code with `git pull --ff-only`
+5. Installs dependencies and rebuilds the web app
+6. Restarts PM2
+7. Verifies the app responds on `http://127.0.0.1:3000`
+
+After restart, verify the app still points at the external data file and confirm that the backup file was created:
 
 ```bash
 pm2 logs trapit-web --lines 50
 ls -l /var/lib/trapit/testing-workspace.json
+ls -lt /var/backups/trapit | head
 ```
 
 Do not keep production data in `/var/www/trapit/apps/web/data/testing-workspace.json` after migration. That file lives inside the repo checkout and can be replaced during future updates.
+
+## Restoring data from a backup
+
+If you ever need to restore the live JSON store, use:
+
+```bash
+./infra/ec2/restore-data.sh /var/backups/trapit/testing-workspace-YYYYMMDD-HHMMSS.json
+pm2 restart trapit-web --update-env
+```
+
+The restore script first creates one more backup of the current live file before copying the selected backup into place.
 
 ## Safe next deployment checklist
 
@@ -242,7 +272,7 @@ For your next deployment on the current server, use this order:
 1. Back up the live repo-scoped data file if it still contains the latest history.
 2. Copy that file into `/var/lib/trapit/testing-workspace.json`.
 3. Set `TRAPIT_DATA_DIR=/var/lib/trapit` in `apps/web/.env.production` or the PM2 config.
-4. Rebuild and restart PM2.
+4. Run `./infra/ec2/deploy-web.sh`.
 5. Confirm recent test history is still visible in the browser.
 
 ## Common issues

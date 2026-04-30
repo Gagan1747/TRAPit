@@ -5,20 +5,22 @@ import { addUserToDefaultGroup, getCognitoErrorMessage, signUpWithCognito } from
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
+      fullName?: string;
       phoneNumber?: string;
       password?: string;
     };
+    const fullName = body.fullName?.trim();
     const phoneNumber = body.phoneNumber?.trim();
     const password = body.password?.trim();
 
-    if (!phoneNumber || !password) {
+    if (!fullName || !phoneNumber || !password) {
       return NextResponse.json(
-        { error: "Phone number and password are required." },
+        { error: "Full name, phone number, and password are required." },
         { status: 400 },
       );
     }
 
-    const result = await signUpWithCognito(phoneNumber, password);
+    const result = await signUpWithCognito(phoneNumber, password, fullName);
     let warning: string | undefined;
 
     try {

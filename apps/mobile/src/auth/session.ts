@@ -1,8 +1,8 @@
-import { buildSessionFromClaims, type AuthSession, type UserRole } from "@trapit/auth";
+import { buildSessionFromClaims, type AuthSession } from "@trapit/auth";
 import * as SecureStore from "expo-secure-store";
 import { jwtDecode } from "jwt-decode";
 
-import { getExpectedRoleError, type MobileTokens } from "./cognito";
+import { type MobileTokens } from "./cognito";
 
 const SESSION_KEY = "trapit.mobile.session";
 
@@ -74,10 +74,4 @@ export async function persistSession(tokens: MobileTokens) {
 
 export async function clearStoredSession() {
   await SecureStore.deleteItemAsync(SESSION_KEY);
-}
-
-export function assertExpectedRole(expectedRole: UserRole, actualRole: UserRole) {
-  if (expectedRole !== actualRole) {
-    throw new Error(getExpectedRoleError(expectedRole, actualRole));
-  }
 }

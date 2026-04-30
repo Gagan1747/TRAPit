@@ -5,17 +5,20 @@ import { getAdminActor } from "../../../../lib/admin-api";
 import {
   clearQuestions,
   createQuestion,
+  deleteQuestions,
   importQuestions,
   listQuestions,
-  loadSampleQuestions,
 } from "../../../../lib/testing-store";
 
 type CreateQuestionBody = {
   draft?: QuestionDraft;
   drafts?: QuestionDraft[];
-  mode?: "create" | "import" | "sample-set";
+  mode?: "create" | "import";
   poolIds?: string[];
-  replaceExisting?: boolean;
+};
+
+type DeleteQuestionsBody = {
+  questionIds?: string[];
 };
 
 function hasPoolSelection(poolIds?: string[]) {
@@ -48,22 +51,6 @@ export async function POST(request: Request) {
   }
 
   const body = (await request.json()) as CreateQuestionBody;
-
-  if (body.mode === "sample-set") {
-    if (!hasPoolSelection(body.poolIds)) {
-      return NextResponse.json(
-        { error: "Select at least one pool before loading sample questions." },
-        { status: 400 },
-      );
-    }
-
-    const questions = await loadSampleQuestions(
-      actor.sub,
-      body.replaceExisting ?? true,
-      body.poolIds ?? [],
-    );
-    return NextResponse.json({ questions });
-  }
 
   if (body.mode === "import") {
     const drafts = body.drafts ?? [];
@@ -109,11 +96,24 @@ export async function POST(request: Request) {
   return NextResponse.json({ questions });
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
   const actor = await requireAdmin();
 
   if (!actor) {
     return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+  }
+
+  let body: DeleteQuestionsBody = {};
+
+  try {
+    body = (await request.json()) as DeleteQuestionsBody;
+  } catch {
+    body = {};
+  }
+
+  if (Array.isArray(body.questionIds) && body.questionIds.length) {
+    const questions = await deleteQuestions(body.questionIds);
+    return NextResponse.json({ questions });
   }
 
   const questions = await clearQuestions();

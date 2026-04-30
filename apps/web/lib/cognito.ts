@@ -176,9 +176,18 @@ function getAccessTokenVerifier() {
   });
 }
 
-export async function signUpWithCognito(phoneNumber: string, password: string) {
+export async function signUpWithCognito(
+  phoneNumber: string,
+  password: string,
+  fullName: string,
+) {
   const config = getConfig();
   const normalizedPhoneNumber = normalizePhoneNumber(phoneNumber);
+  const normalizedFullName = fullName.trim();
+
+  if (!normalizedFullName) {
+    throw new Error("Full name is required.");
+  }
 
   return cognitoJsonRequest<SignUpResponse>(
     "AWSCognitoIdentityProviderService.SignUp",
@@ -189,6 +198,10 @@ export async function signUpWithCognito(phoneNumber: string, password: string) {
         {
           Name: "phone_number",
           Value: normalizedPhoneNumber,
+        },
+        {
+          Name: "name",
+          Value: normalizedFullName,
         },
       ],
       Username: normalizedPhoneNumber,

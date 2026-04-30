@@ -1,4 +1,4 @@
-import { getMobileDashboardPath, normalSignupRole, roleLabels, USER_ROLES, type UserRole } from "@trapit/auth";
+import { getMobileDashboardPath } from "@trapit/auth";
 import { Redirect, type Href, useRouter } from "expo-router";
 import { useState } from "react";
 import {
@@ -23,13 +23,11 @@ export function AuthScreen({ mode }: AuthScreenProps) {
   const authConfigured = isMobileAuthConfigured();
   const [confirmationCode, setConfirmationCode] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [fullName, setFullName] = useState("");
   const [isPending, setIsPending] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [password, setPassword] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
-  const [role, setRole] = useState<UserRole>(
-    mode === "sign-up" ? normalSignupRole : "user",
-  );
   const [signUpState, setSignUpState] = useState<{
     destination?: string | null;
     requiresConfirmation?: boolean;
@@ -48,8 +46,17 @@ export function AuthScreen({ mode }: AuthScreenProps) {
       return;
     }
 
+    if (mode === "sign-up" && !fullName.trim()) {
+      setErrorMessage("Full name, phone number, and password are required.");
+      return;
+    }
+
     if (!phoneNumber || !password) {
-      setErrorMessage("Phone number and password are required.");
+      setErrorMessage(
+        mode === "sign-up"
+          ? "Full name, phone number, and password are required."
+          : "Phone number and password are required.",
+      );
       return;
     }
 
@@ -57,7 +64,7 @@ export function AuthScreen({ mode }: AuthScreenProps) {
 
     try {
       if (mode === "sign-up") {
-        const result = await signUp(phoneNumber, password);
+        const result = await signUp(fullName, phoneNumber, password);
         setSignUpState({
           destination: result.deliveryDestination,
           requiresConfirmation: result.requiresConfirmation,
@@ -71,7 +78,7 @@ export function AuthScreen({ mode }: AuthScreenProps) {
         return;
       }
 
-      const nextSession = await signIn(phoneNumber, password, role);
+      const nextSession = await signIn(phoneNumber, password);
       router.replace(getMobileDashboardPath(nextSession.role) as Href);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Authentication failed.");
@@ -116,12 +123,26 @@ export function AuthScreen({ mode }: AuthScreenProps) {
           <Text style={styles.copy}>
             {mode === "sign-up"
               ? "Normal users can sign up here. Admins should be provisioned separately."
-              : "Use the same role claim you plan to enforce from Cognito."}
+              : "Use your phone number and password. TRAPit will route you based on your Cognito access."}
           </Text>
           {!authConfigured ? <Text style={styles.metaText}>{getMobileAuthSetupMessage()}</Text> : null}
         </View>
 
         <View style={styles.card}>
+          {mode === "sign-up" ? (
+            <View style={styles.field}>
+              <Text style={styles.label}>Full name</Text>
+              <TextInput
+                placeholder="Enter your full name"
+                placeholderTextColor="#8e7d70"
+                style={styles.input}
+                editable={authConfigured}
+                value={fullName}
+                onChangeText={setFullName}
+              />
+            </View>
+          ) : null}
+
           <View style={styles.field}>
             <Text style={styles.label}>Phone number</Text>
             <TextInput
@@ -171,31 +192,6 @@ export function AuthScreen({ mode }: AuthScreenProps) {
                 value={confirmationCode}
                 onChangeText={setConfirmationCode}
               />
-            </View>
-          ) : null}
-
-          {mode === "sign-in" ? (
-            <View style={styles.field}>
-              <Text style={styles.label}>Role</Text>
-              <View style={styles.roleRow}>
-                {USER_ROLES.map((option) => (
-                  <Pressable
-                    key={option}
-                    style={[styles.roleChip, role === option && styles.roleChipActive]}
-                    disabled={!authConfigured}
-                    onPress={() => setRole(option)}
-                  >
-                    <Text
-                      style={[
-                        styles.roleChipText,
-                        role === option && styles.roleChipTextActive,
-                      ]}
-                    >
-                      {roleLabels[option]}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
             </View>
           ) : null}
 
