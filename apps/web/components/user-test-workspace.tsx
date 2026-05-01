@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  createPresentedQuestions,
   formatElapsedTime,
   type GroupJoinRequest,
   type ObjectiveQuestion,
@@ -80,39 +81,6 @@ type ShuffledQuestion = {
   question: ObjectiveQuestion;
 };
 
-function hashSeed(input: string) {
-  let hash = 0;
-
-  for (let index = 0; index < input.length; index += 1) {
-    hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
-  }
-
-  return hash;
-}
-
-function createShuffledQuestion(
-  question: ObjectiveQuestion,
-  testId: string,
-  participantIdentifier: string,
-): ShuffledQuestion {
-  const indexes = question.options.map((_, index) => index);
-  let seed = hashSeed(`${testId}:${participantIdentifier}:${question.id}`);
-
-  for (let currentIndex = indexes.length - 1; currentIndex > 0; currentIndex -= 1) {
-    seed = (seed * 1664525 + 1013904223) >>> 0;
-    const swapIndex = seed % (currentIndex + 1);
-    const nextIndexes = indexes[currentIndex];
-    indexes[currentIndex] = indexes[swapIndex];
-    indexes[swapIndex] = nextIndexes;
-  }
-
-  return {
-    displayOptions: indexes.map((index) => question.options[index]),
-    originalOptionIndexes: indexes,
-    question,
-  };
-}
-
 async function readJson<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as T & { error?: string };
 
@@ -170,8 +138,16 @@ export function UserTestWorkspace({
     },
   );
   const shuffledQuestions = activeTest
-    ? activeTest.questions.map((question) =>
-        createShuffledQuestion(question, activeTest.id, identifier || defaultParticipantIdentifier || "participant"),
+    ? createPresentedQuestions(
+        activeTest.questions,
+        `${activeTest.id}:${identifier || defaultParticipantIdentifier || "participant"}`,
+      ).map(
+        (presentedQuestion) =>
+          ({
+            displayOptions: presentedQuestion.displayOptions,
+            originalOptionIndexes: presentedQuestion.originalOptionIndexes,
+            question: presentedQuestion.question,
+          }) satisfies ShuffledQuestion,
       )
     : [];
   const activeQuestion =
@@ -617,7 +593,9 @@ export function UserTestWorkspace({
                 <span className="status-chip success">
                   Question {Math.min(currentQuestionIndex + 1, activeTest.questions.length)} of {activeTest.questions.length}
                 </span>
-                <span className={`status-chip${remainingMs !== null && remainingMs <= 60_000 ? " warning" : " success"}`}>
+                <span
+                  className={`status-chip runner-countdown${remainingMs !== null && remainingMs <= 60_000 ? " warning" : " success"}`}
+                >
                   Time left {formatCountdown(remainingMs)}
                 </span>
               </div>

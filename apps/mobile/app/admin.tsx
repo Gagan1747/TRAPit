@@ -42,7 +42,7 @@ export default function AdminScreen() {
             </Text>
           ) : null}
         </View>
-        <MobileAdminQuestionWorkspace />
+        <MobileAdminQuestionWorkspace currentAdminIdentifier={session ? getSessionIdentifier(session) : null} />
       </ScrollView>
     </SafeAreaView>
   );

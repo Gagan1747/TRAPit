@@ -14,8 +14,15 @@ export async function DELETE(
     return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
   }
 
-  const questions = await deleteQuestion(context.params.questionId);
-  return NextResponse.json({ questions });
+  try {
+    const questions = await deleteQuestion(context.params.questionId, actor.sub);
+    return NextResponse.json({ questions });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to remove the question." },
+      { status: 400 },
+    );
+  }
 }
 
 export async function PATCH(
@@ -59,7 +66,7 @@ export async function PATCH(
     const questions = await updateQuestion(context.params.questionId, {
       draft: body.draft,
       poolIds: body.poolIds,
-    });
+    }, actor.sub);
 
     return NextResponse.json({ questions });
   } catch (error) {

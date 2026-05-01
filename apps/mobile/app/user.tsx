@@ -4,6 +4,7 @@ import { SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { isMobileAuthConfigured } from "../src/auth/auth-config";
 import { useAuth } from "../src/auth/auth-context";
+import { MobileRestrictedUserDashboardWorkspace } from "../src/components/mobile-restricted-user-dashboard-workspace";
 import { MobileUserTestWorkspace } from "../src/components/mobile-user-test-workspace";
 
 export default function UserScreen() {
@@ -19,10 +20,13 @@ export default function UserScreen() {
       return <Redirect href="/sign-in" />;
     }
 
-    if (session.role !== "user") {
+    if (session.role !== "user" && session.role !== "admin") {
       return <Redirect href={getMobileDashboardPath(session.role) as Href} />;
     }
   }
+
+  const currentIdentifier = session ? getSessionIdentifier(session) : null;
+  const showRestrictedDashboard = !session || session.role === "user";
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -42,7 +46,11 @@ export default function UserScreen() {
             </Text>
           ) : null}
         </View>
-        <MobileUserTestWorkspace />
+        {showRestrictedDashboard ? (
+          <MobileRestrictedUserDashboardWorkspace currentUserIdentifier={currentIdentifier} />
+        ) : (
+          <MobileUserTestWorkspace currentParticipantIdentifier={currentIdentifier} />
+        )}
       </ScrollView>
     </SafeAreaView>
   );

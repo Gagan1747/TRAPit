@@ -37,10 +37,41 @@ export type PersistentQuestion = ObjectiveQuestion & {
 
 export type QuestionPool = {
   createdAt: string;
+  createdBy: string | null;
   description: string;
   id: string;
   name: string;
   questionIds: string[];
+  updatedAt: string;
+};
+
+export type PollQuestionDraft = {
+  options: string[];
+  prompt: string;
+};
+
+export type PersistentPollQuestion = PollQuestionDraft & {
+  createdAt: string;
+  createdBy: string | null;
+  id: string;
+  updatedAt: string;
+};
+
+export type PollParticipantType = "open" | "registered";
+
+export type ScheduledPoll = {
+  anonymous: boolean;
+  createdAt: string;
+  createdBy: string | null;
+  durationMinutes: number;
+  id: string;
+  participantGroupIds: string[];
+  participantType: PollParticipantType;
+  questionIds: string[];
+  shareCode: string | null;
+  startsAt: string;
+  status: ScheduledTestStatus;
+  title: string;
   updatedAt: string;
 };
 
@@ -148,8 +179,10 @@ export type TestingWorkspaceState = {
   groupJoinRequests: GroupJoinRequest[];
   participantGroups: ParticipantGroup[];
   participants: ParticipantProfile[];
+  pollQuestions: PersistentPollQuestion[];
   pools: QuestionPool[];
   questions: PersistentQuestion[];
+  scheduledPolls: ScheduledPoll[];
   scheduledTests: ScheduledTest[];
 };
 
@@ -207,8 +240,145 @@ export function createQuestionId() {
   return `question-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+export function createPollQuestionId() {
+  return `poll-question-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 export function createEntityId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function hashSeed(input: string) {
+  let hash = 0;
+
+  for (let index = 0; index < input.length; index += 1) {
+    hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
+  }
+
+  return hash;
+}
+
+function createSeededRandom(seedInput: string) {
+  let seed = hashSeed(seedInput) || 1;
+
+  return () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 0x100000000;
+  };
+}
+
+function shuffleWithRandom<T>(items: T[], random: () => number) {
+  const nextItems = [...items];
+
+  for (let currentIndex = nextItems.length - 1; currentIndex > 0; currentIndex -= 1) {
+    const swapIndex = Math.floor(random() * (currentIndex + 1));
+    const nextItem = nextItems[currentIndex];
+    nextItems[currentIndex] = nextItems[swapIndex];
+    nextItems[swapIndex] = nextItem;
+  }
+
+  return nextItems;
+}
+
+function isTailLockedOption(option: string) {
+  return /^(all\s+of\s+the\s+above|both\s+[a-e]\s+and\s+[a-e])\b/i.test(option.trim());
+}
+
+export type PresentedQuestion = {
+  correctOptionIndex: number;
+  displayOptions: string[];
+  originalOptionIndexes: number[];
+  question: ObjectiveQuestion;
+};
+
+export function selectQuestionIdsForScheduledTest(
+  questionIds: string[],
+  questionCount: number,
+  seedInput: string,
+) {
+  if (questionCount >= questionIds.length) {
+    return shuffleWithRandom(questionIds, createSeededRandom(seedInput));
+  }
+
+  const random = createSeededRandom(seedInput);
+  const selectedQuestionIds = Array.from({ length: questionCount }, (_, bucketIndex) => {
+    const startIndex = Math.floor((bucketIndex * questionIds.length) / questionCount);
+    const endIndex = Math.floor(((bucketIndex + 1) * questionIds.length) / questionCount);
+    const segment = questionIds.slice(startIndex, Math.max(startIndex + 1, endIndex));
+
+    return segment[Math.floor(random() * segment.length)];
+  });
+
+  return shuffleWithRandom(selectedQuestionIds, random);
+}
+
+export function createPresentedQuestions(
+  questions: ObjectiveQuestion[],
+  seedInput: string,
+): PresentedQuestion[] {
+  const random = createSeededRandom(seedInput);
+  const correctAnswerUsage = new Map<number, number>();
+
+  return questions.map((question) => {
+    const fixedTailIndexes = question.options
+      .map((option, optionIndex) => ({ option, optionIndex }))
+      .filter(({ option }) => isTailLockedOption(option))
+      .map(({ optionIndex }) => optionIndex);
+    const movableIndexes = question.options
+      .map((_, optionIndex) => optionIndex)
+      .filter((optionIndex) => !fixedTailIndexes.includes(optionIndex));
+    const correctOptionIsTailLocked = fixedTailIndexes.includes(question.correctOptionIndex);
+    const tailIndexes = [...fixedTailIndexes];
+    let frontIndexes: number[];
+    let correctOptionIndex: number;
+
+    if (correctOptionIsTailLocked) {
+      frontIndexes = shuffleWithRandom(movableIndexes, random);
+      correctOptionIndex = frontIndexes.length + tailIndexes.indexOf(question.correctOptionIndex);
+    } else {
+      const movableIndexesWithoutCorrect = movableIndexes.filter(
+        (optionIndex) => optionIndex !== question.correctOptionIndex,
+      );
+      const shuffledOtherIndexes = shuffleWithRandom(movableIndexesWithoutCorrect, random);
+      const candidatePositions = movableIndexes.map((_, position) => position);
+      const lowestUsage = Math.min(
+        ...candidatePositions.map((position) => correctAnswerUsage.get(position) ?? 0),
+      );
+      const leastUsedPositions = candidatePositions.filter(
+        (position) => (correctAnswerUsage.get(position) ?? 0) === lowestUsage,
+      );
+      const targetPosition =
+        leastUsedPositions[Math.floor(random() * leastUsedPositions.length)] ?? 0;
+
+      frontIndexes = [];
+
+      for (const position of candidatePositions) {
+        if (position === targetPosition) {
+          frontIndexes.push(question.correctOptionIndex);
+          continue;
+        }
+
+        const nextOptionIndex = shuffledOtherIndexes.shift();
+
+        if (typeof nextOptionIndex === "number") {
+          frontIndexes.push(nextOptionIndex);
+        }
+      }
+
+      correctOptionIndex = targetPosition;
+    }
+
+    correctAnswerUsage.set(correctOptionIndex, (correctAnswerUsage.get(correctOptionIndex) ?? 0) + 1);
+
+    const originalOptionIndexes = [...frontIndexes, ...tailIndexes];
+
+    return {
+      correctOptionIndex,
+      displayOptions: originalOptionIndexes.map((optionIndex) => question.options[optionIndex]),
+      originalOptionIndexes,
+      question,
+    } satisfies PresentedQuestion;
+  });
 }
 
 export function createQuestionFromDraft(draft: QuestionDraft): ObjectiveQuestion {
@@ -239,6 +409,50 @@ export function createPersistentQuestion(
     createdBy: config?.createdBy ?? null,
     poolIds: config?.poolIds ?? [],
     source: config?.source ?? "manual",
+    updatedAt: timestamp,
+  };
+}
+
+export function normalizePollQuestionDraft(draft: PollQuestionDraft): PollQuestionDraft {
+  return {
+    options: draft.options.map((option) => option.trim()),
+    prompt: draft.prompt.trim(),
+  };
+}
+
+export function validatePollQuestionDraft(draft: PollQuestionDraft): string | null {
+  const normalized = normalizePollQuestionDraft(draft);
+
+  if (!normalized.prompt) {
+    return "Poll question text is required.";
+  }
+
+  if (normalized.options.length < 2) {
+    return "Poll questions must include at least 2 options.";
+  }
+
+  if (normalized.options.some((option) => !option)) {
+    return "Each poll option must be filled in.";
+  }
+
+  return null;
+}
+
+export function createPersistentPollQuestion(
+  draft: PollQuestionDraft,
+  config?: {
+    createdBy?: string | null;
+  },
+): PersistentPollQuestion {
+  const normalized = normalizePollQuestionDraft(draft);
+  const timestamp = new Date().toISOString();
+
+  return {
+    createdAt: timestamp,
+    createdBy: config?.createdBy ?? null,
+    id: createPollQuestionId(),
+    options: normalized.options,
+    prompt: normalized.prompt,
     updatedAt: timestamp,
   };
 }
@@ -492,8 +706,10 @@ export function createEmptyTestingWorkspaceState(): TestingWorkspaceState {
     groupJoinRequests: [],
     participantGroups: [],
     participants: [],
+    pollQuestions: [],
     pools: [],
     questions: [],
+    scheduledPolls: [],
     scheduledTests: [],
   };
 }

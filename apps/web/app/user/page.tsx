@@ -1,5 +1,6 @@
 import { getSessionDisplayName, getSessionIdentifier } from "@trapit/auth";
 
+import { RestrictedUserDashboardWorkspace } from "../../components/restricted-user-dashboard-workspace";
 import { SignOutButton } from "../../components/sign-out-button";
 import { UserTestWorkspace } from "../../components/user-test-workspace";
 import { isWebAuthConfigured } from "../../lib/auth-config";
@@ -25,10 +26,17 @@ export default async function UserPage() {
           </div>
           {authConfigured ? <SignOutButton /> : null}
         </div>
-        <UserTestWorkspace
-          authConfigured={authConfigured}
-          defaultParticipantIdentifier={sessionIdentifier}
-        />
+        {session.role === "user" ? (
+          <RestrictedUserDashboardWorkspace
+            authConfigured={authConfigured}
+            defaultParticipantIdentifier={sessionIdentifier}
+          />
+        ) : (
+          <UserTestWorkspace
+            authConfigured={authConfigured}
+            defaultParticipantIdentifier={sessionIdentifier}
+          />
+        )}
       </section>
     </main>
   );

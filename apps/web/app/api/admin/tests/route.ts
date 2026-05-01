@@ -10,7 +10,7 @@ export async function GET() {
     return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
   }
 
-  const scheduledTests = await listScheduledTests();
+  const scheduledTests = await listScheduledTests(actor.sub);
   return NextResponse.json({ scheduledTests });
 }
 

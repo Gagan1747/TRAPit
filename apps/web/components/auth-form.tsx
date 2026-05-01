@@ -1,5 +1,6 @@
 "use client";
 
+import { combinePhoneNumber, sanitizeCountryCodeInput, sanitizeNationalPhoneInput } from "@trapit/auth";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
@@ -36,6 +37,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [isPending, setIsPending] = useState(false);
   const [password, setPassword] = useState("");
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
+  const [countryCode, setCountryCode] = useState("+91");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [signUpState, setSignUpState] = useState<{
     destination: string | null;
@@ -55,6 +57,38 @@ export function AuthForm({ mode }: AuthFormProps) {
           : searchParams.get("created")
             ? "Account created. Sign in after confirmation completes."
             : null;
+
+  const combinedPhoneNumber = combinePhoneNumber(countryCode, phoneNumber);
+
+    function handlePhoneNumberChange(nextPhoneNumber: string) {
+    const sanitizedPhoneNumber = sanitizeNationalPhoneInput(nextPhoneNumber);
+
+    if (sanitizedPhoneNumber === phoneNumber) {
+        return;
+      }
+
+    setPhoneNumber(sanitizedPhoneNumber);
+      setPassword("");
+      setIsPasswordVisible(false);
+      setConfirmationCode("");
+      setSignUpState(null);
+      setErrorMessage(null);
+    }
+
+  function handleCountryCodeChange(nextCountryCode: string) {
+    const sanitizedCountryCode = sanitizeCountryCodeInput(nextCountryCode);
+
+    if (sanitizedCountryCode === countryCode) {
+      return;
+    }
+
+    setCountryCode(sanitizedCountryCode);
+    setPassword("");
+    setIsPasswordVisible(false);
+    setConfirmationCode("");
+    setSignUpState(null);
+    setErrorMessage(null);
+  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -84,7 +118,7 @@ export function AuthForm({ mode }: AuthFormProps) {
     try {
       if (mode === "sign-up") {
         const response = await fetch("/api/auth/sign-up", {
-          body: JSON.stringify({ fullName, phoneNumber, password }),
+          body: JSON.stringify({ fullName, phoneNumber: combinedPhoneNumber, password }),
           headers: {
             "Content-Type": "application/json",
           },
@@ -115,7 +149,7 @@ export function AuthForm({ mode }: AuthFormProps) {
       }
 
       const response = await fetch("/api/auth/sign-in", {
-        body: JSON.stringify({ phoneNumber, password }),
+        body: JSON.stringify({ phoneNumber: combinedPhoneNumber, password }),
         headers: {
           "Content-Type": "application/json",
         },
@@ -158,7 +192,7 @@ export function AuthForm({ mode }: AuthFormProps) {
 
     try {
       const response = await fetch("/api/auth/confirm-sign-up", {
-        body: JSON.stringify({ code: confirmationCode, phoneNumber }),
+        body: JSON.stringify({ code: confirmationCode, phoneNumber: combinedPhoneNumber }),
         headers: {
           "Content-Type": "application/json",
         },
@@ -211,15 +245,26 @@ export function AuthForm({ mode }: AuthFormProps) {
 
       <div className="field">
         <label htmlFor="phone-number">Phone number</label>
-        <input
-          id="phone-number"
-          type="tel"
-          inputMode="tel"
-          placeholder="+14155550123"
-          disabled={!authConfigured}
-          value={phoneNumber}
-          onChange={(event) => setPhoneNumber(event.target.value)}
-        />
+        <div className="field-row phone-input-row">
+          <input
+            id="phone-country-code"
+            type="tel"
+            inputMode="tel"
+            placeholder="+91"
+            disabled={!authConfigured}
+            value={countryCode}
+            onChange={(event) => handleCountryCodeChange(event.target.value)}
+          />
+          <input
+            id="phone-number"
+            type="tel"
+            inputMode="tel"
+            placeholder="9876543210"
+            disabled={!authConfigured}
+            value={phoneNumber}
+            onChange={(event) => handlePhoneNumberChange(event.target.value)}
+          />
+        </div>
       </div>
 
       <div className="field">

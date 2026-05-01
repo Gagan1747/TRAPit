@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getAdminActor } from "../../../../lib/admin-api";
-import { createPool, listPools } from "../../../../lib/testing-store";
+import { createPool, listPoolsForActor } from "../../../../lib/testing-store";
 
 export async function GET() {
   const actor = await getAdminActor();
@@ -10,7 +10,7 @@ export async function GET() {
     return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
   }
 
-  const pools = await listPools();
+  const pools = await listPoolsForActor(actor.sub);
   return NextResponse.json({ pools });
 }
 
@@ -28,6 +28,7 @@ export async function POST(request: Request) {
   }
 
   const pools = await createPool({
+    createdBy: actor.sub,
     description: body.description,
     name: body.name,
   });

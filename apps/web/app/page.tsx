@@ -7,7 +7,7 @@ export default function HomePage() {
   return (
     <AuthShell
       eyebrow="Welcome to TRAPit"
-      title="Test and Poll made easier"
+      title="Tests made easier"
       description={
         authConfigured
           ? "Sign in or create an account to continue. TRAPit will route you based on your Cognito access."
@@ -19,7 +19,7 @@ export default function HomePage() {
         <div>
           <h2>Welcome to TRAPit</h2>
           <p className="muted-text">
-            Test and Poll made easier.
+            Tests made easier.
           </p>
         </div>
         {authConfigured ? (

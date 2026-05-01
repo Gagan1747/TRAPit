@@ -3,7 +3,6 @@ import { validateQuestionDraft, type QuestionDraft } from "@trapit/testing";
 
 import { getAdminActor } from "../../../../lib/admin-api";
 import {
-  clearQuestions,
   createQuestion,
   deleteQuestions,
   importQuestions,
@@ -38,7 +37,7 @@ export async function GET() {
     return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
   }
 
-  const questions = await listQuestions();
+  const questions = await listQuestions(actor.sub);
 
   return NextResponse.json({ questions });
 }
@@ -112,10 +111,19 @@ export async function DELETE(request: Request) {
   }
 
   if (Array.isArray(body.questionIds) && body.questionIds.length) {
-    const questions = await deleteQuestions(body.questionIds);
-    return NextResponse.json({ questions });
+    try {
+      const questions = await deleteQuestions(body.questionIds, actor.sub);
+      return NextResponse.json({ questions });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Unable to remove the selected questions." },
+        { status: 400 },
+      );
+    }
   }
 
-  const questions = await clearQuestions();
-  return NextResponse.json({ questions });
+  return NextResponse.json(
+    { error: "Select specific questions to remove." },
+    { status: 400 },
+  );
 }

@@ -4,6 +4,10 @@ import {
   createEmptyTestingWorkspaceState,
   formatElapsedTime,
   type GroupJoinRequest,
+  type PersistentPollQuestion,
+  type PollParticipantType,
+  type PollQuestionDraft,
+  type ScheduledPoll,
   validateQuestionDraft,
   type BulkImportPreview,
   type ParticipantGroup,
@@ -15,6 +19,7 @@ import {
   type TestHistoryEntry,
 } from "@trapit/testing";
 import { useEffect, useState } from "react";
+import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
@@ -44,6 +49,13 @@ function createDefaultScheduleTime() {
   const timezoneOffsetMs = date.getTimezoneOffset() * 60 * 1000;
 
   return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
+}
+
+function createEmptyPollQuestionDraft(): PollQuestionDraft {
+  return {
+    options: ["", ""],
+    prompt: "",
+  };
 }
 
 type QuestionApiResponse = {
@@ -86,7 +98,24 @@ type GroupSearchResponse = {
 };
 
 type UserDashboardResponse = {
+  availablePolls: ScheduledPoll[];
+  availableTests: Array<{
+    durationMinutes: number;
+    hasAttempt: boolean;
+    id: string;
+    poolId: string;
+    questionCount: number;
+    startsAt: string;
+    status: ScheduledTest["status"];
+    title: string;
+    topPerformer?: {
+      correctCount: number;
+      elapsedMs: number;
+      participantName: string;
+    };
+  }>;
   groupJoinRequests: GroupJoinRequest[];
+  history: TestHistoryEntry[];
   identifier: string;
 };
 
@@ -107,6 +136,11 @@ type HistoryResponse = {
   };
 };
 
+type PollsResponse = {
+  pollQuestions: PersistentPollQuestion[];
+  scheduledPolls: ScheduledPoll[];
+};
+
 type AdminTestReviewResponse = {
   review: Array<{
     correctOptionIndex: number;
@@ -122,14 +156,48 @@ type AdminTestReviewResponse = {
 };
 
 type AdminWorkspaceSection =
-  | "assigned-tests"
   | "author"
+  | "create-groups"
   | "history"
   | "join-groups"
+  | "manage-groups"
+  | "poll-questions"
+  | "poll-schedule"
   | "participants"
   | "pools"
   | "question-bank"
-  | "schedule";
+  | "schedule"
+  | "self-test";
+
+type AdminTestListFilter = "admin" | "both" | "participant";
+
+type AdminResultsMode = "polls" | "tests";
+
+type UnifiedAdminTestListItem = {
+  durationMinutes: number;
+  hasAdminScope: boolean;
+  hasParticipantScope: boolean;
+  id: string;
+  participantHistoryEntry?: TestHistoryEntry;
+  participantTest?: UserDashboardResponse["availableTests"][number];
+  poolId: string;
+  questionCount: number;
+  scheduledTest?: ScheduledTest;
+  startsAt: string;
+  status: ScheduledTest["status"];
+  title: string;
+};
+
+type UnifiedAdminPollListItem = {
+  hasAdminScope: boolean;
+  hasParticipantScope: boolean;
+  id: string;
+  participantPoll?: ScheduledPoll;
+  scheduledPoll?: ScheduledPoll;
+  startsAt: string;
+  status: ScheduledPoll["status"];
+  title: string;
+};
 
 type EditableQuestionDraft = {
   correctOptionIndex: number;
@@ -359,10 +427,28 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
   const [isSearchingGroups, setIsSearchingGroups] = useState(false);
   const [isSendingGroupRequest, setIsSendingGroupRequest] = useState<string | null>(null);
   const [leaderboards, setLeaderboards] = useState<TestLeaderboard[]>([]);
-  const [openSection, setOpenSection] = useState<AdminWorkspaceSection | null>(null);
+  const [openSection, setOpenSection] = useState<AdminWorkspaceSection | null>("history");
   const [outgoingGroupJoinRequests, setOutgoingGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
+  const [participantPolls, setParticipantPolls] = useState<ScheduledPoll[]>([]);
+  const [participantTestHistory, setParticipantTestHistory] = useState<TestHistoryEntry[]>([]);
+  const [participantTests, setParticipantTests] = useState<UserDashboardResponse["availableTests"]>([]);
   const [participantGroups, setParticipantGroups] = useState<ParticipantGroup[]>([]);
   const [participants, setParticipants] = useState<ParticipantProfile[]>([]);
+  const [pollFeedback, setPollFeedback] = useState<string | null>(null);
+  const [pollQrCodes, setPollQrCodes] = useState<Record<string, string>>({});
+  const [pollQuestionDrafts, setPollQuestionDrafts] = useState<PollQuestionDraft[]>([
+    createEmptyPollQuestionDraft(),
+  ]);
+  const [pollQuestions, setPollQuestions] = useState<PersistentPollQuestion[]>([]);
+  const [pollScheduleAnonymous, setPollScheduleAnonymous] = useState(false);
+  const [pollScheduleDurationMinutes, setPollScheduleDurationMinutes] = useState("10");
+  const [pollScheduleGenerateQrCode, setPollScheduleGenerateQrCode] = useState(true);
+  const [pollScheduleGroupIds, setPollScheduleGroupIds] = useState<string[]>([]);
+  const [pollScheduleParticipantType, setPollScheduleParticipantType] = useState<PollParticipantType>("registered");
+  const [pollScheduleQuestionIds, setPollScheduleQuestionIds] = useState<string[]>([]);
+  const [pollScheduleStartMode, setPollScheduleStartMode] = useState<"later" | "now">("now");
+  const [pollScheduleStartsAtInput, setPollScheduleStartsAtInput] = useState(createDefaultScheduleTime());
+  const [scheduledPolls, setScheduledPolls] = useState<ScheduledPoll[]>([]);
   const [poolFeedback, setPoolFeedback] = useState<string | null>(null);
   const [poolName, setPoolName] = useState("");
   const [pools, setPools] = useState<QuestionPool[]>([]);
@@ -375,16 +461,22 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
   );
   const [reviewByTestId, setReviewByTestId] = useState<Record<string, AdminTestReviewResponse>>({});
   const [reviewLoadingByTestId, setReviewLoadingByTestId] = useState<Record<string, boolean>>({});
+  const [resultsMode, setResultsMode] = useState<AdminResultsMode>("tests");
   const [scheduleDurationMinutes, setScheduleDurationMinutes] = useState("30");
   const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
   const [scheduleParticipantGroupIds, setScheduleParticipantGroupIds] = useState<string[]>([]);
-  const [scheduleParticipantIds, setScheduleParticipantIds] = useState<string[]>([]);
   const [schedulePoolId, setSchedulePoolId] = useState("");
   const [scheduleQuestionCount, setScheduleQuestionCount] = useState("1");
   const [scheduleStartMode, setScheduleStartMode] = useState<"later" | "now">("now");
   const [scheduleStartsAtInput, setScheduleStartsAtInput] = useState(createDefaultScheduleTime());
   const [scheduledTests, setScheduledTests] = useState<ScheduledTest[]>([]);
   const [selectedGroupParticipantIds, setSelectedGroupParticipantIds] = useState<string[]>([]);
+  const [selfTestDurationMinutes, setSelfTestDurationMinutes] = useState("30");
+  const [selfTestFeedback, setSelfTestFeedback] = useState<string | null>(null);
+  const [selfTestPoolId, setSelfTestPoolId] = useState("");
+  const [selfTestQuestionCount, setSelfTestQuestionCount] = useState("1");
+  const [selfTestStartMode, setSelfTestStartMode] = useState<"later" | "now">("now");
+  const [selfTestStartsAtInput, setSelfTestStartsAtInput] = useState(createDefaultScheduleTime());
   const [summary, setSummary] = useState<HistoryResponse["summary"]>({
     attempts: 0,
     groups: 0,
@@ -393,13 +485,14 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
     questions: 0,
     scheduledTests: 0,
   });
+  const [testListFilter, setTestListFilter] = useState<AdminTestListFilter>("both");
   const [visibleReviewTestIds, setVisibleReviewTestIds] = useState<string[]>([]);
 
   async function loadWorkspace() {
     setIsLoading(true);
 
     try {
-      const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, userDashboardPayload] =
+      const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, userDashboardPayload, pollsPayload] =
         await Promise.all([
           readJson<QuestionApiResponse>(await fetch("/api/admin/questions")),
           readJson<PoolsResponse>(await fetch("/api/admin/pools")),
@@ -407,6 +500,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
           readJson<ScheduledTestsResponse>(await fetch("/api/admin/tests")),
           readJson<HistoryResponse>(await fetch("/api/admin/history")),
           readJson<UserDashboardResponse>(await fetch("/api/user/dashboard")),
+          readJson<PollsResponse>(await fetch("/api/admin/polls")),
         ]);
 
       setQuestions(questionsPayload.questions);
@@ -415,6 +509,11 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       setParticipantGroups(participantsPayload.participantGroups);
       setGroupJoinRequests(participantsPayload.groupJoinRequests);
       setOutgoingGroupJoinRequests(userDashboardPayload.groupJoinRequests);
+      setParticipantPolls(userDashboardPayload.availablePolls);
+      setParticipantTests(userDashboardPayload.availableTests);
+      setParticipantTestHistory(userDashboardPayload.history);
+      setPollQuestions(pollsPayload.pollQuestions);
+      setScheduledPolls(pollsPayload.scheduledPolls);
       setScheduledTests(testsPayload.scheduledTests);
       setHistory(historyPayload.history);
       setLeaderboards(historyPayload.leaderboards);
@@ -422,6 +521,10 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
 
       if (!schedulePoolId && poolsPayload.pools.length) {
         setSchedulePoolId(poolsPayload.pools[0].id);
+      }
+
+      if (!selfTestPoolId && poolsPayload.pools.length) {
+        setSelfTestPoolId(poolsPayload.pools[0].id);
       }
 
       setSelectedQuestionBankPoolId((currentPoolId) =>
@@ -445,6 +548,35 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       setIsOcrImportOpen(false);
     }
   }, [authorPoolId]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const pollsWithQrCodes = scheduledPolls.filter((poll) => poll.shareCode);
+
+    if (!pollsWithQrCodes.length) {
+      setPollQrCodes({});
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    void Promise.all(
+      pollsWithQrCodes.map(async (poll) => [
+        poll.id,
+        await QRCode.toDataURL(poll.shareCode ?? "", { margin: 1, width: 180 }),
+      ] as const),
+    ).then((entries) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setPollQrCodes(Object.fromEntries(entries));
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [scheduledPolls]);
 
   function updateEditableOption(index: number, value: string) {
     setEditingQuestionDraft((currentDraft) => {
@@ -915,6 +1047,115 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
     });
   }
 
+  function updatePollQuestionDraft(index: number, updater: (draft: PollQuestionDraft) => PollQuestionDraft) {
+    setPollQuestionDrafts((currentDrafts) =>
+      currentDrafts.map((draft, draftIndex) =>
+        draftIndex === index ? updater(draft) : draft,
+      ),
+    );
+  }
+
+  function handleSavePollQuestions() {
+    const drafts = pollQuestionDrafts.filter(
+      (draft) => draft.prompt.trim() || draft.options.some((option) => option.trim()),
+    );
+
+    if (!drafts.length) {
+      setPollFeedback("Add at least one poll question before saving.");
+      return;
+    }
+
+    void mutateWorkspace(async () => {
+      await readJson<PollsResponse>(
+        await fetch("/api/admin/polls", {
+          body: JSON.stringify({
+            drafts,
+            mode: "create-questions",
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setPollFeedback(`Saved ${drafts.length} poll question${drafts.length === 1 ? "" : "s"}.`);
+      setPollQuestionDrafts([createEmptyPollQuestionDraft()]);
+    }).catch((error) => {
+      setPollFeedback(error instanceof Error ? error.message : "Unable to save the poll questions.");
+    });
+  }
+
+  function handleSchedulePoll() {
+    const durationMinutes = Number(pollScheduleDurationMinutes);
+    const startsAt =
+      pollScheduleStartMode === "now"
+        ? new Date().toISOString()
+        : new Date(pollScheduleStartsAtInput).toISOString();
+
+    if (!pollQuestions.length) {
+      setPollFeedback("Add poll questions before scheduling a poll.");
+      return;
+    }
+
+    if (!pollScheduleQuestionIds.length) {
+      setPollFeedback("Select at least one poll question.");
+      return;
+    }
+
+    if (!Number.isFinite(durationMinutes) || durationMinutes < 1) {
+      setPollFeedback("Poll duration must be at least 1 minute.");
+      return;
+    }
+
+    if (
+      pollScheduleStartMode === "later" &&
+      (!pollScheduleStartsAtInput || Number.isNaN(new Date(pollScheduleStartsAtInput).getTime()))
+    ) {
+      setPollFeedback("Choose a valid poll date and time.");
+      return;
+    }
+
+    if (pollScheduleParticipantType === "registered" && !pollScheduleGroupIds.length) {
+      setPollFeedback("Select at least one group for registered-only polls.");
+      return;
+    }
+
+    void mutateWorkspace(async () => {
+      await readJson<PollsResponse>(
+        await fetch("/api/admin/polls", {
+          body: JSON.stringify({
+            anonymous: pollScheduleAnonymous,
+            durationMinutes,
+            generateQrCode: pollScheduleGenerateQrCode,
+            mode: "schedule-poll",
+            participantGroupIds:
+              pollScheduleParticipantType === "registered" ? pollScheduleGroupIds : [],
+            participantType: pollScheduleParticipantType,
+            questionIds: pollScheduleQuestionIds,
+            startsAt,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setPollFeedback("Poll scheduled.");
+      setPollScheduleAnonymous(false);
+      setPollScheduleDurationMinutes("10");
+      setPollScheduleGenerateQrCode(true);
+      setPollScheduleGroupIds([]);
+      setPollScheduleParticipantType("registered");
+      setPollScheduleQuestionIds([]);
+      setPollScheduleStartMode("now");
+      setPollScheduleStartsAtInput(createDefaultScheduleTime());
+    }).catch((error) => {
+      setPollFeedback(error instanceof Error ? error.message : "Unable to schedule the poll.");
+    });
+  }
+
   function handleStartEditingGroup(group: ParticipantGroup) {
     setEditingGroupId(group.id);
     setEditingGroupDraft({
@@ -1000,7 +1241,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
           body: JSON.stringify({
             durationMinutes,
             participantGroupIds: scheduleParticipantGroupIds,
-            participantIds: scheduleParticipantIds,
+            participantIds: [],
             poolId: schedulePoolId,
             questionCount,
             startsAt,
@@ -1015,7 +1256,6 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       setScheduleFeedback("Test scheduled.");
       setScheduleDurationMinutes("30");
       setScheduleParticipantGroupIds([]);
-      setScheduleParticipantIds([]);
       setScheduleQuestionCount("1");
       setScheduleStartMode("now");
       setScheduleStartsAtInput(createDefaultScheduleTime());
@@ -1024,8 +1264,79 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
     });
   }
 
+  function handleScheduleSelfTest() {
+    if (!currentAdminIdentifier) {
+      setSelfTestFeedback("Your account needs a participant identifier before you can create a self test.");
+      return;
+    }
+
+    if (!selfTestPoolId) {
+      setSelfTestFeedback("Select a question pool first.");
+      return;
+    }
+
+    const durationMinutes = Number(selfTestDurationMinutes);
+    const questionCount = Number(selfTestQuestionCount);
+    const startsAt =
+      selfTestStartMode === "now"
+        ? new Date().toISOString()
+        : new Date(selfTestStartsAtInput).toISOString();
+
+    if (!Number.isFinite(durationMinutes) || durationMinutes < 1) {
+      setSelfTestFeedback("Duration must be at least 1 minute.");
+      return;
+    }
+
+    if (!Number.isFinite(questionCount) || questionCount < 1) {
+      setSelfTestFeedback("Question count must be at least 1.");
+      return;
+    }
+
+    if (
+      selfTestStartMode === "later" &&
+      (!selfTestStartsAtInput || Number.isNaN(new Date(selfTestStartsAtInput).getTime()))
+    ) {
+      setSelfTestFeedback("Choose a valid future date and time.");
+      return;
+    }
+
+    void mutateWorkspace(async () => {
+      await readJson<ScheduledTestsResponse>(
+        await fetch("/api/admin/tests", {
+          body: JSON.stringify({
+            durationMinutes,
+            participantGroupIds: [],
+            participantIds: [currentAdminIdentifier],
+            poolId: selfTestPoolId,
+            questionCount,
+            startsAt,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setSelfTestFeedback("Self test scheduled.");
+      setSelfTestDurationMinutes("30");
+      setSelfTestQuestionCount("1");
+      setSelfTestStartMode("now");
+      setSelfTestStartsAtInput(createDefaultScheduleTime());
+      setResultsMode("tests");
+      setTestListFilter("both");
+      setOpenSection("history");
+    }).catch((error) => {
+      setSelfTestFeedback(error instanceof Error ? error.message : "Unable to schedule the self test.");
+    });
+  }
+
   const selectedPool = pools.find((pool) => pool.id === schedulePoolId) ?? null;
+  const selectedSelfTestPool = pools.find((pool) => pool.id === selfTestPoolId) ?? null;
   const selectedQuestionBankPool = pools.find((pool) => pool.id === selectedQuestionBankPoolId) ?? null;
+  const participantHistoryByTestId = new Map(
+    participantTestHistory.map((entry) => [entry.testId, entry]),
+  );
   const sortedScheduledTests = [...scheduledTests].sort((leftTest, rightTest) => {
     const priorityDifference =
       adminTestStatusPriority[leftTest.status] - adminTestStatusPriority[rightTest.status];
@@ -1046,40 +1357,138 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
   const areAllVisibleQuestionsSelected =
     filteredQuestionBankQuestionIds.length > 0 &&
     filteredQuestionBankQuestionIds.every((questionId) => selectedQuestionIds.includes(questionId));
-  const scheduledTestsByStatus: Array<{
-    description: string;
-    key: ScheduledTest["status"];
-    label: string;
-    tests: ScheduledTest[];
-  }> = [
-    {
-      description: "Currently open tests and in-progress submissions",
-      key: "live",
-      label: "Live tests",
-      tests: sortedScheduledTests.filter((test) => test.status === "live"),
-    },
-    {
-      description: "Tests that are scheduled but not open yet",
-      key: "scheduled",
-      label: "Upcoming tests",
-      tests: sortedScheduledTests.filter((test) => test.status === "scheduled"),
-    },
-    {
-      description: "Completed tests with final results and question review",
-      key: "completed",
-      label: "Completed tests",
-      tests: sortedScheduledTests.filter((test) => test.status === "completed"),
-    },
-  ];
-  const assignedTests = currentAdminIdentifier
-    ? sortedScheduledTests.filter((test) =>
-        test.resolvedParticipantIdentifiers.some((identifier) =>
-          participantIdentifiersMatch(identifier, currentAdminIdentifier),
-        ),
-      )
-    : [];
-  const completedTestsCount = scheduledTestsByStatus.find((group) => group.key === "completed")?.tests.length ?? 0;
-  const upcomingTestsCount = scheduledTestsByStatus.find((group) => group.key === "scheduled")?.tests.length ?? 0;
+  const mergedTestListMap = new Map<string, UnifiedAdminTestListItem>();
+
+  for (const scheduledTest of sortedScheduledTests) {
+    mergedTestListMap.set(scheduledTest.id, {
+      durationMinutes: scheduledTest.durationMinutes,
+      hasAdminScope: true,
+      hasParticipantScope: false,
+      id: scheduledTest.id,
+      poolId: scheduledTest.poolId,
+      questionCount: scheduledTest.questionCount,
+      scheduledTest,
+      startsAt: scheduledTest.startsAt,
+      status: scheduledTest.status,
+      title: scheduledTest.title,
+    });
+  }
+
+  for (const participantTest of participantTests) {
+    const existingItem = mergedTestListMap.get(participantTest.id);
+
+    mergedTestListMap.set(participantTest.id, {
+      durationMinutes: existingItem?.durationMinutes ?? participantTest.durationMinutes,
+      hasAdminScope: existingItem?.hasAdminScope ?? false,
+      hasParticipantScope: true,
+      id: participantTest.id,
+      participantHistoryEntry: participantHistoryByTestId.get(participantTest.id),
+      participantTest,
+      poolId: existingItem?.poolId ?? participantTest.poolId,
+      questionCount: existingItem?.questionCount ?? participantTest.questionCount,
+      scheduledTest: existingItem?.scheduledTest,
+      startsAt: existingItem?.startsAt ?? participantTest.startsAt,
+      status: existingItem?.status ?? participantTest.status,
+      title: existingItem?.title ?? participantTest.title,
+    });
+  }
+
+  const filteredMergedTests = Array.from(mergedTestListMap.values())
+    .filter((test) => {
+      if (testListFilter === "admin") {
+        return test.hasAdminScope;
+      }
+
+      if (testListFilter === "participant") {
+        return test.hasParticipantScope;
+      }
+
+      return true;
+    })
+    .sort((leftTest, rightTest) => {
+      const priorityDifference =
+        adminTestStatusPriority[leftTest.status] - adminTestStatusPriority[rightTest.status];
+
+      if (priorityDifference !== 0) {
+        return priorityDifference;
+      }
+
+      const rightTime = new Date(
+        rightTest.status === "completed"
+          ? rightTest.participantHistoryEntry?.completedAt ?? rightTest.startsAt
+          : rightTest.startsAt,
+      ).getTime();
+      const leftTime = new Date(
+        leftTest.status === "completed"
+          ? leftTest.participantHistoryEntry?.completedAt ?? leftTest.startsAt
+          : leftTest.startsAt,
+      ).getTime();
+
+      return rightTime - leftTime;
+    });
+  const sortedScheduledPolls = [...scheduledPolls].sort((leftPoll, rightPoll) => {
+    const priorityDifference =
+      adminTestStatusPriority[leftPoll.status] - adminTestStatusPriority[rightPoll.status];
+
+    if (priorityDifference !== 0) {
+      return priorityDifference;
+    }
+
+    return new Date(rightPoll.startsAt).getTime() - new Date(leftPoll.startsAt).getTime();
+  });
+  const mergedPollListMap = new Map<string, UnifiedAdminPollListItem>();
+
+  for (const scheduledPoll of sortedScheduledPolls) {
+    mergedPollListMap.set(scheduledPoll.id, {
+      hasAdminScope: true,
+      hasParticipantScope: false,
+      id: scheduledPoll.id,
+      scheduledPoll,
+      startsAt: scheduledPoll.startsAt,
+      status: scheduledPoll.status,
+      title: scheduledPoll.title,
+    });
+  }
+
+  for (const participantPoll of participantPolls) {
+    const existingItem = mergedPollListMap.get(participantPoll.id);
+
+    mergedPollListMap.set(participantPoll.id, {
+      hasAdminScope: existingItem?.hasAdminScope ?? false,
+      hasParticipantScope: true,
+      id: participantPoll.id,
+      participantPoll,
+      scheduledPoll: existingItem?.scheduledPoll,
+      startsAt: existingItem?.startsAt ?? participantPoll.startsAt,
+      status: existingItem?.status ?? participantPoll.status,
+      title: existingItem?.title ?? participantPoll.title,
+    });
+  }
+
+  const filteredMergedPolls = Array.from(mergedPollListMap.values())
+    .filter((poll) => {
+      if (testListFilter === "admin") {
+        return poll.hasAdminScope;
+      }
+
+      if (testListFilter === "participant") {
+        return poll.hasParticipantScope;
+      }
+
+      return true;
+    })
+    .sort((leftPoll, rightPoll) => {
+      const priorityDifference =
+        adminTestStatusPriority[leftPoll.status] - adminTestStatusPriority[rightPoll.status];
+
+      if (priorityDifference !== 0) {
+        return priorityDifference;
+      }
+
+      return new Date(rightPoll.startsAt).getTime() - new Date(leftPoll.startsAt).getTime();
+    });
+  const completedTestsCount = sortedScheduledTests.filter((test) => test.status === "completed").length;
+  const upcomingTestsCount = sortedScheduledTests.filter((test) => test.status === "scheduled").length;
 
   useEffect(() => {
     const visibleQuestionIds = new Set(
@@ -1096,6 +1505,22 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       return nextIds.length === currentIds.length ? currentIds : nextIds;
     });
   }, [questions, selectedQuestionBankPoolId]);
+
+  useEffect(() => {
+    const availablePollQuestionIds = new Set(pollQuestions.map((question) => question.id));
+
+    setPollScheduleQuestionIds((currentIds) =>
+      currentIds.filter((questionId) => availablePollQuestionIds.has(questionId)),
+    );
+  }, [pollQuestions]);
+
+  useEffect(() => {
+    const availableGroupIds = new Set(participantGroups.map((group) => group.id));
+
+    setPollScheduleGroupIds((currentIds) =>
+      currentIds.filter((groupId) => availableGroupIds.has(groupId)),
+    );
+  }, [participantGroups]);
 
   function handleResolveGroupRequest(requestId: string, decision: "accept" | "reject") {
     void mutateWorkspace(async () => {
@@ -1158,6 +1583,110 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
           </div>
         </div>
       </section>
+
+      <div className="admin-shell">
+        <aside className="admin-menu panel workspace-card">
+          <div className="section-head compact-head">
+            <div>
+              <p className="eyebrow">Workspace menu</p>
+              <h2 className="section-title">Admin navigation</h2>
+            </div>
+          </div>
+
+          <div className="admin-menu-stack">
+            <div className="admin-menu-group">
+              <p className="admin-menu-label">Home</p>
+              <button
+                className={`admin-menu-item${openSection === "history" ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setOpenSection("history")}
+              >
+                Tests and results
+              </button>
+            </div>
+
+            <div className="admin-menu-group">
+              <p className="admin-menu-label">Question</p>
+              <button
+                className={`admin-menu-item${openSection === "author" ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setOpenSection("author")}
+              >
+                Add questions
+              </button>
+              <button
+                className={`admin-menu-item${openSection === "question-bank" ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setOpenSection("question-bank")}
+              >
+                Question Pool
+              </button>
+            </div>
+
+            <div className="admin-menu-group">
+              <p className="admin-menu-label">Test</p>
+              <button
+                className={`admin-menu-item${openSection === "schedule" ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setOpenSection("schedule")}
+              >
+                Schedule test
+              </button>
+              <button
+                className={`admin-menu-item${openSection === "self-test" ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setOpenSection("self-test")}
+              >
+                Self test
+              </button>
+            </div>
+
+            <div className="admin-menu-group">
+              <p className="admin-menu-label">Poll</p>
+              <button
+                className={`admin-menu-item${openSection === "poll-questions" ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setOpenSection("poll-questions")}
+              >
+                Add poll question
+              </button>
+              <button
+                className={`admin-menu-item${openSection === "poll-schedule" ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setOpenSection("poll-schedule")}
+              >
+                Schedule poll
+              </button>
+            </div>
+
+            <div className="admin-menu-group">
+              <p className="admin-menu-label">Groups</p>
+              <button
+                className={`admin-menu-item${openSection === "create-groups" ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setOpenSection("create-groups")}
+              >
+                Create groups
+              </button>
+              <button
+                className={`admin-menu-item${openSection === "manage-groups" ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setOpenSection("manage-groups")}
+              >
+                Manage groups
+              </button>
+              <button
+                className={`admin-menu-item${openSection === "join-groups" ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setOpenSection("join-groups")}
+              >
+                Join groups
+              </button>
+            </div>
+          </div>
+        </aside>
+
+        <div className="admin-main-column">
 
       <CollapsibleWorkspaceSection
         eyebrow=""
@@ -1559,202 +2088,208 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
 
       <CollapsibleWorkspaceSection
         eyebrow=""
-        isOpen={openSection === "participants"}
-        sectionId="admin-participants"
+        isOpen={openSection === "create-groups"}
+        sectionId="admin-create-groups"
         title="Create Groups"
-        onToggle={() => toggleSection("participants")}
+        onToggle={() => toggleSection("create-groups")}
       >
-        <div className="stack-grid">
-          <div className="question-card form-stack">
-            <div className="field">
-              <label htmlFor="group-name">Enter group name</label>
-              <input
-                id="group-name"
-                placeholder="Enter group name"
-                value={groupName}
-                onChange={(event) => setGroupName(event.target.value)}
-              />
-            </div>
-            <ParticipantSearchPicker
-              emptyMessage="No participants selected for this group yet."
-              inputId="group-participant-search"
-              participants={participants}
-              searchPlaceholder="Search participants by phone number"
-              selectedIds={selectedGroupParticipantIds}
-              selectionLabel="Select participants"
-              onChange={setSelectedGroupParticipantIds}
+        <div className="question-card form-stack">
+          <div className="field">
+            <label htmlFor="group-name">Enter group name</label>
+            <input
+              id="group-name"
+              placeholder="Enter group name"
+              value={groupName}
+              onChange={(event) => setGroupName(event.target.value)}
             />
-            {groupFeedback ? <p className="muted-text">{groupFeedback}</p> : null}
-            <div className="inline-actions">
-              <button className="button" disabled={isMutating} type="button" onClick={handleCreateGroup}>
-                Create group
-              </button>
-            </div>
           </div>
+          <ParticipantSearchPicker
+            emptyMessage="No participants selected for this group yet."
+            inputId="group-participant-search"
+            participants={participants}
+            searchPlaceholder="Search participants by phone number"
+            selectedIds={selectedGroupParticipantIds}
+            selectionLabel="Select participants"
+            onChange={setSelectedGroupParticipantIds}
+          />
+          {groupFeedback ? <p className="muted-text">{groupFeedback}</p> : null}
+          <div className="inline-actions">
+            <button className="button" disabled={isMutating} type="button" onClick={handleCreateGroup}>
+              Create group
+            </button>
+          </div>
+        </div>
+      </CollapsibleWorkspaceSection>
 
-          <div className="question-card">
-            <div className="question-head">
-              <strong>My groups</strong>
-              <span className="status-chip success">{participantGroups.length} total</span>
-            </div>
-            {participantGroups.length ? (
-              <div className="question-list">
-                {participantGroups.map((group) => {
-                  const requestsForGroup = groupJoinRequests.filter(
-                    (request) => request.adminGroupId === group.id,
-                  );
+      <CollapsibleWorkspaceSection
+        eyebrow=""
+        isOpen={openSection === "manage-groups"}
+        sectionId="admin-manage-groups"
+        title="Manage Groups"
+        onToggle={() => toggleSection("manage-groups")}
+      >
+        <div className="question-card">
+          <div className="question-head">
+            <strong>My groups</strong>
+            <span className="status-chip success">{participantGroups.length} total</span>
+          </div>
+          {participantGroups.length ? (
+            <div className="question-list">
+              {participantGroups.map((group) => {
+                const requestsForGroup = groupJoinRequests.filter(
+                  (request) => request.adminGroupId === group.id,
+                );
 
-                  return (
-                    <article className="question-card nested-card" key={group.id}>
-                      <div className="question-head">
-                        <strong>{group.name}</strong>
+                return (
+                  <article className="question-card nested-card" key={group.id}>
+                    <div className="question-head">
+                      <strong>{group.name}</strong>
+                      <div className="inline-actions">
+                        <span className="status-chip success">{group.participantIds.length} members</span>
+                        {requestsForGroup.length ? (
+                          <span className="status-chip success">
+                            {requestsForGroup.length} request{requestsForGroup.length === 1 ? "" : "s"}
+                          </span>
+                        ) : null}
+                        <button
+                          className="button-secondary small-button"
+                          disabled={isMutating}
+                          type="button"
+                          onClick={() =>
+                            editingGroupId === group.id
+                              ? handleCancelEditingGroup()
+                              : handleStartEditingGroup(group)
+                          }
+                        >
+                          {editingGroupId === group.id ? "Cancel" : "Edit group"}
+                        </button>
+                      </div>
+                    </div>
+                    {editingGroupId === group.id && editingGroupDraft ? (
+                      <div className="form-stack">
+                        <div className="field">
+                          <label htmlFor={`edit-group-name-${group.id}`}>Group name</label>
+                          <input
+                            id={`edit-group-name-${group.id}`}
+                            value={editingGroupDraft.name}
+                            onChange={(event) =>
+                              setEditingGroupDraft((currentDraft) =>
+                                currentDraft
+                                  ? {
+                                      ...currentDraft,
+                                      name: event.target.value,
+                                    }
+                                  : currentDraft,
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="field">
+                          <ParticipantSearchPicker
+                            emptyMessage="No participants selected for this group yet."
+                            inputId={`edit-group-search-${group.id}`}
+                            participants={participants}
+                            searchPlaceholder="Search and add participants"
+                            selectedIds={editingGroupDraft.participantIds}
+                            selectionLabel="Manage participants"
+                            onChange={(participantIds) =>
+                              setEditingGroupDraft((currentDraft) =>
+                                currentDraft
+                                  ? {
+                                      ...currentDraft,
+                                      participantIds,
+                                    }
+                                  : currentDraft,
+                              )
+                            }
+                          />
+                          <p className="muted-text">Selected members appear below. Click Remove on any member to take them out of the group.</p>
+                        </div>
                         <div className="inline-actions">
-                          <span className="status-chip success">{group.participantIds.length} members</span>
-                          {requestsForGroup.length ? (
-                            <span className="status-chip success">
-                              {requestsForGroup.length} request{requestsForGroup.length === 1 ? "" : "s"}
-                            </span>
-                          ) : null}
                           <button
-                            className="button-secondary small-button"
+                            className="button"
                             disabled={isMutating}
                             type="button"
-                            onClick={() =>
-                              editingGroupId === group.id
-                                ? handleCancelEditingGroup()
-                                : handleStartEditingGroup(group)
-                            }
+                            onClick={handleSaveGroup}
                           >
-                            {editingGroupId === group.id ? "Cancel" : "Edit group"}
+                            Save group
+                          </button>
+                          <button
+                            className="button-secondary"
+                            disabled={isMutating}
+                            type="button"
+                            onClick={handleCancelEditingGroup}
+                          >
+                            Cancel
                           </button>
                         </div>
                       </div>
-                      {editingGroupId === group.id && editingGroupDraft ? (
-                        <div className="form-stack">
-                          <div className="field">
-                            <label htmlFor={`edit-group-name-${group.id}`}>Group name</label>
-                            <input
-                              id={`edit-group-name-${group.id}`}
-                              value={editingGroupDraft.name}
-                              onChange={(event) =>
-                                setEditingGroupDraft((currentDraft) =>
-                                  currentDraft
-                                    ? {
-                                        ...currentDraft,
-                                        name: event.target.value,
-                                      }
-                                    : currentDraft,
-                                )
-                              }
-                            />
-                          </div>
-                          <div className="field">
-                            <ParticipantSearchPicker
-                              emptyMessage="No participants selected for this group yet."
-                              inputId={`edit-group-search-${group.id}`}
-                              participants={participants}
-                              searchPlaceholder="Search and add participants"
-                              selectedIds={editingGroupDraft.participantIds}
-                              selectionLabel="Manage participants"
-                              onChange={(participantIds) =>
-                                setEditingGroupDraft((currentDraft) =>
-                                  currentDraft
-                                    ? {
-                                        ...currentDraft,
-                                        participantIds,
-                                      }
-                                    : currentDraft,
-                                )
-                              }
-                            />
-                            <p className="muted-text">Selected members appear below. Click Remove on any member to take them out of the group.</p>
-                          </div>
-                          <div className="inline-actions">
-                            <button
-                              className="button"
-                              disabled={isMutating}
-                              type="button"
-                              onClick={handleSaveGroup}
-                            >
-                              Save group
-                            </button>
-                            <button
-                              className="button-secondary"
-                              disabled={isMutating}
-                              type="button"
-                              onClick={handleCancelEditingGroup}
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="selection-grid">
-                          {group.participantIds.length ? (
-                            group.participantIds.map((participantId) => {
-                              const participant = participants.find((entry) => entry.id === participantId);
+                    ) : (
+                      <div className="selection-grid">
+                        {group.participantIds.length ? (
+                          group.participantIds.map((participantId) => {
+                            const participant = participants.find((entry) => entry.id === participantId);
 
-                              return participant ? (
-                                <div className="role-option" key={`${group.id}-${participant.id}`}>
-                                  <span>{participant.label}</span>
-                                  {getParticipantSecondaryText(participant) ? (
-                                    <span className="muted-text">{getParticipantSecondaryText(participant)}</span>
-                                  ) : null}
-                                </div>
-                              ) : null;
-                            })
-                          ) : (
-                            <p className="muted-text">No participants in this group yet.</p>
-                          )}
-                        </div>
-                      )}
-
-                      {requestsForGroup.length ? (
-                        <div className="request-list">
-                          {requestsForGroup.map((request) => (
-                            <article className="request-card" key={request.id}>
-                              <div>
-                                <strong>{request.requesterLabel}</strong>
-                                <p className="muted-text">{request.requesterId}</p>
-                                <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
-                              </div>
-                              <div className="inline-actions">
-                                <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
-                                  {request.status}
-                                </span>
-                                {request.status === "pending" ? (
-                                  <>
-                                    <button
-                                      className="button-secondary small-button"
-                                      disabled={isMutating}
-                                      type="button"
-                                      onClick={() => handleResolveGroupRequest(request.id, "accept")}
-                                    >
-                                      Accept
-                                    </button>
-                                    <button
-                                      className="button-secondary small-button"
-                                      disabled={isMutating}
-                                      type="button"
-                                      onClick={() => handleResolveGroupRequest(request.id, "reject")}
-                                    >
-                                      Reject
-                                    </button>
-                                  </>
+                            return participant ? (
+                              <div className="role-option" key={`${group.id}-${participant.id}`}>
+                                <span>{participant.label}</span>
+                                {getParticipantSecondaryText(participant) ? (
+                                  <span className="muted-text">{getParticipantSecondaryText(participant)}</span>
                                 ) : null}
                               </div>
-                            </article>
-                          ))}
-                        </div>
-                      ) : null}
-                    </article>
-                  );
-                })}
-              </div>
-            ) : (
-              <p className="muted-text">Create a group to assign many participants at once.</p>
-            )}
-          </div>
+                            ) : null;
+                          })
+                        ) : (
+                          <p className="muted-text">No participants in this group yet.</p>
+                        )}
+                      </div>
+                    )}
+
+                    {requestsForGroup.length ? (
+                      <div className="request-list">
+                        {requestsForGroup.map((request) => (
+                          <article className="request-card" key={request.id}>
+                            <div>
+                              <strong>{request.requesterLabel}</strong>
+                              <p className="muted-text">{request.requesterId}</p>
+                              <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
+                            </div>
+                            <div className="inline-actions">
+                              <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
+                                {request.status}
+                              </span>
+                              {request.status === "pending" ? (
+                                <>
+                                  <button
+                                    className="button-secondary small-button"
+                                    disabled={isMutating}
+                                    type="button"
+                                    onClick={() => handleResolveGroupRequest(request.id, "accept")}
+                                  >
+                                    Accept
+                                  </button>
+                                  <button
+                                    className="button-secondary small-button"
+                                    disabled={isMutating}
+                                    type="button"
+                                    onClick={() => handleResolveGroupRequest(request.id, "reject")}
+                                  >
+                                    Reject
+                                  </button>
+                                </>
+                              ) : null}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="muted-text">Create a group to assign many participants at once.</p>
+          )}
         </div>
       </CollapsibleWorkspaceSection>
 
@@ -1848,25 +2383,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
           ) : null}
 
           <div className="field">
-            <label>Choose participants individually</label>
-            <div className="selection-grid">
-              {participants.map((participant) => (
-                <label className="role-option" key={`schedule-participant-${participant.id}`}>
-                  <input
-                    checked={scheduleParticipantIds.includes(participant.id)}
-                    type="checkbox"
-                    onChange={() =>
-                      setScheduleParticipantIds((current) => toggleArrayValue(current, participant.id))
-                    }
-                  />
-                  <span>{participant.label}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="field">
-            <label>Or add participants by groups or classes</label>
+            <label>Select groups or classes</label>
             <div className="selection-grid">
               {participantGroups.map((group) => (
                 <label className="role-option" key={`schedule-group-${group.id}`}>
@@ -1896,185 +2413,765 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
 
       <CollapsibleWorkspaceSection
         eyebrow=""
+        isOpen={openSection === "self-test"}
+        sectionId="admin-self-test"
+        title="Self Test"
+        onToggle={() => toggleSection("self-test")}
+      >
+        <div className="form-stack">
+          <div className="field-row">
+            <div className="field grow-field">
+              <label htmlFor="self-test-pool">Question pool</label>
+              <select
+                className="select-field"
+                id="self-test-pool"
+                value={selfTestPoolId}
+                onChange={(event) => setSelfTestPoolId(event.target.value)}
+              >
+                {pools.map((pool) => (
+                  <option key={pool.id} value={pool.id}>
+                    {pool.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="self-test-question-count">Number of questions</label>
+              <input
+                id="self-test-question-count"
+                min={1}
+                type="number"
+                value={selfTestQuestionCount}
+                onChange={(event) => setSelfTestQuestionCount(event.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="self-test-duration">Duration in minutes</label>
+              <input
+                id="self-test-duration"
+                min={1}
+                type="number"
+                value={selfTestDurationMinutes}
+                onChange={(event) => setSelfTestDurationMinutes(event.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="field">
+            <label>Start mode</label>
+            <div className="selection-grid">
+              <label className="role-option">
+                <input
+                  checked={selfTestStartMode === "now"}
+                  name="self-test-start-mode"
+                  type="radio"
+                  onChange={() => setSelfTestStartMode("now")}
+                />
+                <span>Start now</span>
+              </label>
+              <label className="role-option">
+                <input
+                  checked={selfTestStartMode === "later"}
+                  name="self-test-start-mode"
+                  type="radio"
+                  onChange={() => setSelfTestStartMode("later")}
+                />
+                <span>Schedule for later</span>
+              </label>
+            </div>
+          </div>
+
+          {selfTestStartMode === "later" ? (
+            <div className="field">
+              <label htmlFor="self-test-starts-at">Self test date and time</label>
+              <input
+                id="self-test-starts-at"
+                type="datetime-local"
+                value={selfTestStartsAtInput}
+                onChange={(event) => setSelfTestStartsAtInput(event.target.value)}
+              />
+            </div>
+          ) : null}
+
+          {selectedSelfTestPool ? (
+            <p className="muted-text">
+              Pool size: {questions.filter((question) => question.poolIds.includes(selectedSelfTestPool.id)).length} questions
+            </p>
+          ) : null}
+
+          {selfTestFeedback ? <p className="muted-text">{selfTestFeedback}</p> : null}
+
+          <div className="inline-actions">
+            <button className="button" disabled={isMutating} type="button" onClick={handleScheduleSelfTest}>
+              Schedule self test
+            </button>
+          </div>
+        </div>
+      </CollapsibleWorkspaceSection>
+
+      <CollapsibleWorkspaceSection
+        eyebrow=""
+        isOpen={openSection === "poll-questions"}
+        sectionId="admin-poll-questions"
+        title="Add Poll Question"
+        onToggle={() => toggleSection("poll-questions")}
+      >
+        <div className="form-stack">
+          {pollQuestionDrafts.map((draft, draftIndex) => (
+            <article className="question-card" key={`poll-draft-${draftIndex}`}>
+              <div className="question-head">
+                <strong>Poll question {draftIndex + 1}</strong>
+                <div className="inline-actions">
+                  {pollQuestionDrafts.length > 1 ? (
+                    <button
+                      className="button-secondary small-button"
+                      type="button"
+                      onClick={() =>
+                        setPollQuestionDrafts((currentDrafts) =>
+                          currentDrafts.filter((_, currentIndex) => currentIndex !== draftIndex),
+                        )
+                      }
+                    >
+                      Remove question
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="field textarea-field">
+                <label htmlFor={`poll-question-${draftIndex}`}>Question</label>
+                <textarea
+                  id={`poll-question-${draftIndex}`}
+                  placeholder="Enter poll question"
+                  value={draft.prompt}
+                  onChange={(event) =>
+                    updatePollQuestionDraft(draftIndex, (currentDraft) => ({
+                      ...currentDraft,
+                      prompt: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="option-list">
+                {draft.options.map((option, optionIndex) => (
+                  <div className="option-editor" key={`poll-option-${draftIndex}-${optionIndex}`}>
+                    <div className="field">
+                      <label htmlFor={`poll-option-input-${draftIndex}-${optionIndex}`}>
+                        Option {optionIndex + 1}
+                      </label>
+                      <input
+                        id={`poll-option-input-${draftIndex}-${optionIndex}`}
+                        value={option}
+                        onChange={(event) =>
+                          updatePollQuestionDraft(draftIndex, (currentDraft) => ({
+                            ...currentDraft,
+                            options: currentDraft.options.map((currentOption, currentIndex) =>
+                              currentIndex === optionIndex ? event.target.value : currentOption,
+                            ),
+                          }))
+                        }
+                      />
+                    </div>
+                    {draft.options.length > 2 ? (
+                      <button
+                        className="button-secondary small-button"
+                        type="button"
+                        onClick={() =>
+                          updatePollQuestionDraft(draftIndex, (currentDraft) => ({
+                            ...currentDraft,
+                            options: currentDraft.options.filter((_, currentIndex) => currentIndex !== optionIndex),
+                          }))
+                        }
+                      >
+                        Remove option
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+
+              <div className="inline-actions">
+                <button
+                  className="button-secondary small-button"
+                  type="button"
+                  onClick={() =>
+                    updatePollQuestionDraft(draftIndex, (currentDraft) => ({
+                      ...currentDraft,
+                      options: [...currentDraft.options, ""],
+                    }))
+                  }
+                >
+                  Add option
+                </button>
+              </div>
+            </article>
+          ))}
+
+          {pollFeedback ? <p className="muted-text">{pollFeedback}</p> : null}
+
+          <div className="inline-actions">
+            <button
+              className="button-secondary"
+              type="button"
+              onClick={() =>
+                setPollQuestionDrafts((currentDrafts) => [...currentDrafts, createEmptyPollQuestionDraft()])
+              }
+            >
+              Add another question
+            </button>
+            <button className="button" disabled={isMutating} type="button" onClick={handleSavePollQuestions}>
+              Save poll questions
+            </button>
+          </div>
+
+          {pollQuestions.length ? (
+            <div className="question-card">
+              <div className="question-head">
+                <strong>Saved poll questions</strong>
+                <span className="status-chip success">{pollQuestions.length}</span>
+              </div>
+              <div className="question-list">
+                {pollQuestions.map((question, index) => (
+                  <article className="question-card nested-card" key={question.id}>
+                    <strong>Question {index + 1}</strong>
+                    <p>{question.prompt}</p>
+                    <ol className="question-options compact-question-options">
+                      {question.options.map((option, optionIndex) => (
+                        <li key={`${question.id}-${optionIndex}`}>{option}</li>
+                      ))}
+                    </ol>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </CollapsibleWorkspaceSection>
+
+      <CollapsibleWorkspaceSection
+        eyebrow=""
+        isOpen={openSection === "poll-schedule"}
+        sectionId="admin-schedule-polls"
+        title="Schedule Poll"
+        onToggle={() => toggleSection("poll-schedule")}
+      >
+        <div className="form-stack">
+          <div className="question-card form-stack">
+            <div className="field-row">
+              <div className="field">
+                <label htmlFor="poll-duration">Duration in minutes</label>
+                <input
+                  id="poll-duration"
+                  min={1}
+                  type="number"
+                  value={pollScheduleDurationMinutes}
+                  onChange={(event) => setPollScheduleDurationMinutes(event.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Start mode</label>
+                <div className="selection-grid">
+                  <label className="role-option">
+                    <input
+                      checked={pollScheduleStartMode === "now"}
+                      name="poll-start-mode"
+                      type="radio"
+                      onChange={() => setPollScheduleStartMode("now")}
+                    />
+                    <span>Start now</span>
+                  </label>
+                  <label className="role-option">
+                    <input
+                      checked={pollScheduleStartMode === "later"}
+                      name="poll-start-mode"
+                      type="radio"
+                      onChange={() => setPollScheduleStartMode("later")}
+                    />
+                    <span>Schedule for later</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {pollScheduleStartMode === "later" ? (
+              <div className="field">
+                <label htmlFor="poll-starts-at">Poll date and time</label>
+                <input
+                  id="poll-starts-at"
+                  type="datetime-local"
+                  value={pollScheduleStartsAtInput}
+                  onChange={(event) => setPollScheduleStartsAtInput(event.target.value)}
+                />
+              </div>
+            ) : null}
+
+            <div className="field">
+              <label>Select poll questions</label>
+              <div className="selection-grid">
+                {pollQuestions.map((question) => (
+                  <label className="role-option" key={`poll-question-select-${question.id}`}>
+                    <input
+                      checked={pollScheduleQuestionIds.includes(question.id)}
+                      type="checkbox"
+                      onChange={() =>
+                        setPollScheduleQuestionIds((currentIds) => toggleArrayValue(currentIds, question.id))
+                      }
+                    />
+                    <span>{question.prompt}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="field">
+              <label>Participant type</label>
+              <div className="selection-grid">
+                <label className="role-option">
+                  <input
+                    checked={pollScheduleParticipantType === "registered"}
+                    name="poll-participant-type"
+                    type="radio"
+                    onChange={() => setPollScheduleParticipantType("registered")}
+                  />
+                  <span>Registered only</span>
+                </label>
+                <label className="role-option">
+                  <input
+                    checked={pollScheduleParticipantType === "open"}
+                    name="poll-participant-type"
+                    type="radio"
+                    onChange={() => setPollScheduleParticipantType("open")}
+                  />
+                  <span>Open to all</span>
+                </label>
+              </div>
+            </div>
+
+            {pollScheduleParticipantType === "registered" ? (
+              <div className="field">
+                <label>Select groups</label>
+                <div className="selection-grid">
+                  {participantGroups.map((group) => (
+                    <label className="role-option" key={`poll-group-${group.id}`}>
+                      <input
+                        checked={pollScheduleGroupIds.includes(group.id)}
+                        type="checkbox"
+                        onChange={() =>
+                          setPollScheduleGroupIds((currentIds) => toggleArrayValue(currentIds, group.id))
+                        }
+                      />
+                      <span>{group.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="selection-grid">
+              <label className="role-option">
+                <input
+                  checked={pollScheduleAnonymous}
+                  type="checkbox"
+                  onChange={(event) => setPollScheduleAnonymous(event.target.checked)}
+                />
+                <span>Collect responses anonymously</span>
+              </label>
+              <label className="role-option">
+                <input
+                  checked={pollScheduleGenerateQrCode}
+                  type="checkbox"
+                  onChange={(event) => setPollScheduleGenerateQrCode(event.target.checked)}
+                />
+                <span>Generate QR code</span>
+              </label>
+            </div>
+
+            {pollFeedback ? <p className="muted-text">{pollFeedback}</p> : null}
+
+            <div className="inline-actions">
+              <button className="button" disabled={isMutating} type="button" onClick={handleSchedulePoll}>
+                Schedule poll
+              </button>
+            </div>
+          </div>
+
+          {sortedScheduledPolls.length ? (
+            <div className="question-list">
+              {sortedScheduledPolls.map((poll) => (
+                <article className="question-card" key={poll.id}>
+                  <div className="question-head">
+                    <strong>{poll.title}</strong>
+                    <span className={`status-chip ${poll.status === "live" ? "success" : "warning"}`}>
+                      {poll.status}
+                    </span>
+                  </div>
+                  <p className="muted-text">Starts: {formatShortDateTime(poll.startsAt)}</p>
+                  <p className="muted-text">Duration: {poll.durationMinutes} min</p>
+                  <p className="muted-text">Questions: {poll.questionIds.length}</p>
+                  <p className="muted-text">Participant type: {poll.participantType === "registered" ? "Registered only" : "Open to all"}</p>
+                  <p className="muted-text">Anonymity: {poll.anonymous ? "Anonymous" : "Named"}</p>
+                  {poll.participantType === "registered" ? (
+                    <p className="muted-text">
+                      Groups: {poll.participantGroupIds.length
+                        ? poll.participantGroupIds
+                            .map((groupId) => participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group")
+                            .join(", ")
+                        : "None"}
+                    </p>
+                  ) : null}
+                  {poll.shareCode ? (
+                    <div className="form-stack">
+                      <p className="muted-text">Access code: {poll.shareCode}</p>
+                      {pollQrCodes[poll.id] ? (
+                        <img alt={`QR code for ${poll.title}`} height={180} src={pollQrCodes[poll.id]} width={180} />
+                      ) : null}
+                    </div>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-state compact-empty-state">
+              <p className="muted-text">No polls scheduled yet.</p>
+            </div>
+          )}
+        </div>
+      </CollapsibleWorkspaceSection>
+
+      <CollapsibleWorkspaceSection
+        eyebrow=""
         isOpen={openSection === "history"}
         sectionId="admin-test-history"
         title="Results"
         onToggle={() => toggleSection("history")}
       >
-        {sortedScheduledTests.length ? (
-          <div className="result-status-stack">
-            {scheduledTestsByStatus.map((statusGroup) => (
-              <details className="status-group" key={statusGroup.key} open={statusGroup.key !== "scheduled"}>
-                <summary className="status-group-summary">
-                  <span>{statusGroup.label}</span>
-                  <span className="status-chip success">{statusGroup.tests.length}</span>
-                </summary>
-                <p className="muted-text status-group-copy">{statusGroup.description}</p>
+        <div className="form-stack">
+          <div className="inline-actions">
+            <button
+              className={resultsMode === "tests" ? "button" : "button-secondary"}
+              type="button"
+              onClick={() => setResultsMode("tests")}
+            >
+              Test results
+            </button>
+            <button
+              className={resultsMode === "polls" ? "button" : "button-secondary"}
+              type="button"
+              onClick={() => setResultsMode("polls")}
+            >
+              Poll results
+            </button>
+          </div>
 
-                {statusGroup.tests.length ? (
-                  <div className="question-list">
-                    {statusGroup.tests.map((scheduledTest) => {
-              const leaderboard = leaderboards.find((entry) => entry.testId === scheduledTest.id);
-              const submittedIdentifiers = new Set(
-                (leaderboard?.entries ?? []).map((entry) =>
-                  normalizeParticipantIdentifier(entry.participantId),
-                ),
-              );
-              const absentParticipants = scheduledTest.resolvedParticipantIdentifiers.filter(
-                (identifier) =>
-                  !Array.from(submittedIdentifiers).some((submittedIdentifier) =>
-                    participantIdentifiersMatch(identifier, submittedIdentifier),
-                  ),
-              );
-              const attemptsForTest = history.filter((entry) => entry.testId === scheduledTest.id);
+          <div className="inline-actions">
+            <button
+              className={testListFilter === "admin" ? "button" : "button-secondary"}
+              type="button"
+              onClick={() => setTestListFilter("admin")}
+            >
+              {resultsMode === "tests" ? "Scheduled as admin" : "Poll created as admin"}
+            </button>
+            <button
+              className={testListFilter === "both" ? "button" : "button-secondary"}
+              type="button"
+              onClick={() => setTestListFilter("both")}
+            >
+              Both
+            </button>
+            <button
+              className={testListFilter === "participant" ? "button" : "button-secondary"}
+              type="button"
+              onClick={() => setTestListFilter("participant")}
+            >
+              {resultsMode === "tests" ? "Attended as participant" : "Poll responded as participant"}
+            </button>
+          </div>
 
-              return (
-                <article className="question-card" key={`history-${scheduledTest.id}`}>
-                  <div className="question-head">
-                    <strong>{scheduledTest.title}</strong>
-                    <span className={`status-chip ${scheduledTest.status === "live" ? "success" : "warning"}`}>
-                      {scheduledTest.status}
-                    </span>
-                  </div>
-                  <p className="muted-text">
-                    Pool: {pools.find((pool) => pool.id === scheduledTest.poolId)?.name ?? "Unknown pool"}
-                  </p>
-                  <p className="muted-text">Starts: {formatShortDateTime(scheduledTest.startsAt)}</p>
-                  <p className="muted-text">
-                    Participants: {scheduledTest.resolvedParticipantIdentifiers.length
-                      ? scheduledTest.resolvedParticipantIdentifiers
-                          .map((identifier) => formatParticipantName(identifier, participants))
-                          .join(", ")
-                      : "None"}
-                  </p>
+          {resultsMode === "tests" ? (
+            filteredMergedTests.length ? (
+              <div className="question-list">
+                {filteredMergedTests.map((test) => {
+                const scheduledTest = test.scheduledTest;
+                const participantTest = test.participantTest;
+                const participantHistoryEntry = test.participantHistoryEntry;
+                const leaderboard = scheduledTest
+                  ? leaderboards.find((entry) => entry.testId === scheduledTest.id)
+                  : undefined;
+                const submittedIdentifiers = new Set(
+                  (leaderboard?.entries ?? []).map((entry) => normalizeParticipantIdentifier(entry.participantId)),
+                );
+                const absentParticipants = scheduledTest
+                  ? scheduledTest.resolvedParticipantIdentifiers.filter(
+                      (identifier) =>
+                        !Array.from(submittedIdentifiers).some((submittedIdentifier) =>
+                          participantIdentifiersMatch(identifier, submittedIdentifier),
+                        ),
+                    )
+                  : [];
+                const attemptsForTest = scheduledTest
+                  ? history.filter((entry) => entry.testId === scheduledTest.id)
+                  : [];
+                const scopeLabel =
+                  test.hasAdminScope && test.hasParticipantScope
+                    ? "Admin + participant"
+                    : test.hasAdminScope
+                      ? "Scheduled as admin"
+                      : "Attended as participant";
 
-                  {leaderboard ? (
-                    <>
-                      <p className="muted-text">
-                        Submitted: {leaderboard.submittedCount}/{leaderboard.assignedParticipantCount}
-                      </p>
-                      {leaderboard.entries.length ? (
-                        <div className="leaderboard-table-wrap">
-                          <table className="leaderboard-table">
-                            <thead>
-                              <tr>
-                                <th>Rank</th>
-                                <th>Participant</th>
-                                <th>Marks</th>
-                                <th>Incorrect</th>
-                                <th>Time</th>
-                                <th>Submitted</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {leaderboard.entries.map((entry) => (
-                                <tr key={entry.attemptId}>
-                                  <td>{entry.rank}</td>
-                                  <td>{formatResultParticipantName(entry.participantId, entry.participantName, participants)}</td>
-                                  <td>{entry.correctCount}/{entry.totalCount}</td>
-                                  <td>{entry.incorrectCount}</td>
-                                  <td>{formatElapsedTime(entry.elapsedMs)}</td>
-                                  <td>{formatShortDateTime(entry.completedAt)}</td>
-                                </tr>
-                              ))}
-                              {absentParticipants.length ? (
-                                <tr>
-                                  <td colSpan={6}>
-                                    <strong>Absent:</strong> {absentParticipants
-                                      .map((identifier) => formatParticipantName(identifier, participants))
-                                      .join(", ")}
-                                  </td>
-                                </tr>
-                              ) : null}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : (
-                        <p className="muted-text">No submissions were recorded before this test closed.</p>
-                      )}
-                    </>
-                  ) : attemptsForTest.length ? (
-                    <div className="question-list">
-                      {attemptsForTest.map((entry) => (
-                        <article className="question-card nested-card" key={entry.attemptId}>
-                          <div className="question-head">
-                            <strong>{formatResultParticipantName(entry.participantId, entry.participantName, participants)}</strong>
-                            <span className="status-chip success">{entry.correctCount}/{entry.totalCount}</span>
-                          </div>
-                          <p className="muted-text">Incorrect: {entry.incorrectCount}</p>
-                          <p className="muted-text">Completed: {formatShortDateTime(entry.completedAt)}</p>
-                          <p className="muted-text">Elapsed time: {formatElapsedTime(entry.elapsedMs)}</p>
-                        </article>
-                      ))}
-                    </div>
-                  ) : scheduledTest.status === "scheduled" ? (
-                    <p className="muted-text">This test has not started yet.</p>
-                  ) : scheduledTest.status === "live" ? (
-                    <p className="muted-text">This test is live. Results will update here as participants submit.</p>
-                  ) : (
-                    <p className="muted-text">No submissions were recorded before this test closed.</p>
-                  )}
-
-                  {scheduledTest.status === "completed" ? (
-                    <div className="form-stack">
+                return (
+                  <article className="question-card" key={`merged-test-${test.id}`}>
+                    <div className="question-head">
+                      <strong>{test.title}</strong>
                       <div className="inline-actions">
-                        <button
-                          className="button-secondary small-button"
-                          disabled={reviewLoadingByTestId[scheduledTest.id]}
-                          type="button"
-                          onClick={() => void handleLoadReview(scheduledTest.id)}
-                        >
-                          {reviewLoadingByTestId[scheduledTest.id]
-                            ? "Loading..."
-                            : visibleReviewTestIds.includes(scheduledTest.id)
-                              ? "Hide review"
-                              : "Review questions"}
-                        </button>
+                        <span className="status-chip success">{scopeLabel}</span>
+                        <span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>
+                          {test.status}
+                        </span>
                       </div>
-
-                      {visibleReviewTestIds.includes(scheduledTest.id) && reviewByTestId[scheduledTest.id] ? (
-                        <div className="review-list">
-                          {reviewByTestId[scheduledTest.id].review.map((question, questionIndex) => (
-                            <article className="question-card nested-card" key={`${scheduledTest.id}-${question.questionId}`}>
-                              <div className="question-head">
-                                <strong>Question {questionIndex + 1}</strong>
-                                <span className="status-chip success">
-                                  {question.totalResponses} response{question.totalResponses === 1 ? "" : "s"}
-                                </span>
-                              </div>
-                              <p>{question.prompt}</p>
-                              <ol className="question-options compact-question-options">
-                                {question.options.map((option, optionIndex) => (
-                                  <li key={`${question.questionId}-${optionIndex}`}>
-                                    {option}
-                                    {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
-                                    {` - ${question.optionSelectionCounts[optionIndex] ?? 0} response${(question.optionSelectionCounts[optionIndex] ?? 0) === 1 ? "" : "s"}`}
-                                  </li>
-                                ))}
-                              </ol>
-                            </article>
-                          ))}
-                        </div>
-                      ) : null}
                     </div>
-                  ) : null}
-                </article>
-              );
-                    })}
-                  </div>
-                ) : (
-                  <div className="empty-state compact-empty-state">
-                    <p className="muted-text">No tests are in this section yet.</p>
-                  </div>
-                )}
-              </details>
-            ))}
-          </div>
-        ) : (
-          <div className="empty-state">
-            <p className="muted-text">Scheduled tests will appear here once created.</p>
-          </div>
-        )}
+                    <p className="muted-text">
+                      Pool: {pools.find((pool) => pool.id === test.poolId)?.name ?? "Unknown pool"}
+                    </p>
+                    <p className="muted-text">Starts: {formatShortDateTime(test.startsAt)}</p>
+                    <p className="muted-text">Duration: {test.durationMinutes} min</p>
+                    <p className="muted-text">Questions: {test.questionCount}</p>
+
+                    {scheduledTest ? (
+                      <div className="form-stack">
+                        <p className="muted-text">
+                          Participants: {scheduledTest.resolvedParticipantIdentifiers.length
+                            ? scheduledTest.resolvedParticipantIdentifiers
+                                .map((identifier) => formatParticipantName(identifier, participants))
+                                .join(", ")
+                            : "None"}
+                        </p>
+
+                        {leaderboard ? (
+                          <>
+                            <p className="muted-text">
+                              Submitted: {leaderboard.submittedCount}/{leaderboard.assignedParticipantCount}
+                            </p>
+                            {leaderboard.entries.length ? (
+                              <div className="leaderboard-table-wrap">
+                                <table className="leaderboard-table">
+                                  <thead>
+                                    <tr>
+                                      <th>Rank</th>
+                                      <th>Participant</th>
+                                      <th>Marks</th>
+                                      <th>Incorrect</th>
+                                      <th>Time</th>
+                                      <th>Submitted</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {leaderboard.entries.map((entry) => (
+                                      <tr key={entry.attemptId}>
+                                        <td>{entry.rank}</td>
+                                        <td>{formatResultParticipantName(entry.participantId, entry.participantName, participants)}</td>
+                                        <td>{entry.correctCount}/{entry.totalCount}</td>
+                                        <td>{entry.incorrectCount}</td>
+                                        <td>{formatElapsedTime(entry.elapsedMs)}</td>
+                                        <td>{formatShortDateTime(entry.completedAt)}</td>
+                                      </tr>
+                                    ))}
+                                    {absentParticipants.length ? (
+                                      <tr>
+                                        <td colSpan={6}>
+                                          <strong>Absent:</strong> {absentParticipants
+                                            .map((identifier) => formatParticipantName(identifier, participants))
+                                            .join(", ")}
+                                        </td>
+                                      </tr>
+                                    ) : null}
+                                  </tbody>
+                                </table>
+                              </div>
+                            ) : (
+                              <p className="muted-text">No submissions were recorded before this test closed.</p>
+                            )}
+                          </>
+                        ) : attemptsForTest.length ? (
+                          <div className="question-list">
+                            {attemptsForTest.map((entry) => (
+                              <article className="question-card nested-card" key={entry.attemptId}>
+                                <div className="question-head">
+                                  <strong>{formatResultParticipantName(entry.participantId, entry.participantName, participants)}</strong>
+                                  <span className="status-chip success">{entry.correctCount}/{entry.totalCount}</span>
+                                </div>
+                                <p className="muted-text">Incorrect: {entry.incorrectCount}</p>
+                                <p className="muted-text">Completed: {formatShortDateTime(entry.completedAt)}</p>
+                                <p className="muted-text">Elapsed time: {formatElapsedTime(entry.elapsedMs)}</p>
+                              </article>
+                            ))}
+                          </div>
+                        ) : scheduledTest.status === "scheduled" ? (
+                          <p className="muted-text">This test has not started yet.</p>
+                        ) : scheduledTest.status === "live" ? (
+                          <p className="muted-text">This test is live. Results will update here as participants submit.</p>
+                        ) : (
+                          <p className="muted-text">No submissions were recorded before this test closed.</p>
+                        )}
+
+                        {scheduledTest.status === "completed" ? (
+                          <div className="form-stack">
+                            <div className="inline-actions">
+                              <button
+                                className="button-secondary small-button"
+                                disabled={reviewLoadingByTestId[scheduledTest.id]}
+                                type="button"
+                                onClick={() => void handleLoadReview(scheduledTest.id)}
+                              >
+                                {reviewLoadingByTestId[scheduledTest.id]
+                                  ? "Loading..."
+                                  : visibleReviewTestIds.includes(scheduledTest.id)
+                                    ? "Hide review"
+                                    : "Review questions"}
+                              </button>
+                            </div>
+
+                            {visibleReviewTestIds.includes(scheduledTest.id) && reviewByTestId[scheduledTest.id] ? (
+                              <div className="review-list">
+                                {reviewByTestId[scheduledTest.id].review.map((question, questionIndex) => (
+                                  <article className="question-card nested-card" key={`${scheduledTest.id}-${question.questionId}`}>
+                                    <div className="question-head">
+                                      <strong>Question {questionIndex + 1}</strong>
+                                      <span className="status-chip success">
+                                        {question.totalResponses} response{question.totalResponses === 1 ? "" : "s"}
+                                      </span>
+                                    </div>
+                                    <p>{question.prompt}</p>
+                                    <ol className="question-options compact-question-options">
+                                      {question.options.map((option, optionIndex) => (
+                                        <li key={`${question.questionId}-${optionIndex}`}>
+                                          {option}
+                                          {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
+                                          {` - ${question.optionSelectionCounts[optionIndex] ?? 0} response${(question.optionSelectionCounts[optionIndex] ?? 0) === 1 ? "" : "s"}`}
+                                        </li>
+                                      ))}
+                                    </ol>
+                                  </article>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+
+                    {participantTest ? (
+                      <div className="form-stack">
+                        {participantHistoryEntry ? (
+                          participantHistoryEntry.status === "missed" ? (
+                            <p className="muted-text">You were assigned to this test but did not submit before it closed.</p>
+                          ) : (
+                            <>
+                              <p className="muted-text">
+                                Submitted as {participantHistoryEntry.participantName?.trim() || participantHistoryEntry.participantId}
+                              </p>
+                              <p className="muted-text">
+                                Score {participantHistoryEntry.correctCount}/{participantHistoryEntry.totalCount}
+                              </p>
+                              <p className="muted-text">Time taken {formatElapsedTime(participantHistoryEntry.elapsedMs)}</p>
+                              {typeof participantHistoryEntry.rank === "number" ? (
+                                <p className="muted-text">Rank {participantHistoryEntry.rank}</p>
+                              ) : null}
+                            </>
+                          )
+                        ) : participantTest.status === "scheduled" ? (
+                          <p className="muted-text">This assigned test has not opened yet.</p>
+                        ) : participantTest.status === "live" ? (
+                          <p className="muted-text">This assigned test is live now.</p>
+                        ) : (
+                          <p className="muted-text">No participant submission was recorded for this test.</p>
+                        )}
+
+                        {participantTest.topPerformer ? (
+                          <p className="muted-text">
+                            Topper {participantTest.topPerformer.participantName}: {participantTest.topPerformer.correctCount}/{participantTest.questionCount} in {formatElapsedTime(participantTest.topPerformer.elapsedMs)}
+                          </p>
+                        ) : null}
+
+                        <div className="inline-actions">
+                          <a className="button-secondary small-button" href="/user">
+                            Open test workspace
+                          </a>
+                        </div>
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
+              </div>
+            ) : (
+              <div className="empty-state">
+                <p className="muted-text">No tests match this view yet.</p>
+              </div>
+            )
+          ) : filteredMergedPolls.length ? (
+            <div className="question-list">
+              {filteredMergedPolls.map((poll) => {
+                const resolvedPoll = poll.scheduledPoll ?? poll.participantPoll;
+
+                if (!resolvedPoll) {
+                  return null;
+                }
+
+                const scopeLabel =
+                  poll.hasAdminScope && poll.hasParticipantScope
+                    ? "Admin + participant"
+                    : poll.hasAdminScope
+                      ? "Created as admin"
+                      : "Available as participant";
+
+                return (
+                  <article className="question-card" key={`merged-poll-${poll.id}`}>
+                    <div className="question-head">
+                      <strong>{resolvedPoll.title}</strong>
+                      <div className="inline-actions">
+                        <span className="status-chip success">{scopeLabel}</span>
+                        <span className={`status-chip ${resolvedPoll.status === "live" ? "success" : "warning"}`}>
+                          {resolvedPoll.status}
+                        </span>
+                      </div>
+                    </div>
+                    <p className="muted-text">Starts: {formatShortDateTime(resolvedPoll.startsAt)}</p>
+                    <p className="muted-text">Duration: {resolvedPoll.durationMinutes} min</p>
+                    <p className="muted-text">Questions: {resolvedPoll.questionIds.length}</p>
+                    <p className="muted-text">Participant type: {resolvedPoll.participantType === "registered" ? "Registered only" : "Open to all"}</p>
+                    <p className="muted-text">Anonymity: {resolvedPoll.anonymous ? "Anonymous" : "Named"}</p>
+                    {resolvedPoll.participantType === "registered" ? (
+                      <p className="muted-text">
+                        Groups: {resolvedPoll.participantGroupIds.length
+                          ? resolvedPoll.participantGroupIds
+                              .map((groupId) => participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group")
+                              .join(", ")
+                          : "None"}
+                      </p>
+                    ) : null}
+                    {resolvedPoll.shareCode ? <p className="muted-text">Access code: {resolvedPoll.shareCode}</p> : null}
+                    {poll.scheduledPoll ? (
+                      resolvedPoll.status === "completed" ? (
+                        <p className="muted-text">Poll response summaries will appear here when poll participation is recorded.</p>
+                      ) : resolvedPoll.status === "live" ? (
+                        <p className="muted-text">This poll is live. Response summaries will populate here as participants submit.</p>
+                      ) : (
+                        <p className="muted-text">This poll has not opened yet.</p>
+                      )
+                    ) : (
+                      <p className="muted-text">This poll is available in your participant scope.</p>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="empty-state">
+              <p className="muted-text">No polls match this view yet.</p>
+            </div>
+          )}
+        </div>
       </CollapsibleWorkspaceSection>
 
       <CollapsibleWorkspaceSection
@@ -2167,45 +3264,9 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
         </div>
       </CollapsibleWorkspaceSection>
 
-      <CollapsibleWorkspaceSection
-        eyebrow=""
-        isOpen={openSection === "assigned-tests"}
-        sectionId="admin-assigned-tests"
-        title="Assigned Test"
-        onToggle={() => toggleSection("assigned-tests")}
-      >
-        {assignedTests.length ? (
-          <div className="question-list">
-            {assignedTests.map((scheduledTest) => (
-              <article className="question-card" key={`assigned-${scheduledTest.id}`}>
-                <div className="question-head">
-                  <strong>{scheduledTest.title}</strong>
-                  <span
-                    className={`status-chip ${scheduledTest.status === "live" ? "success" : "warning"}`}
-                  >
-                    {scheduledTest.status}
-                  </span>
-                </div>
-                <p className="muted-text">
-                  Pool: {pools.find((pool) => pool.id === scheduledTest.poolId)?.name ?? "Unknown pool"}
-                </p>
-                <p className="muted-text">Starts: {formatShortDateTime(scheduledTest.startsAt)}</p>
-                <p className="muted-text">Duration: {scheduledTest.durationMinutes} min</p>
-                <p className="muted-text">Questions: {scheduledTest.questionIds.length}</p>
-                <div className="inline-actions">
-                  <a className="button-secondary small-button" href="/user">
-                    Open test workspace
-                  </a>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="empty-state compact-empty-state">
-            <p className="muted-text">No tests are currently assigned to this admin account.</p>
-          </div>
-        )}
-      </CollapsibleWorkspaceSection>
+        </div>
+      </div>
+
     </div>
   );
 }

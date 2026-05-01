@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getUserActor } from "../../../../lib/user-api";
 import {
+  listAvailablePollsForParticipant,
   listAvailableTestsForParticipant,
   listGroupJoinRequestsForUser,
   listUserHistory,
@@ -14,13 +15,15 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "User access is required." }, { status: 403 });
   }
 
-  const [availableTests, groupJoinRequests, history] = await Promise.all([
+  const [availablePolls, availableTests, groupJoinRequests, history] = await Promise.all([
+    listAvailablePollsForParticipant(actor.identifier),
     listAvailableTestsForParticipant(actor.identifier),
     listGroupJoinRequestsForUser(actor.identifier),
     listUserHistory(actor.identifier),
   ]);
 
   return NextResponse.json({
+    availablePolls,
     availableTests,
     groupJoinRequests,
     history,

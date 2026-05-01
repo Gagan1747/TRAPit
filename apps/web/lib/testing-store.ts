@@ -8,26 +8,34 @@ import {
   createEntityId,
   createParticipantGroup,
   createParticipantProfile,
+  createPersistentPollQuestion,
   createPersistentQuestion,
   getIncorrectCount,
   getScheduledTestEndTime,
   normalizeDraft,
+  normalizePollQuestionDraft,
   previewQuestionImport,
   resolveScheduledTestStatus,
+  selectQuestionIdsForScheduledTest,
   scoreObjectiveTest,
   sampleQuestions,
   summarizeTestHistory,
   type BulkImportPreview,
   type GroupJoinRequest,
   type ObjectiveQuestion,
+  type PersistentPollQuestion,
+  type PollParticipantType,
+  type PollQuestionDraft,
   type ParticipantGroup,
   type PersistentQuestion,
   type QuestionDraft,
   type QuestionImportSource,
   type QuestionPool,
+  type ScheduledPoll,
   type ScheduledTest,
   type TestAttempt,
   type TestingWorkspaceState,
+  validatePollQuestionDraft,
 } from "@trapit/testing";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -123,10 +131,27 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       participantIds: dedupe(group.participantIds ?? []),
     })),
     participants: parsed.participants ?? [],
-    pools: parsed.pools ?? [],
+    pollQuestions: (parsed.pollQuestions ?? []).map((question) => ({
+      ...question,
+      options: question.options ?? [],
+    })),
+    pools: (parsed.pools ?? []).map((pool) => ({
+      ...pool,
+      createdBy: pool.createdBy ?? null,
+      questionIds: dedupe(pool.questionIds ?? []),
+    })),
     questions: parsed.questions ?? [],
+    scheduledPolls: parsed.scheduledPolls ?? [],
     scheduledTests: parsed.scheduledTests ?? [],
   };
+}
+
+function isOwnedByActor(ownerId: string | null | undefined, actorId: string | null) {
+  if (!actorId) {
+    return true;
+  }
+
+  return Boolean(ownerId && ownerId === actorId);
 }
 
 function isGroupOwnedBy(group: ParticipantGroup, ownerIdentifier: string | null) {
@@ -208,6 +233,162 @@ function syncQuestionPoolMemberships(
 
 function getQuestionMap(state: TestingWorkspaceState) {
   return new Map(state.questions.map((question) => [question.id, question]));
+}
+
+function canActorAccessPool(
+  pool: QuestionPool,
+  actorId: string | null,
+  questionMap: Map<string, PersistentQuestion>,
+) {
+  if (!actorId) {
+    return true;
+  }
+
+  if (isOwnedByActor(pool.createdBy, actorId)) {
+    return true;
+  }
+
+  return pool.questionIds.some((questionId) => questionMap.get(questionId)?.createdBy === actorId);
+}
+
+function filterQuestionsForActor(questions: PersistentQuestion[], actorId: string | null) {
+  if (!actorId) {
+    return questions;
+  }
+
+  return questions.filter((question) => question.createdBy === actorId);
+}
+
+function filterPoolsForActor(
+  pools: QuestionPool[],
+  questionMap: Map<string, PersistentQuestion>,
+  actorId: string | null,
+) {
+  if (!actorId) {
+    return pools;
+  }
+
+  return pools.filter((pool) => canActorAccessPool(pool, actorId, questionMap));
+}
+
+function filterScheduledTestsForActor(tests: ScheduledTest[], actorId: string | null) {
+  if (!actorId) {
+    return tests;
+  }
+
+  return tests.filter((test) => test.createdBy === actorId);
+}
+
+function filterPollQuestionsForActor(questions: PersistentPollQuestion[], actorId: string | null) {
+  if (!actorId) {
+    return questions;
+  }
+
+  return questions.filter((question) => question.createdBy === actorId);
+}
+
+function filterScheduledPollsForActor(polls: ScheduledPoll[], actorId: string | null) {
+  if (!actorId) {
+    return polls;
+  }
+
+  return polls.filter((poll) => poll.createdBy === actorId);
+}
+
+function ensureActorOwnsQuestion(
+  state: TestingWorkspaceState,
+  questionId: string,
+  actorId: string | null,
+) {
+  const question = state.questions.find((entry) => entry.id === questionId);
+
+  if (!question) {
+    throw new Error("Question not found.");
+  }
+
+  if (actorId && question.createdBy !== actorId) {
+    throw new Error("You can only manage questions you created.");
+  }
+
+  return question;
+}
+
+function ensureActorOwnsPool(
+  state: TestingWorkspaceState,
+  poolId: string,
+  actorId: string | null,
+) {
+  const pool = state.pools.find((entry) => entry.id === poolId);
+
+  if (!pool) {
+    throw new Error("Select a valid question pool.");
+  }
+
+  if (!canActorAccessPool(pool, actorId, getQuestionMap(state))) {
+    throw new Error("You can only use question pools you created.");
+  }
+
+  return pool;
+}
+
+function ensureActorOwnsScheduledTest(
+  state: TestingWorkspaceState,
+  testId: string,
+  actorId: string | null,
+) {
+  const scheduledTest = hydrateScheduledTests(state).find((test) => test.id === testId);
+
+  if (!scheduledTest) {
+    throw new Error("The selected test could not be found.");
+  }
+
+  if (actorId && scheduledTest.createdBy !== actorId) {
+    throw new Error("You can only review tests you scheduled.");
+  }
+
+  return scheduledTest;
+}
+
+function ensureActorOwnsPollQuestion(
+  state: TestingWorkspaceState,
+  questionId: string,
+  actorId: string | null,
+) {
+  const question = state.pollQuestions.find((entry) => entry.id === questionId);
+
+  if (!question) {
+    throw new Error("Poll question not found.");
+  }
+
+  if (actorId && question.createdBy !== actorId) {
+    throw new Error("You can only manage poll questions you created.");
+  }
+
+  return question;
+}
+
+function resolveScheduledPollStatus(
+  poll: Pick<ScheduledPoll, "durationMinutes" | "startsAt">,
+): ScheduledPoll["status"] {
+  const startsAtMs = new Date(poll.startsAt).getTime();
+  const endsAtMs = startsAtMs + poll.durationMinutes * 60 * 1000;
+
+  if (startsAtMs > Date.now()) {
+    return "scheduled";
+  }
+
+  if (Date.now() >= endsAtMs) {
+    return "completed";
+  }
+
+  return "live";
+}
+
+function hydrateScheduledPolls(state: TestingWorkspaceState) {
+  return state.scheduledPolls.map((poll) => ({
+    ...poll,
+    status: resolveScheduledPollStatus(poll),
+  }));
 }
 
 function getParticipantMap(state: TestingWorkspaceState) {
@@ -303,9 +484,9 @@ async function assignUnownedGroupsToOwner(ownerIdentifier: string) {
   return participantGroups;
 }
 
-export async function listQuestions() {
+export async function listQuestions(actorId: string | null = null) {
   const state = await readStore();
-  return state.questions;
+  return filterQuestionsForActor(state.questions, actorId);
 }
 
 export async function createQuestion(
@@ -315,9 +496,15 @@ export async function createQuestion(
   poolIds: string[] = [],
 ) {
   const state = await readStore();
+  const normalizedPoolIds = dedupe(poolIds);
+
+  for (const poolId of normalizedPoolIds) {
+    ensureActorOwnsPool(state, poolId, actorId);
+  }
+
   const question = createPersistentQuestion(draft, {
     createdBy: actorId,
-    poolIds: dedupe(poolIds),
+    poolIds: normalizedPoolIds,
     source,
   });
 
@@ -325,7 +512,7 @@ export async function createQuestion(
   syncQuestionPoolMemberships(state, question.id, question.poolIds);
   await writeStore(state);
 
-  return state.questions;
+  return filterQuestionsForActor(state.questions, actorId);
 }
 
 export async function importQuestions(
@@ -334,10 +521,16 @@ export async function importQuestions(
   poolIds: string[] = [],
 ) {
   const state = await readStore();
+  const normalizedPoolIds = dedupe(poolIds);
+
+  for (const poolId of normalizedPoolIds) {
+    ensureActorOwnsPool(state, poolId, actorId);
+  }
+
   const importedQuestions = drafts.map((draft) =>
     createPersistentQuestion(draft, {
       createdBy: actorId,
-      poolIds: dedupe(poolIds),
+      poolIds: normalizedPoolIds,
       source: "ocr-import",
     }),
   );
@@ -350,7 +543,7 @@ export async function importQuestions(
 
   await writeStore(state);
 
-  return state.questions;
+  return filterQuestionsForActor(state.questions, actorId);
 }
 
 export async function updateQuestionPools(questionId: string, poolIds: string[]) {
@@ -366,13 +559,10 @@ export async function updateQuestion(
     draft?: QuestionDraft;
     poolIds?: string[];
   },
+  actorId: string | null = null,
 ) {
   const state = await readStore();
-  const existingQuestion = state.questions.find((question) => question.id === questionId);
-
-  if (!existingQuestion) {
-    throw new Error("Question not found.");
-  }
+  ensureActorOwnsQuestion(state, questionId, actorId);
 
   if (updates.draft) {
     const normalizedDraft = normalizeDraft(updates.draft);
@@ -392,15 +582,20 @@ export async function updateQuestion(
   }
 
   if (updates.poolIds) {
+    for (const poolId of dedupe(updates.poolIds)) {
+      ensureActorOwnsPool(state, poolId, actorId);
+    }
+
     syncQuestionPoolMemberships(state, questionId, updates.poolIds);
   }
 
   await writeStore(state);
-  return state.questions;
+  return filterQuestionsForActor(state.questions, actorId);
 }
 
-export async function deleteQuestion(questionId: string) {
+export async function deleteQuestion(questionId: string, actorId: string | null = null) {
   const state = await readStore();
+  ensureActorOwnsQuestion(state, questionId, actorId);
 
   state.questions = state.questions.filter((question) => question.id !== questionId);
   state.pools = state.pools.map((pool) => ({
@@ -410,17 +605,21 @@ export async function deleteQuestion(questionId: string) {
   }));
   await writeStore(state);
 
-  return state.questions;
+  return filterQuestionsForActor(state.questions, actorId);
 }
 
-export async function deleteQuestions(questionIds: string[]) {
+export async function deleteQuestions(questionIds: string[], actorId: string | null = null) {
   const normalizedQuestionIds = dedupe(questionIds);
 
   if (!normalizedQuestionIds.length) {
-    return listQuestions();
+    throw new Error("Select at least one question to remove.");
   }
 
   const state = await readStore();
+
+  for (const questionId of normalizedQuestionIds) {
+    ensureActorOwnsQuestion(state, questionId, actorId);
+  }
 
   state.questions = state.questions.filter(
     (question) => !normalizedQuestionIds.includes(question.id),
@@ -434,10 +633,14 @@ export async function deleteQuestions(questionIds: string[]) {
   }));
   await writeStore(state);
 
-  return state.questions;
+  return filterQuestionsForActor(state.questions, actorId);
 }
 
-export async function clearQuestions() {
+export async function clearQuestions(actorId: string | null = null) {
+  if (actorId) {
+    throw new Error("Clear all questions is not available for scoped admin workspaces.");
+  }
+
   const state = await readStore();
   state.questions = [];
   state.pools = state.pools.map((pool) => ({
@@ -456,16 +659,112 @@ export async function previewImport(text: string): Promise<BulkImportPreview> {
   return previewQuestionImport(text);
 }
 
-export async function listPools() {
+export async function listPollQuestions(actorId: string | null = null) {
   const state = await readStore();
-  return state.pools;
+  return filterPollQuestionsForActor(state.pollQuestions, actorId);
 }
 
-export async function createPool(input: { description?: string; name: string }) {
+export async function createPollQuestions(
+  drafts: PollQuestionDraft[],
+  actorId: string | null,
+) {
+  const state = await readStore();
+  const normalizedDrafts = drafts.map((draft) => normalizePollQuestionDraft(draft));
+
+  for (const draft of normalizedDrafts) {
+    const validationError = validatePollQuestionDraft(draft);
+
+    if (validationError) {
+      throw new Error(validationError);
+    }
+  }
+
+  const pollQuestions = normalizedDrafts.map((draft) =>
+    createPersistentPollQuestion(draft, { createdBy: actorId }),
+  );
+
+  state.pollQuestions = [...pollQuestions.reverse(), ...state.pollQuestions];
+  await writeStore(state);
+
+  return filterPollQuestionsForActor(state.pollQuestions, actorId);
+}
+
+export async function listScheduledPolls(actorId: string | null = null) {
+  const state = await readStore();
+  return filterScheduledPollsForActor(hydrateScheduledPolls(state), actorId);
+}
+
+export async function createScheduledPoll(input: {
+  anonymous: boolean;
+  createdBy: string | null;
+  durationMinutes: number;
+  generateQrCode: boolean;
+  participantGroupIds: string[];
+  participantType: PollParticipantType;
+  questionIds: string[];
+  startsAt: string;
+}) {
+  const state = await readStore();
+  const questionIds = dedupe(input.questionIds);
+
+  if (!questionIds.length) {
+    throw new Error("Select at least one poll question.");
+  }
+
+  for (const questionId of questionIds) {
+    ensureActorOwnsPollQuestion(state, questionId, input.createdBy);
+  }
+
+  if (input.participantType === "registered" && !dedupe(input.participantGroupIds).length) {
+    throw new Error("Select at least one group for registered-only polls.");
+  }
+
+  const timestamp = new Date().toISOString();
+  const shareCode = input.generateQrCode
+    ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
+    : null;
+  const scheduledPoll: ScheduledPoll = {
+    anonymous: input.anonymous,
+    createdAt: timestamp,
+    createdBy: input.createdBy,
+    durationMinutes: input.durationMinutes,
+    id: createEntityId("poll"),
+    participantGroupIds: dedupe(input.participantGroupIds),
+    participantType: input.participantType,
+    questionIds,
+    shareCode,
+    startsAt: input.startsAt,
+    status: new Date(input.startsAt).getTime() > Date.now() ? "scheduled" : "live",
+    title: `${questionIds.length} question poll`,
+    updatedAt: timestamp,
+  };
+
+  state.scheduledPolls = [scheduledPoll, ...state.scheduledPolls];
+  await writeStore(state);
+
+  return filterScheduledPollsForActor(hydrateScheduledPolls(state), input.createdBy);
+}
+
+export async function listPools() {
+  const state = await readStore();
+  return filterPoolsForActor(state.pools, getQuestionMap(state), null);
+}
+
+export async function listPoolsForActor(actorId: string | null = null) {
+  const state = await readStore();
+  return filterPoolsForActor(state.pools, getQuestionMap(state), actorId);
+}
+
+export async function createPool(input: {
+  createdBy?: string | null;
+  description?: string;
+  name: string;
+}) {
   const state = await readStore();
   const timestamp = new Date().toISOString();
   const pool: QuestionPool = {
     createdAt: timestamp,
+    createdBy: input.createdBy ?? null,
     description: input.description?.trim() ?? "",
     id: createEntityId("pool"),
     name: input.name.trim(),
@@ -476,7 +775,7 @@ export async function createPool(input: { description?: string; name: string }) 
   state.pools = [pool, ...state.pools];
   await writeStore(state);
 
-  return state.pools;
+  return filterPoolsForActor(state.pools, getQuestionMap(state), input.createdBy ?? null);
 }
 
 export async function listParticipants() {
@@ -770,9 +1069,9 @@ export async function resolveGroupJoinRequest(input: {
   };
 }
 
-export async function listScheduledTests() {
+export async function listScheduledTests(actorId: string | null = null) {
   const state = await readStore();
-  return hydrateScheduledTests(state);
+  return filterScheduledTestsForActor(hydrateScheduledTests(state), actorId);
 }
 
 export async function createScheduledTest(input: {
@@ -785,11 +1084,7 @@ export async function createScheduledTest(input: {
   startsAt: string;
 }) {
   const state = await readStore();
-  const pool = state.pools.find((savedPool) => savedPool.id === input.poolId);
-
-  if (!pool) {
-    throw new Error("Select a valid question pool.");
-  }
+  const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy);
 
   const poolQuestionIds = dedupe(pool.questionIds).filter((questionId) =>
     state.questions.some((question) => question.id === questionId),
@@ -819,7 +1114,11 @@ export async function createScheduledTest(input: {
     participantIds: dedupe(input.participantIds),
     poolId: input.poolId,
     questionCount: input.questionCount,
-    questionIds: poolQuestionIds.slice(0, input.questionCount),
+    questionIds: selectQuestionIdsForScheduledTest(
+      poolQuestionIds,
+      input.questionCount,
+      [input.poolId, input.startsAt, resolvedParticipantIdentifiers.join(",")].join(":"),
+    ),
     resolvedParticipantIdentifiers,
     startsAt: input.startsAt,
     status: new Date(input.startsAt).getTime() > Date.now() ? "scheduled" : "live",
@@ -830,21 +1129,25 @@ export async function createScheduledTest(input: {
   state.scheduledTests = [scheduledTest, ...state.scheduledTests];
   await writeStore(state);
 
-  return hydrateScheduledTests(state);
+  return filterScheduledTestsForActor(hydrateScheduledTests(state), input.createdBy);
 }
 
-export async function listHistory() {
+export async function listHistory(actorId: string | null = null) {
   const state = await readStore();
-  const scheduledTests = hydrateScheduledTests(state);
+  const scheduledTests = filterScheduledTestsForActor(hydrateScheduledTests(state), actorId);
+  const scheduledTestIds = new Set(scheduledTests.map((scheduledTest) => scheduledTest.id));
+  const attempts = state.attempts.filter((attempt) => scheduledTestIds.has(attempt.testId));
 
-  return summarizeTestHistory(state.attempts, scheduledTests);
+  return summarizeTestHistory(attempts, scheduledTests);
 }
 
-export async function listLeaderboards() {
+export async function listLeaderboards(actorId: string | null = null) {
   const state = await readStore();
-  const scheduledTests = hydrateScheduledTests(state);
+  const scheduledTests = filterScheduledTestsForActor(hydrateScheduledTests(state), actorId);
+  const scheduledTestIds = new Set(scheduledTests.map((scheduledTest) => scheduledTest.id));
+  const attempts = state.attempts.filter((attempt) => scheduledTestIds.has(attempt.testId));
 
-  return buildTestLeaderboards(state.attempts, scheduledTests).filter(
+  return buildTestLeaderboards(attempts, scheduledTests).filter(
     (leaderboard) =>
       scheduledTests.some(
         (scheduledTest) =>
@@ -853,16 +1156,30 @@ export async function listLeaderboards() {
   );
 }
 
-export async function listStateSummary() {
+export async function listStateSummary(input?: {
+  actorIdentifier?: string | null;
+  actorSub?: string | null;
+}) {
   const state = await readStore();
+  const actorSub = input?.actorSub ?? null;
+  const actorIdentifier = input?.actorIdentifier ?? null;
+  const questionMap = getQuestionMap(state);
+  const visibleQuestions = filterQuestionsForActor(state.questions, actorSub);
+  const visiblePools = filterPoolsForActor(state.pools, questionMap, actorSub);
+  const visibleScheduledTests = filterScheduledTestsForActor(hydrateScheduledTests(state), actorSub);
+  const visibleScheduledTestIds = new Set(visibleScheduledTests.map((test) => test.id));
+  const visibleAttempts = state.attempts.filter((attempt) => visibleScheduledTestIds.has(attempt.testId));
+  const visibleGroups = actorIdentifier
+    ? state.participantGroups.filter((group) => isGroupOwnedBy(group, actorIdentifier))
+    : state.participantGroups;
 
   return {
-    attempts: state.attempts.length,
-    groups: state.participantGroups.length,
+    attempts: visibleAttempts.length,
+    groups: visibleGroups.length,
     participants: state.participants.length,
-    pools: state.pools.length,
-    questions: state.questions.length,
-    scheduledTests: state.scheduledTests.length,
+    pools: visiblePools.length,
+    questions: visibleQuestions.length,
+    scheduledTests: visibleScheduledTests.length,
   };
 }
 
@@ -961,6 +1278,45 @@ export async function listAvailableTestsForParticipant(
       }
 
       return new Date(right.startsAt).getTime() - new Date(left.startsAt).getTime();
+    });
+}
+
+export async function listAvailablePollsForParticipant(identifier: string): Promise<ScheduledPoll[]> {
+  const state = await readStore();
+  const normalizedIdentifier = normalizeParticipantIdentifier(identifier);
+  const pollStatusPriority: Record<ScheduledPoll["status"], number> = {
+    live: 0,
+    scheduled: 1,
+    completed: 2,
+  };
+  const participantProfileIds = state.participants
+    .filter((participant) => identifiersMatch(participant.identifier, normalizedIdentifier))
+    .map((participant) => participant.id);
+  const participantGroupIds = new Set(
+    state.participantGroups
+      .filter((group) =>
+        group.participantIds.some((participantId) => participantProfileIds.includes(participantId)),
+      )
+      .map((group) => group.id),
+  );
+
+  return hydrateScheduledPolls(state)
+    .filter((poll) => {
+      if (poll.participantType === "open") {
+        return true;
+      }
+
+      return poll.participantGroupIds.some((groupId) => participantGroupIds.has(groupId));
+    })
+    .sort((leftPoll, rightPoll) => {
+      const priorityDifference =
+        pollStatusPriority[leftPoll.status] - pollStatusPriority[rightPoll.status];
+
+      if (priorityDifference !== 0) {
+        return priorityDifference;
+      }
+
+      return new Date(rightPoll.startsAt).getTime() - new Date(leftPoll.startsAt).getTime();
     });
 }
 
@@ -1095,9 +1451,14 @@ export async function getUserTestReview(testId: string, identifier: string) {
   };
 }
 
-export async function getAdminTestReview(testId: string) {
+export async function getAdminTestReview(testId: string, actorId: string | null = null) {
   const state = await readStore();
-  const scheduledTest = getCompletedScheduledTest(state, testId);
+  const scheduledTest = ensureActorOwnsScheduledTest(state, testId, actorId);
+
+  if (scheduledTest.status !== "completed") {
+    throw new Error("Questions can be reviewed after results are announced.");
+  }
+
   const questionMap = getQuestionMap(state);
   const attempts = state.attempts.filter((attempt) => attempt.testId === testId);
 

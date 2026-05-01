@@ -1,5 +1,6 @@
 "use client";
 
+import { combinePhoneNumber, sanitizeCountryCodeInput, sanitizeNationalPhoneInput } from "@trapit/auth";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -16,8 +17,40 @@ export function PasswordResetForm() {
   const [isCodeSent, setIsCodeSent] = useState(false);
   const [isPending, setIsPending] = useState(false);
   const [password, setPassword] = useState("");
+  const [countryCode, setCountryCode] = useState("+91");
   const [phoneNumber, setPhoneNumber] = useState("");
   const authConfigured = isPublicWebAuthConfigured();
+  const combinedPhoneNumber = combinePhoneNumber(countryCode, phoneNumber);
+
+  function handlePhoneNumberChange(nextPhoneNumber: string) {
+    const sanitizedPhoneNumber = sanitizeNationalPhoneInput(nextPhoneNumber);
+
+    if (sanitizedPhoneNumber === phoneNumber) {
+      return;
+    }
+
+    setPhoneNumber(sanitizedPhoneNumber);
+    setConfirmationCode("");
+    setPassword("");
+    setDeliveryDestination(null);
+    setIsCodeSent(false);
+    setErrorMessage(null);
+  }
+
+  function handleCountryCodeChange(nextCountryCode: string) {
+    const sanitizedCountryCode = sanitizeCountryCodeInput(nextCountryCode);
+
+    if (sanitizedCountryCode === countryCode) {
+      return;
+    }
+
+    setCountryCode(sanitizedCountryCode);
+    setConfirmationCode("");
+    setPassword("");
+    setDeliveryDestination(null);
+    setIsCodeSent(false);
+    setErrorMessage(null);
+  }
 
   async function handleRequestCode() {
     setErrorMessage(null);
@@ -36,7 +69,7 @@ export function PasswordResetForm() {
 
     try {
       const response = await fetch("/api/auth/forgot-password", {
-        body: JSON.stringify({ phoneNumber }),
+        body: JSON.stringify({ phoneNumber: combinedPhoneNumber }),
         headers: {
           "Content-Type": "application/json",
         },
@@ -80,7 +113,7 @@ export function PasswordResetForm() {
 
     try {
       const response = await fetch("/api/auth/confirm-forgot-password", {
-        body: JSON.stringify({ code: confirmationCode, password, phoneNumber }),
+        body: JSON.stringify({ code: confirmationCode, password, phoneNumber: combinedPhoneNumber }),
         headers: {
           "Content-Type": "application/json",
         },
@@ -112,15 +145,26 @@ export function PasswordResetForm() {
 
       <div className="field">
         <label htmlFor="reset-phone-number">Phone number</label>
-        <input
-          id="reset-phone-number"
-          type="tel"
-          inputMode="tel"
-          placeholder="+14155550123"
-          disabled={!authConfigured}
-          value={phoneNumber}
-          onChange={(event) => setPhoneNumber(event.target.value)}
-        />
+        <div className="field-row phone-input-row">
+          <input
+            id="reset-country-code"
+            type="tel"
+            inputMode="tel"
+            placeholder="+91"
+            disabled={!authConfigured}
+            value={countryCode}
+            onChange={(event) => handleCountryCodeChange(event.target.value)}
+          />
+          <input
+            id="reset-phone-number"
+            type="tel"
+            inputMode="tel"
+            placeholder="9876543210"
+            disabled={!authConfigured}
+            value={phoneNumber}
+            onChange={(event) => handlePhoneNumberChange(event.target.value)}
+          />
+        </div>
       </div>
 
       {isCodeSent ? (

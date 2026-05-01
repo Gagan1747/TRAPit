@@ -14,7 +14,7 @@ export async function GET(
   }
 
   try {
-    const payload = await getAdminTestReview(context.params.testId);
+    const payload = await getAdminTestReview(context.params.testId, actor.sub);
     return NextResponse.json(payload);
   } catch (error) {
     return NextResponse.json(

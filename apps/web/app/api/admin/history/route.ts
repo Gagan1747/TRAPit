@@ -11,9 +11,9 @@ export async function GET() {
   }
 
   const [history, leaderboards, summary] = await Promise.all([
-    listHistory(),
-    listLeaderboards(),
-    listStateSummary(),
+    listHistory(actor.sub),
+    listLeaderboards(actor.sub),
+    listStateSummary({ actorIdentifier: actor.identifier, actorSub: actor.sub }),
   ]);
 
   return NextResponse.json({ history, leaderboards, summary });

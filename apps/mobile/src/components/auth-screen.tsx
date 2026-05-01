@@ -1,4 +1,9 @@
-import { getMobileDashboardPath } from "@trapit/auth";
+import {
+  combinePhoneNumber,
+  getMobileDashboardPath,
+  sanitizeCountryCodeInput,
+  sanitizeNationalPhoneInput,
+} from "@trapit/auth";
 import { Redirect, type Href, useRouter } from "expo-router";
 import { useState } from "react";
 import {
@@ -27,12 +32,44 @@ export function AuthScreen({ mode }: AuthScreenProps) {
   const [isPending, setIsPending] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [password, setPassword] = useState("");
+  const [countryCode, setCountryCode] = useState("+91");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [signUpState, setSignUpState] = useState<{
     destination?: string | null;
     requiresConfirmation?: boolean;
     warning?: string;
   } | null>(null);
+  const combinedPhoneNumber = combinePhoneNumber(countryCode, phoneNumber);
+
+  function handlePhoneNumberChange(nextPhoneNumber: string) {
+    const sanitizedPhoneNumber = sanitizeNationalPhoneInput(nextPhoneNumber);
+
+    if (sanitizedPhoneNumber === phoneNumber) {
+      return;
+    }
+
+    setPhoneNumber(sanitizedPhoneNumber);
+    setPassword("");
+    setIsPasswordVisible(false);
+    setConfirmationCode("");
+    setSignUpState(null);
+    setErrorMessage(null);
+  }
+
+  function handleCountryCodeChange(nextCountryCode: string) {
+    const sanitizedCountryCode = sanitizeCountryCodeInput(nextCountryCode);
+
+    if (sanitizedCountryCode === countryCode) {
+      return;
+    }
+
+    setCountryCode(sanitizedCountryCode);
+    setPassword("");
+    setIsPasswordVisible(false);
+    setConfirmationCode("");
+    setSignUpState(null);
+    setErrorMessage(null);
+  }
 
   if (!isLoading && session) {
     return <Redirect href={getMobileDashboardPath(session.role) as Href} />;
@@ -64,7 +101,7 @@ export function AuthScreen({ mode }: AuthScreenProps) {
 
     try {
       if (mode === "sign-up") {
-        const result = await signUp(fullName, phoneNumber, password);
+        const result = await signUp(fullName, combinedPhoneNumber, password);
         setSignUpState({
           destination: result.deliveryDestination,
           requiresConfirmation: result.requiresConfirmation,
@@ -78,7 +115,7 @@ export function AuthScreen({ mode }: AuthScreenProps) {
         return;
       }
 
-      const nextSession = await signIn(phoneNumber, password);
+      const nextSession = await signIn(combinedPhoneNumber, password);
       router.replace(getMobileDashboardPath(nextSession.role) as Href);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Authentication failed.");
@@ -103,7 +140,7 @@ export function AuthScreen({ mode }: AuthScreenProps) {
     setIsPending(true);
 
     try {
-      await confirmSignUp(phoneNumber, confirmationCode);
+      await confirmSignUp(combinedPhoneNumber, confirmationCode);
       router.push("/sign-in");
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Confirmation failed.");
@@ -145,16 +182,28 @@ export function AuthScreen({ mode }: AuthScreenProps) {
 
           <View style={styles.field}>
             <Text style={styles.label}>Phone number</Text>
-            <TextInput
-              autoCapitalize="none"
-              keyboardType="phone-pad"
-              placeholder="+14155550123"
-              placeholderTextColor="#8e7d70"
-              style={styles.input}
-              editable={authConfigured}
-              value={phoneNumber}
-              onChangeText={setPhoneNumber}
-            />
+            <View style={styles.phoneRow}>
+              <TextInput
+                autoCapitalize="none"
+                keyboardType="phone-pad"
+                placeholder="+91"
+                placeholderTextColor="#8e7d70"
+                style={[styles.input, styles.countryCodeInput]}
+                editable={authConfigured}
+                value={countryCode}
+                onChangeText={handleCountryCodeChange}
+              />
+              <TextInput
+                autoCapitalize="none"
+                keyboardType="phone-pad"
+                placeholder="9876543210"
+                placeholderTextColor="#8e7d70"
+                style={[styles.input, styles.phoneInput]}
+                editable={authConfigured}
+                value={phoneNumber}
+                onChangeText={handlePhoneNumberChange}
+              />
+            </View>
           </View>
 
           <View style={styles.field}>
@@ -297,6 +346,16 @@ const styles = StyleSheet.create({
   passwordRow: {
     flexDirection: "row",
     gap: 10,
+  },
+  phoneRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
+  countryCodeInput: {
+    width: 88,
+  },
+  phoneInput: {
+    flex: 1,
   },
   passwordInput: {
     flex: 1,

@@ -1,120 +1,263 @@
-import {
-  formatElapsedTime,
-  scoreObjectiveTest,
-  type PersistentQuestion,
-  type TestResult,
-} from "@trapit/testing";
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { createPresentedQuestions, formatElapsedTime, type TestResult } from "@trapit/testing";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { useQuestionBank } from "../testing/question-bank-context";
 import { MobileCollapsibleSection } from "./mobile-collapsible-section";
 
+function formatShortDateTime(value: string) {
+  return new Intl.DateTimeFormat("en-IN", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
+
 type MobileUserSection = "results" | "tests";
 
-type SubmittedReview = {
-  answers: Record<string, number | undefined>;
-  questions: PersistentQuestion[];
+type MobileUserTestWorkspaceProps = {
+  currentParticipantIdentifier: string | null;
 };
 
-export function MobileUserTestWorkspace() {
-  const { isReady, questions } = useQuestionBank();
+export function MobileUserTestWorkspace({ currentParticipantIdentifier }: MobileUserTestWorkspaceProps) {
+  const { getAvailableTestsForParticipant, getUserHistory, getUserTestReview, isReady, recordAttempt } = useQuestionBank();
+  const [activeTestId, setActiveTestId] = useState<string | null>(null);
+  const [activeParticipantName, setActiveParticipantName] = useState("");
   const [answers, setAnswers] = useState<Record<string, number | undefined>>({});
-  const [isActive, setIsActive] = useState(false);
-  const [latestReview, setLatestReview] = useState<SubmittedReview | null>(null);
-  const [openSection, setOpenSection] = useState<MobileUserSection | null>(null);
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [openSection, setOpenSection] = useState<MobileUserSection | null>("tests");
+  const [participantNamesByTest, setParticipantNamesByTest] = useState<Record<string, string>>({});
+  const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const [result, setResult] = useState<TestResult | null>(null);
-  const [startedAt, setStartedAt] = useState<number | null>(null);
+  const [reviewByTestId, setReviewByTestId] = useState<Record<string, ReturnType<typeof getUserTestReview>>>({});
+  const [reviewTestIds, setReviewTestIds] = useState<string[]>([]);
+  const [startedAt, setStartedAt] = useState<string | null>(null);
+  const answersRef = useRef<Record<string, number | undefined>>({});
+  const submittingRef = useRef(false);
+
+  const availableTests = currentParticipantIdentifier
+    ? getAvailableTestsForParticipant(currentParticipantIdentifier)
+    : [];
+  const history = currentParticipantIdentifier ? getUserHistory(currentParticipantIdentifier) : [];
+  const historyByTestId = new Map(history.map((entry) => [entry.testId, entry]));
+  const activeTest = availableTests.find((test) => test.id === activeTestId) ?? null;
+  const presentedQuestions = useMemo(() => {
+    if (!activeTest || !currentParticipantIdentifier) {
+      return [];
+    }
+
+    return createPresentedQuestions(
+      activeTest.questions,
+      `${activeTest.id}:${currentParticipantIdentifier}`,
+    );
+  }, [activeTest, currentParticipantIdentifier]);
+  const activeQuestion = presentedQuestions[currentQuestionIndex] ?? null;
+
+  useEffect(() => {
+    answersRef.current = answers;
+  }, [answers]);
+
+  useEffect(() => {
+    if (!activeTest || !startedAt) {
+      setRemainingMs(null);
+      return;
+    }
+
+    const deadlineMs = new Date(activeTest.startsAt).getTime() + activeTest.durationMinutes * 60 * 1000;
+
+    const tick = () => {
+      const nextRemainingMs = Math.max(0, deadlineMs - Date.now());
+      setRemainingMs(nextRemainingMs);
+
+      if (nextRemainingMs === 0 && !submittingRef.current) {
+        void submitTest(true);
+      }
+    };
+
+    tick();
+    const intervalId = setInterval(tick, 1000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [activeTest, startedAt]);
 
   if (!isReady) {
     return null;
-  }
-
-  function startTest() {
-    setAnswers({});
-    setIsActive(true);
-    setOpenSection("tests");
-    setResult(null);
-    setStartedAt(Date.now());
   }
 
   function toggleSection(section: MobileUserSection) {
     setOpenSection((currentSection) => (currentSection === section ? null : section));
   }
 
-  function submitTest() {
-    if (!startedAt) {
+  function startTest(testId: string) {
+    const participantName = participantNamesByTest[testId]?.trim() ?? "";
+
+    if (!participantName) {
+      setFeedback("Enter your name before starting the test.");
       return;
     }
 
-    setLatestReview({
-      answers: { ...answers },
-      questions: [...questions],
-    });
-    setResult(scoreObjectiveTest(questions, answers, startedAt, Date.now()));
-    setIsActive(false);
-    setOpenSection("results");
+    setActiveTestId(testId);
+    setActiveParticipantName(participantName);
+    setAnswers({});
+    answersRef.current = {};
+    setCurrentQuestionIndex(0);
+    setFeedback(null);
+    setOpenSection("tests");
+    setResult(null);
+    setStartedAt(new Date().toISOString());
+  }
+
+  async function submitTest(dueToTimer = false) {
+    if (!activeTest || !currentParticipantIdentifier || !startedAt || submittingRef.current) {
+      return;
+    }
+
+    try {
+      submittingRef.current = true;
+      const attempt = recordAttempt({
+        answers: answersRef.current,
+        completedAt: dueToTimer
+          ? new Date(new Date(activeTest.startsAt).getTime() + activeTest.durationMinutes * 60 * 1000).toISOString()
+          : new Date().toISOString(),
+        participantName: activeParticipantName,
+        startedAt,
+        testId: activeTest.id,
+        userId: currentParticipantIdentifier,
+      });
+
+      setResult(attempt.result);
+      setFeedback(dueToTimer ? "Time is up. Your test was submitted automatically." : "Test submitted.");
+      setActiveTestId(null);
+      setActiveParticipantName("");
+      setAnswers({});
+      answersRef.current = {};
+      setCurrentQuestionIndex(0);
+      setStartedAt(null);
+      setOpenSection("results");
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to submit this test.");
+    } finally {
+      submittingRef.current = false;
+    }
+  }
+
+  function formatCountdown(value: number | null) {
+    if (value === null) {
+      return "--:--";
+    }
+
+    const totalSeconds = Math.max(0, Math.ceil(value / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  }
+
+  function handleLoadReview(testId: string) {
+    if (!currentParticipantIdentifier) {
+      return;
+    }
+
+    if (reviewByTestId[testId]) {
+      setReviewTestIds((currentIds) =>
+        currentIds.includes(testId)
+          ? currentIds.filter((currentId) => currentId !== testId)
+          : [...currentIds, testId],
+      );
+      return;
+    }
+
+    try {
+      const review = getUserTestReview(testId, currentParticipantIdentifier);
+      setReviewByTestId((currentReviews) => ({
+        ...currentReviews,
+        [testId]: review,
+      }));
+      setReviewTestIds((currentIds) => [...new Set([...currentIds, testId])]);
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to load the test review.");
+    }
   }
 
   return (
     <View style={styles.stack}>
       <View style={styles.metricRow}>
         <View style={styles.metricCard}>
-          <Text style={styles.metricValue}>{questions.length}</Text>
-          <Text style={styles.metricLabel}>questions</Text>
+          <Text style={styles.metricValue}>{availableTests.length}</Text>
+          <Text style={styles.metricLabel}>tests</Text>
         </View>
         <View style={styles.metricCard}>
-          <Text style={styles.metricValue}>
-            {result ? `${result.correctCount}/${result.totalCount}` : "-"}
-          </Text>
+          <Text style={styles.metricValue}>{result ? `${result.correctCount}/${result.totalCount}` : "-"}</Text>
           <Text style={styles.metricLabel}>latest score</Text>
         </View>
         <View style={styles.metricCard}>
-          <Text style={styles.metricValue}>
-            {result ? formatElapsedTime(result.elapsedMs) : "-"}
-          </Text>
+          <Text style={styles.metricValue}>{result ? formatElapsedTime(result.elapsedMs) : "-"}</Text>
           <Text style={styles.metricLabel}>time taken</Text>
         </View>
       </View>
 
       <MobileCollapsibleSection
-        description="Open the assigned local test bank, answer the questions, and submit once you are done."
+        description="Open assigned tests, answer the questions, and submit once you are done."
         eyebrow="Assigned tests"
         isOpen={openSection === "tests"}
         title="Mobile test runner"
         onToggle={() => toggleSection("tests")}
       >
-        {!questions.length ? (
-          <Text style={styles.meta}>No test is available yet. Ask the admin to add questions first.</Text>
-        ) : !isActive ? (
-          <Pressable style={styles.primaryButton} onPress={startTest}>
-            <Text style={styles.primaryButtonText}>{result ? "Retake test" : "Start test"}</Text>
-          </Pressable>
-        ) : (
+        {feedback ? <Text style={styles.meta}>{feedback}</Text> : null}
+        {activeTest ? (
           <View style={styles.list}>
-            {questions.map((question, index) => (
-              <View key={question.id} style={styles.card}>
-                <Text style={styles.cardTitle}>Question {index + 1}</Text>
-                <Text style={styles.questionPrompt}>{question.prompt}</Text>
+            <View style={styles.card}>
+              <View style={styles.cardHead}>
+                <Text style={styles.cardTitle}>{activeTest.title}</Text>
+              </View>
+              <View
+                style={[
+                  styles.countdownBadge,
+                  remainingMs !== null && remainingMs <= 60_000 ? styles.countdownBadgeWarning : styles.countdownBadgeSafe,
+                ]}
+              >
+                <Text style={styles.countdownLabel}>Time left</Text>
+                <Text style={styles.countdownValue}>{formatCountdown(remainingMs)}</Text>
+              </View>
+              <Text style={styles.meta}>Question {Math.min(currentQuestionIndex + 1, activeTest.questionCount)} of {activeTest.questionCount}</Text>
+            </View>
+
+            {activeQuestion ? (
+              <View style={styles.card}>
+                <Text style={styles.cardTitle}>Question {currentQuestionIndex + 1}</Text>
+                <Text style={styles.questionPrompt}>{activeQuestion.question.prompt}</Text>
                 <View style={styles.list}>
-                  {question.options.map((option, optionIndex) => (
+                  {activeQuestion.displayOptions.map((option, optionIndex) => (
                     <Pressable
-                      key={`${question.id}-${optionIndex}`}
+                      key={`${activeQuestion.question.id}-${optionIndex}`}
                       style={[
                         styles.answerOption,
-                        answers[question.id] === optionIndex && styles.answerOptionActive,
+                        answers[activeQuestion.question.id] === activeQuestion.originalOptionIndexes[optionIndex] && styles.answerOptionActive,
                       ]}
-                      onPress={() =>
-                        setAnswers((currentAnswers) => ({
-                          ...currentAnswers,
-                          [question.id]: optionIndex,
-                        }))
-                      }
+                      onPress={() => {
+                        const nextAnswers = {
+                          ...answersRef.current,
+                          [activeQuestion.question.id]: activeQuestion.originalOptionIndexes[optionIndex],
+                        };
+
+                        answersRef.current = nextAnswers;
+                        setAnswers(nextAnswers);
+                        setFeedback(null);
+
+                        if (currentQuestionIndex >= activeTest.questionCount - 1) {
+                          setCurrentQuestionIndex(activeTest.questionCount);
+                          return;
+                        }
+
+                        setCurrentQuestionIndex((currentIndex) => currentIndex + 1);
+                      }}
                     >
                       <Text
                         style={[
                           styles.answerOptionText,
-                          answers[question.id] === optionIndex && styles.answerOptionTextActive,
+                          answers[activeQuestion.question.id] === activeQuestion.originalOptionIndexes[optionIndex] && styles.answerOptionTextActive,
                         ]}
                       >
                         {option}
@@ -123,76 +266,139 @@ export function MobileUserTestWorkspace() {
                   ))}
                 </View>
               </View>
-            ))}
-
-            <Pressable style={styles.primaryButton} onPress={submitTest}>
-              <Text style={styles.primaryButtonText}>Submit test</Text>
-            </Pressable>
+            ) : (
+              <View style={styles.card}>
+                <Text style={styles.cardTitle}>Ready to submit</Text>
+                <Text style={styles.meta}>You have answered all questions. Submit now to see your result.</Text>
+                <Pressable style={styles.primaryButton} onPress={() => void submitTest()}>
+                  <Text style={styles.primaryButtonText}>Submit test</Text>
+                </Pressable>
+              </View>
+            )}
           </View>
+        ) : availableTests.length ? (
+          <View style={styles.list}>
+            {availableTests.map((test) => {
+              const historyEntry = historyByTestId.get(test.id);
+              const isCompleted = test.status === "completed";
+
+              return (
+                <View key={test.id} style={styles.card}>
+                  <View style={styles.cardHead}>
+                    <Text style={styles.cardTitle}>{test.title}</Text>
+                    <Text style={styles.reviewChip}>{test.status}</Text>
+                  </View>
+                  <Text style={styles.meta}>Starts {formatShortDateTime(test.startsAt)}</Text>
+                  <Text style={styles.meta}>{test.questionCount} questions, {test.durationMinutes} minutes</Text>
+                  {isCompleted ? (
+                    historyEntry ? (
+                      <>
+                        <Text style={styles.meta}>Score {historyEntry.correctCount}/{historyEntry.totalCount}</Text>
+                        <Text style={styles.meta}>Time taken {formatElapsedTime(historyEntry.elapsedMs)}</Text>
+                      </>
+                    ) : (
+                      <Text style={styles.meta}>This test is completed.</Text>
+                    )
+                  ) : (
+                    <>
+                      <Text style={styles.label}>Your name for this test</Text>
+                      <TextInput
+                        placeholder="Enter your display name"
+                        placeholderTextColor="#8e7d70"
+                        style={styles.nameInput}
+                        value={participantNamesByTest[test.id] ?? ""}
+                        onChangeText={(value) =>
+                          setParticipantNamesByTest((currentNames) => ({
+                            ...currentNames,
+                            [test.id]: value,
+                          }))
+                        }
+                      />
+                      <Pressable
+                        style={styles.secondaryButton}
+                        onPress={() => {
+                          const nextName = currentParticipantIdentifier ?? "Participant";
+                          setParticipantNamesByTest((currentNames) => ({
+                            ...currentNames,
+                            [test.id]: currentNames[test.id]?.trim() ? currentNames[test.id] : nextName,
+                          }));
+                        }}
+                      >
+                        <Text style={styles.secondaryButtonText}>Use my identifier</Text>
+                      </Pressable>
+                      <Pressable style={styles.primaryButton} onPress={() => startTest(test.id)}>
+                        <Text style={styles.primaryButtonText}>{test.status === "live" ? "Start test" : "Open when live"}</Text>
+                      </Pressable>
+                    </>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        ) : (
+          <Text style={styles.meta}>No assigned tests are available for this user yet.</Text>
         )}
       </MobileCollapsibleSection>
 
       <MobileCollapsibleSection
-        description="Review your most recent score and completion stats after each attempt."
+        description="Review your completed assigned tests and see the latest submission details."
         eyebrow="Latest result"
         isOpen={openSection === "results"}
         title="Result summary"
         onToggle={() => toggleSection("results")}
       >
-        {result ? (
-          <View style={styles.resultCard}>
-            <Text style={styles.cardTitle}>Latest result</Text>
-            <Text style={styles.meta}>Correct answers: {result.correctCount} / {result.totalCount}</Text>
-            <Text style={styles.meta}>Attempted: {result.attemptedCount}</Text>
-            <Text style={styles.meta}>Time taken: {formatElapsedTime(result.elapsedMs)}</Text>
+        {history.length ? (
+          <View style={styles.list}>
+            {availableTests.filter((test) => test.status === "completed").map((test) => {
+              const historyEntry = historyByTestId.get(test.id);
+              const review = reviewByTestId[test.id];
+              const isReviewVisible = reviewTestIds.includes(test.id);
 
-            {latestReview ? (
-              <View style={styles.reviewList}>
-                {latestReview.questions.map((question, index) => {
-                  const selectedOptionIndex = latestReview.answers[question.id];
-
-                  return (
-                    <View key={`review-${question.id}`} style={styles.reviewCard}>
-                      <View style={styles.reviewHead}>
-                        <Text style={styles.cardTitle}>Question {index + 1}</Text>
-                        <Text style={styles.reviewChip}>
-                          Correct option {question.correctOptionIndex + 1}
-                        </Text>
-                      </View>
-                      <Text style={styles.questionPrompt}>{question.prompt}</Text>
-                      <View style={styles.list}>
-                        {question.options.map((option, optionIndex) => {
-                          const isCorrect = optionIndex === question.correctOptionIndex;
-                          const isSelected = optionIndex === selectedOptionIndex;
-
-                          return (
-                            <View
-                              key={`${question.id}-review-option-${optionIndex}`}
-                              style={[
-                                styles.reviewOption,
-                                isCorrect && styles.reviewOptionCorrect,
-                                isSelected && styles.reviewOptionSelected,
-                              ]}
-                            >
-                              <Text style={styles.answerOptionText}>
-                                {option}
-                                {isCorrect ? " (correct)" : ""}
-                                {isSelected ? " (your answer)" : ""}
-                              </Text>
-                            </View>
-                          );
-                        })}
-                      </View>
-                      <Text style={styles.meta}>
-                        Your response: {typeof selectedOptionIndex === "number"
-                          ? `Option ${selectedOptionIndex + 1}: ${question.options[selectedOptionIndex]}`
-                          : "Not answered"}
-                      </Text>
+              return (
+                <View key={`result-${test.id}`} style={styles.card}>
+                  <View style={styles.cardHead}>
+                    <Text style={styles.cardTitle}>{test.title}</Text>
+                    <Text style={styles.reviewChip}>{historyEntry?.status === "missed" ? "missed" : "completed"}</Text>
+                  </View>
+                  <Text style={styles.meta}>Completed {historyEntry ? formatShortDateTime(historyEntry.completedAt) : formatShortDateTime(test.startsAt)}</Text>
+                  {historyEntry ? (
+                    <>
+                      <Text style={styles.meta}>Score {historyEntry.correctCount}/{historyEntry.totalCount}</Text>
+                      <Text style={styles.meta}>Time taken {formatElapsedTime(historyEntry.elapsedMs)}</Text>
+                    </>
+                  ) : (
+                    <Text style={styles.meta}>No participant submission was recorded for this test.</Text>
+                  )}
+                  <Pressable style={styles.secondaryButton} onPress={() => handleLoadReview(test.id)}>
+                    <Text style={styles.secondaryButtonText}>{isReviewVisible ? "Hide review" : "Review questions"}</Text>
+                  </Pressable>
+                  {isReviewVisible && review ? (
+                    <View style={styles.reviewList}>
+                      {review.review.map((question, questionIndex) => (
+                        <View key={`${test.id}-${question.questionId}`} style={styles.reviewCard}>
+                          <View style={styles.cardHead}>
+                            <Text style={styles.cardTitle}>Question {questionIndex + 1}</Text>
+                            <Text style={styles.reviewChip}>Review</Text>
+                          </View>
+                          <Text style={styles.questionPrompt}>{question.prompt}</Text>
+                          <View style={styles.list}>
+                            {question.options.map((option, optionIndex) => (
+                              <View key={`${question.questionId}-${optionIndex}`} style={styles.reviewOption}>
+                                <Text style={styles.answerOptionText}>
+                                  {option}
+                                  {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
+                                  {optionIndex === question.selectedOptionIndex ? " (your answer)" : ""}
+                                </Text>
+                              </View>
+                            ))}
+                          </View>
+                        </View>
+                      ))}
                     </View>
-                  );
-                })}
-              </View>
-            ) : null}
+                  ) : null}
+                </View>
+              );
+            })}
           </View>
         ) : (
           <Text style={styles.meta}>Your latest score will appear here after you submit a test.</Text>
@@ -208,8 +414,8 @@ const styles = StyleSheet.create({
     borderColor: "#d7c3af",
     borderRadius: 16,
     borderWidth: 1,
-    minHeight: 46,
     justifyContent: "center",
+    minHeight: 46,
     paddingHorizontal: 14,
   },
   answerOptionActive: {
@@ -227,12 +433,51 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: "rgba(255, 248, 240, 0.92)",
     borderRadius: 24,
-    gap: 14,
+    gap: 12,
     padding: 18,
+  },
+  cardHead: {
+    flexDirection: "row",
+    gap: 10,
+    justifyContent: "space-between",
   },
   cardTitle: {
     color: "#231712",
     fontSize: 18,
+    fontWeight: "700",
+  },
+  countdownBadge: {
+    borderRadius: 18,
+    gap: 4,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  countdownBadgeSafe: {
+    backgroundColor: "rgba(120, 141, 94, 0.2)",
+    borderColor: "rgba(120, 141, 94, 0.42)",
+    borderWidth: 1,
+  },
+  countdownBadgeWarning: {
+    backgroundColor: "rgba(180, 76, 47, 0.18)",
+    borderColor: "rgba(180, 76, 47, 0.4)",
+    borderWidth: 1,
+  },
+  countdownLabel: {
+    color: "#6d5a4e",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+  },
+  countdownValue: {
+    color: "#231712",
+    fontSize: 30,
+    fontWeight: "800",
+    lineHeight: 34,
+  },
+  label: {
+    color: "#231712",
+    fontSize: 14,
     fontWeight: "700",
   },
   list: {
@@ -242,6 +487,15 @@ const styles = StyleSheet.create({
     color: "#6d5a4e",
     fontSize: 14,
     lineHeight: 20,
+  },
+  nameInput: {
+    backgroundColor: "#fffaf5",
+    borderColor: "#d7c3af",
+    borderRadius: 16,
+    borderWidth: 1,
+    color: "#231712",
+    minHeight: 46,
+    paddingHorizontal: 14,
   },
   metricCard: {
     backgroundColor: "rgba(255, 248, 240, 0.92)",
@@ -292,11 +546,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
   },
-  reviewHead: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 12,
-  },
   reviewList: {
     gap: 12,
     marginTop: 10,
@@ -306,24 +555,24 @@ const styles = StyleSheet.create({
     borderColor: "#d7c3af",
     borderRadius: 14,
     borderWidth: 1,
-    minHeight: 42,
     justifyContent: "center",
+    minHeight: 42,
     paddingHorizontal: 12,
   },
-  reviewOptionCorrect: {
-    borderColor: "#788d5e",
-    backgroundColor: "rgba(120, 141, 94, 0.14)",
-  },
-  reviewOptionSelected: {
-    borderColor: "#b44c2f",
-  },
-  resultCard: {
+  secondaryButton: {
+    alignItems: "center",
     backgroundColor: "#fffaf5",
     borderColor: "#d7c3af",
-    borderRadius: 18,
+    borderRadius: 999,
     borderWidth: 1,
-    gap: 8,
-    padding: 14,
+    justifyContent: "center",
+    minHeight: 46,
+    paddingHorizontal: 16,
+  },
+  secondaryButtonText: {
+    color: "#6d5a4e",
+    fontSize: 14,
+    fontWeight: "700",
   },
   stack: {
     gap: 16,
