@@ -1,6 +1,6 @@
 import { validateQuestionDraft, type PollQuestionDraft, type PollParticipantType, type ScheduledPoll, type ScheduledTest } from "@trapit/testing";
 import { useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { useQuestionBank } from "../testing/question-bank-context";
 import { MobileCollapsibleSection } from "./mobile-collapsible-section";
@@ -63,6 +63,7 @@ type AdminMobileSection =
 
 type ResultsMode = "polls" | "tests";
 type ResultsFilter = "admin" | "both" | "participant";
+type AdminMenuGroup = "groups" | "poll" | "test";
 
 type MobileAdminQuestionWorkspaceProps = {
   currentAdminIdentifier: string | null;
@@ -120,7 +121,9 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
   const [groupSearchFeedback, setGroupSearchFeedback] = useState<string | null>(null);
   const [groupSearchPhoneNumber, setGroupSearchPhoneNumber] = useState("");
   const [groupSearchResults, setGroupSearchResults] = useState<string[]>([]);
+  const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
   const [openSection, setOpenSection] = useState<AdminMobileSection | null>("history");
+  const [openMenuGroup, setOpenMenuGroup] = useState<AdminMenuGroup | null>(null);
   const [optionCount, setOptionCount] = useState(4);
   const [options, setOptions] = useState<string[]>(createEmptyOptions(4));
   const [pollFeedback, setPollFeedback] = useState<string | null>(null);
@@ -570,15 +573,47 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
     .map((groupId) => participantGroups.find((group) => group.id === groupId))
     .filter((group): group is NonNullable<typeof participantGroups[number]> => Boolean(group));
 
-  const menuButton = (label: string, section: AdminMobileSection) => (
-    <Pressable
-      key={section}
-      style={[styles.menuButton, openSection === section && styles.menuButtonActive]}
-      onPress={() => setOpenSection(section)}
-    >
-      <Text style={[styles.menuButtonText, openSection === section && styles.menuButtonTextActive]}>{label}</Text>
-    </Pressable>
-  );
+  function isMenuGroupActive(group: AdminMenuGroup) {
+    if (group === "test") {
+      return openSection === "author" || openSection === "question-bank" || openSection === "schedule" || openSection === "self-test";
+    }
+
+    if (group === "poll") {
+      return openSection === "poll-questions" || openSection === "poll-schedule";
+    }
+
+    return openSection === "create-groups" || openSection === "manage-groups" || openSection === "join-groups";
+  }
+
+  function renderMenuItem(label: string, section: AdminMobileSection) {
+    return (
+      <Pressable
+        key={section}
+        style={[styles.menuItem, openSection === section && styles.menuItemActive]}
+        onPress={() => setOpenSection(section)}
+      >
+        <Text style={[styles.menuItemText, openSection === section && styles.menuItemTextActive]}>{label}</Text>
+      </Pressable>
+    );
+  }
+
+  function renderMenuGroup(label: string, group: AdminMenuGroup, items: Array<{ label: string; section: AdminMobileSection }>) {
+    const isOpen = openMenuGroup === group;
+    const isActive = isMenuGroupActive(group);
+
+    return (
+      <View key={group} style={styles.menuGroupCard}>
+        <Pressable
+          style={[styles.menuGroupTrigger, (isOpen || isActive) && styles.menuGroupTriggerActive]}
+          onPress={() => setOpenMenuGroup((currentGroup) => (currentGroup === group ? null : group))}
+        >
+          <Text style={[styles.menuGroupTriggerText, (isOpen || isActive) && styles.menuGroupTriggerTextActive]}>{label}</Text>
+          <Text style={[styles.menuGroupChevron, (isOpen || isActive) && styles.menuGroupChevronActive]}>{isOpen ? "-" : "+"}</Text>
+        </Pressable>
+        {isOpen ? <View style={styles.menuGroupItems}>{items.map((item) => renderMenuItem(item.label, item.section))}</View> : null}
+      </View>
+    );
+  }
 
   return (
     <View style={styles.stack}>
@@ -596,31 +631,48 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
       </View>
 
       <View style={styles.menuCard}>
-        <Text style={styles.eyebrow}>Workspace menu</Text>
-        <Text style={styles.menuTitle}>Admin navigation</Text>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.menuRow}>
-          {menuButton("Results", "history")}
-          {menuButton("Add questions", "author")}
-          {menuButton("Question Pool", "question-bank")}
-          {menuButton("Schedule test", "schedule")}
-          {menuButton("Self test", "self-test")}
-          {menuButton("Add poll question", "poll-questions")}
-          {menuButton("Schedule poll", "poll-schedule")}
-          {menuButton("Create groups", "create-groups")}
-          {menuButton("Manage groups", "manage-groups")}
-          {menuButton("Join groups", "join-groups")}
-        </ScrollView>
+        <View style={styles.menuHeaderRow}>
+          <View>
+            <Text style={styles.eyebrow}>Workspace menu</Text>
+            <Text style={styles.menuTitle}>Admin navigation</Text>
+          </View>
+          <Pressable style={styles.menuToggleButton} onPress={() => setIsMenuCollapsed((currentValue) => !currentValue)}>
+            <Text style={styles.menuToggleButtonText}>{isMenuCollapsed ? "Show menu" : "Hide menu"}</Text>
+          </Pressable>
+        </View>
+        {isMenuCollapsed ? (
+          <Text style={styles.metaText}>Navigation is hidden. Expand the menu to jump between sections.</Text>
+        ) : (
+          <View style={styles.menuStack}>
+            {renderMenuItem("Home", "history")}
+            {renderMenuGroup("Test", "test", [
+              { label: "Add Questions", section: "author" },
+              { label: "Question Pools", section: "question-bank" },
+              { label: "Schedule", section: "schedule" },
+              { label: "Self Test", section: "self-test" },
+            ])}
+            {renderMenuGroup("Poll", "poll", [
+              { label: "Add Questions", section: "poll-questions" },
+              { label: "Schedule", section: "poll-schedule" },
+            ])}
+            {renderMenuGroup("Groups", "groups", [
+              { label: "Create", section: "create-groups" },
+              { label: "Manage", section: "manage-groups" },
+              { label: "Join", section: "join-groups" },
+            ])}
+          </View>
+        )}
       </View>
 
       <MobileCollapsibleSection eyebrow="" isOpen={openSection === "history"} title="Results" onToggle={() => toggleSection("history")}>
-        <View style={styles.toggleRow}>
-          <Pressable style={[styles.pill, resultsMode === "tests" && styles.pillActive]} onPress={() => setResultsMode("tests")}><Text style={[styles.pillText, resultsMode === "tests" && styles.pillTextActive]}>Test results</Text></Pressable>
-          <Pressable style={[styles.pill, resultsMode === "polls" && styles.pillActive]} onPress={() => setResultsMode("polls")}><Text style={[styles.pillText, resultsMode === "polls" && styles.pillTextActive]}>Poll results</Text></Pressable>
+        <View style={styles.segmentedControl}>
+          <Pressable style={[styles.segmentedControlItem, resultsMode === "tests" && styles.segmentedControlItemActive]} onPress={() => setResultsMode("tests")}><Text style={[styles.segmentedControlText, resultsMode === "tests" && styles.segmentedControlTextActive]}>Test results</Text></Pressable>
+          <Pressable style={[styles.segmentedControlItem, resultsMode === "polls" && styles.segmentedControlItemActive]} onPress={() => setResultsMode("polls")}><Text style={[styles.segmentedControlText, resultsMode === "polls" && styles.segmentedControlTextActive]}>Poll results</Text></Pressable>
         </View>
-        <View style={styles.toggleRow}>
-          <Pressable style={[styles.pill, resultsFilter === "admin" && styles.pillActive]} onPress={() => setResultsFilter("admin")}><Text style={[styles.pillText, resultsFilter === "admin" && styles.pillTextActive]}>{resultsMode === "tests" ? "Scheduled as admin" : "Poll created as admin"}</Text></Pressable>
-          <Pressable style={[styles.pill, resultsFilter === "both" && styles.pillActive]} onPress={() => setResultsFilter("both")}><Text style={[styles.pillText, resultsFilter === "both" && styles.pillTextActive]}>Both</Text></Pressable>
-          <Pressable style={[styles.pill, resultsFilter === "participant" && styles.pillActive]} onPress={() => setResultsFilter("participant")}><Text style={[styles.pillText, resultsFilter === "participant" && styles.pillTextActive]}>{resultsMode === "tests" ? "Attended as participant" : "Poll responded as participant"}</Text></Pressable>
+        <View style={[styles.segmentedControl, styles.segmentedControlWide]}>
+          <Pressable style={[styles.segmentedControlItem, resultsFilter === "admin" && styles.segmentedControlItemActive]} onPress={() => setResultsFilter("admin")}><Text style={[styles.segmentedControlText, resultsFilter === "admin" && styles.segmentedControlTextActive]}>{resultsMode === "tests" ? "Scheduled as admin" : "Poll created as admin"}</Text></Pressable>
+          <Pressable style={[styles.segmentedControlItem, resultsFilter === "both" && styles.segmentedControlItemActive]} onPress={() => setResultsFilter("both")}><Text style={[styles.segmentedControlText, resultsFilter === "both" && styles.segmentedControlTextActive]}>Both</Text></Pressable>
+          <Pressable style={[styles.segmentedControlItem, resultsFilter === "participant" && styles.segmentedControlItemActive]} onPress={() => setResultsFilter("participant")}><Text style={[styles.segmentedControlText, resultsFilter === "participant" && styles.segmentedControlTextActive]}>{resultsMode === "tests" ? "Attended as participant" : "Poll responded as participant"}</Text></Pressable>
         </View>
 
         {resultsMode === "tests" ? (
@@ -978,15 +1030,101 @@ const styles = StyleSheet.create({
   menuButtonTextActive: {
     color: "#8e3f2c",
   },
+  menuGroupCard: {
+    gap: 8,
+  },
+  menuGroupChevron: {
+    color: "#8f8075",
+    fontSize: 20,
+    fontWeight: "700",
+    lineHeight: 20,
+  },
+  menuGroupChevronActive: {
+    color: "#8e3f2c",
+  },
+  menuGroupItems: {
+    gap: 8,
+    paddingLeft: 14,
+  },
+  menuGroupTrigger: {
+    alignItems: "center",
+    backgroundColor: "#fffaf5",
+    borderColor: "#d7c3af",
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: 48,
+    paddingHorizontal: 16,
+  },
+  menuGroupTriggerActive: {
+    backgroundColor: "rgba(180, 76, 47, 0.12)",
+    borderColor: "#b44c2f",
+  },
+  menuGroupTriggerText: {
+    color: "#231712",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  menuGroupTriggerTextActive: {
+    color: "#8e3f2c",
+  },
+  menuHeaderRow: {
+    alignItems: "flex-start",
+    flexDirection: "row",
+    gap: 12,
+    justifyContent: "space-between",
+  },
   menuCard: {
     backgroundColor: "rgba(255, 248, 240, 0.92)",
     borderRadius: 24,
     gap: 8,
     padding: 18,
   },
+  menuItem: {
+    alignItems: "center",
+    backgroundColor: "#fffaf5",
+    borderColor: "#d7c3af",
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: "row",
+    minHeight: 46,
+    paddingHorizontal: 16,
+  },
+  menuItemActive: {
+    backgroundColor: "rgba(180, 76, 47, 0.12)",
+    borderColor: "#b44c2f",
+  },
+  menuItemText: {
+    color: "#231712",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  menuItemTextActive: {
+    color: "#8e3f2c",
+  },
   menuRow: {
     gap: 10,
     paddingVertical: 4,
+  },
+  menuStack: {
+    gap: 12,
+    marginTop: 12,
+  },
+  menuToggleButton: {
+    alignItems: "center",
+    backgroundColor: "#fffaf5",
+    borderColor: "#d7c3af",
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 42,
+    paddingHorizontal: 14,
+  },
+  menuToggleButtonText: {
+    color: "#6d5a4e",
+    fontSize: 13,
+    fontWeight: "700",
   },
   menuTitle: {
     color: "#231712",
@@ -1020,6 +1158,40 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 10,
     marginTop: 12,
+  },
+  segmentedControl: {
+    backgroundColor: "rgba(255, 250, 245, 0.94)",
+    borderColor: "#d7c3af",
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    padding: 6,
+  },
+  segmentedControlItem: {
+    alignItems: "center",
+    borderRadius: 999,
+    flexGrow: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    minWidth: 94,
+    paddingHorizontal: 14,
+  },
+  segmentedControlItemActive: {
+    backgroundColor: "#b44c2f",
+  },
+  segmentedControlText: {
+    color: "#6d5a4e",
+    fontSize: 13,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  segmentedControlTextActive: {
+    color: "#ffffff",
+  },
+  segmentedControlWide: {
+    width: "100%",
   },
   optionInput: {
     flex: 1,

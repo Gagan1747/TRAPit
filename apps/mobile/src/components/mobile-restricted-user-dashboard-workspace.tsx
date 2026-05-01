@@ -15,6 +15,7 @@ function formatShortDateTime(value: string) {
 type UserDashboardSection = "history" | "join-groups";
 type ResultsMode = "polls" | "tests";
 type ResultsFilter = "admin" | "both" | "participant";
+type RestrictedMenuGroup = "groups" | "poll" | "test";
 
 type MobileRestrictedUserDashboardWorkspaceProps = {
   currentUserIdentifier: string | null;
@@ -31,7 +32,9 @@ export function MobileRestrictedUserDashboardWorkspace({ currentUserIdentifier }
   const [groupSearchFeedback, setGroupSearchFeedback] = useState<string | null>(null);
   const [groupSearchPhoneNumber, setGroupSearchPhoneNumber] = useState("");
   const [groupSearchResultIds, setGroupSearchResultIds] = useState<string[]>([]);
+  const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
   const [lockedFeatureOpen, setLockedFeatureOpen] = useState(false);
+  const [openMenuGroup, setOpenMenuGroup] = useState<RestrictedMenuGroup | null>(null);
   const [openSection, setOpenSection] = useState<UserDashboardSection | null>("history");
   const [resultsFilter, setResultsFilter] = useState<ResultsFilter>("both");
   const [resultsMode, setResultsMode] = useState<ResultsMode>("tests");
@@ -91,15 +94,46 @@ export function MobileRestrictedUserDashboardWorkspace({ currentUserIdentifier }
     }
   }
 
-  const menuButton = (label: string, section?: UserDashboardSection) => (
-    <Pressable
-      key={label}
-      style={[styles.menuButton, !section && styles.menuButtonDisabled, section && openSection === section && styles.menuButtonActive]}
-      onPress={section ? () => setOpenSection(section) : handleLockedFeature}
-    >
-      <Text style={[styles.menuButtonText, !section && styles.menuButtonTextDisabled, section && openSection === section && styles.menuButtonTextActive]}>{label}</Text>
-    </Pressable>
-  );
+  function isMenuGroupActive(group: RestrictedMenuGroup) {
+    return group === "groups" && openSection === "join-groups";
+  }
+
+  function renderMenuItem(label: string, section?: UserDashboardSection) {
+    const isActive = Boolean(section && openSection === section);
+    const isDisabled = !section;
+
+    return (
+      <Pressable
+        key={`${label}-${section ?? "disabled"}`}
+        style={[styles.menuItem, isDisabled && styles.menuItemDisabled, isActive && styles.menuItemActive]}
+        onPress={section ? () => setOpenSection(section) : handleLockedFeature}
+      >
+        <Text style={[styles.menuItemText, isDisabled && styles.menuItemTextDisabled, isActive && styles.menuItemTextActive]}>{label}</Text>
+      </Pressable>
+    );
+  }
+
+  function renderMenuGroup(
+    label: string,
+    group: RestrictedMenuGroup,
+    items: Array<{ label: string; section?: UserDashboardSection }>,
+  ) {
+    const isOpen = openMenuGroup === group;
+    const isActive = isMenuGroupActive(group);
+
+    return (
+      <View key={group} style={styles.menuGroupCard}>
+        <Pressable
+          style={[styles.menuGroupTrigger, (isOpen || isActive) && styles.menuGroupTriggerActive]}
+          onPress={() => setOpenMenuGroup((currentGroup) => (currentGroup === group ? null : group))}
+        >
+          <Text style={[styles.menuGroupTriggerText, (isOpen || isActive) && styles.menuGroupTriggerTextActive]}>{label}</Text>
+          <Text style={[styles.menuGroupChevron, (isOpen || isActive) && styles.menuGroupChevronActive]}>{isOpen ? "-" : "+"}</Text>
+        </Pressable>
+        {isOpen ? <View style={styles.menuGroupItems}>{items.map((item) => renderMenuItem(item.label, item.section))}</View> : null}
+      </View>
+    );
+  }
 
   return (
     <View style={styles.stack}>
@@ -115,31 +149,48 @@ export function MobileRestrictedUserDashboardWorkspace({ currentUserIdentifier }
       </View>
 
       <View style={styles.menuCard}>
-        <Text style={styles.eyebrow}>Workspace menu</Text>
-        <Text style={styles.menuTitle}>User navigation</Text>
-        <View style={styles.menuGrid}>
-          {menuButton("Test and poll results", "history")}
-          {menuButton("Add questions")}
-          {menuButton("Question Pool")}
-          {menuButton("Schedule test")}
-          {menuButton("Self test")}
-          {menuButton("Add poll question")}
-          {menuButton("Schedule poll")}
-          {menuButton("Create groups")}
-          {menuButton("Manage groups")}
-          {menuButton("Join groups", "join-groups")}
+        <View style={styles.menuHeaderRow}>
+          <View>
+            <Text style={styles.eyebrow}>Workspace menu</Text>
+            <Text style={styles.menuTitle}>User navigation</Text>
+          </View>
+          <Pressable style={styles.menuToggleButton} onPress={() => setIsMenuCollapsed((currentValue) => !currentValue)}>
+            <Text style={styles.menuToggleButtonText}>{isMenuCollapsed ? "Show menu" : "Hide menu"}</Text>
+          </Pressable>
         </View>
+        {isMenuCollapsed ? (
+          <Text style={styles.metaText}>Navigation is hidden. Expand the menu to switch sections.</Text>
+        ) : (
+          <View style={styles.menuStack}>
+            {renderMenuItem("Home", "history")}
+            {renderMenuGroup("Test", "test", [
+              { label: "Add Questions" },
+              { label: "Question Pools" },
+              { label: "Schedule" },
+              { label: "Self Test" },
+            ])}
+            {renderMenuGroup("Poll", "poll", [
+              { label: "Add Questions" },
+              { label: "Schedule" },
+            ])}
+            {renderMenuGroup("Groups", "groups", [
+              { label: "Create" },
+              { label: "Manage" },
+              { label: "Join", section: "join-groups" },
+            ])}
+          </View>
+        )}
       </View>
 
       <MobileCollapsibleSection eyebrow="" isOpen={openSection === "history"} title="Results" onToggle={() => toggleSection("history")}>
-        <View style={styles.toggleRow}>
-          <Pressable style={[styles.pill, resultsMode === "tests" && styles.pillActive]} onPress={() => setResultsMode("tests")}><Text style={[styles.pillText, resultsMode === "tests" && styles.pillTextActive]}>Test results</Text></Pressable>
-          <Pressable style={[styles.pill, resultsMode === "polls" && styles.pillActive]} onPress={() => setResultsMode("polls")}><Text style={[styles.pillText, resultsMode === "polls" && styles.pillTextActive]}>Poll results</Text></Pressable>
+        <View style={styles.segmentedControl}>
+          <Pressable style={[styles.segmentedControlItem, resultsMode === "tests" && styles.segmentedControlItemActive]} onPress={() => setResultsMode("tests")}><Text style={[styles.segmentedControlText, resultsMode === "tests" && styles.segmentedControlTextActive]}>Test results</Text></Pressable>
+          <Pressable style={[styles.segmentedControlItem, resultsMode === "polls" && styles.segmentedControlItemActive]} onPress={() => setResultsMode("polls")}><Text style={[styles.segmentedControlText, resultsMode === "polls" && styles.segmentedControlTextActive]}>Poll results</Text></Pressable>
         </View>
-        <View style={styles.toggleRow}>
-          <Pressable style={[styles.pill, resultsFilter === "admin" && styles.pillActive]} onPress={() => setResultsFilter("admin")}><Text style={[styles.pillText, resultsFilter === "admin" && styles.pillTextActive]}>{resultsMode === "tests" ? "Scheduled as admin" : "Poll created as admin"}</Text></Pressable>
-          <Pressable style={[styles.pill, resultsFilter === "both" && styles.pillActive]} onPress={() => setResultsFilter("both")}><Text style={[styles.pillText, resultsFilter === "both" && styles.pillTextActive]}>Both</Text></Pressable>
-          <Pressable style={[styles.pill, resultsFilter === "participant" && styles.pillActive]} onPress={() => setResultsFilter("participant")}><Text style={[styles.pillText, resultsFilter === "participant" && styles.pillTextActive]}>{resultsMode === "tests" ? "Attended as participant" : "Poll responded as participant"}</Text></Pressable>
+        <View style={[styles.segmentedControl, styles.segmentedControlWide]}>
+          <Pressable style={[styles.segmentedControlItem, resultsFilter === "admin" && styles.segmentedControlItemActive]} onPress={() => setResultsFilter("admin")}><Text style={[styles.segmentedControlText, resultsFilter === "admin" && styles.segmentedControlTextActive]}>{resultsMode === "tests" ? "Scheduled as admin" : "Poll created as admin"}</Text></Pressable>
+          <Pressable style={[styles.segmentedControlItem, resultsFilter === "both" && styles.segmentedControlItemActive]} onPress={() => setResultsFilter("both")}><Text style={[styles.segmentedControlText, resultsFilter === "both" && styles.segmentedControlTextActive]}>Both</Text></Pressable>
+          <Pressable style={[styles.segmentedControlItem, resultsFilter === "participant" && styles.segmentedControlItemActive]} onPress={() => setResultsFilter("participant")}><Text style={[styles.segmentedControlText, resultsFilter === "participant" && styles.segmentedControlTextActive]}>{resultsMode === "tests" ? "Attended as participant" : "Poll responded as participant"}</Text></Pressable>
         </View>
 
         {resultsMode === "tests" ? (
@@ -227,8 +278,26 @@ const styles = StyleSheet.create({
   menuButtonText: { color: "#6d5a4e", fontWeight: "600" },
   menuButtonTextActive: { color: "#8e3f2c" },
   menuButtonTextDisabled: { color: "#8f8075" },
+  menuGroupCard: { gap: 8 },
+  menuGroupChevron: { color: "#8f8075", fontSize: 20, fontWeight: "700", lineHeight: 20 },
+  menuGroupChevronActive: { color: "#8e3f2c" },
+  menuGroupItems: { gap: 8, paddingLeft: 14 },
+  menuGroupTrigger: { alignItems: "center", backgroundColor: "#fffaf5", borderColor: "#d7c3af", borderRadius: 18, borderWidth: 1, flexDirection: "row", justifyContent: "space-between", minHeight: 48, paddingHorizontal: 16 },
+  menuGroupTriggerActive: { backgroundColor: "rgba(180, 76, 47, 0.12)", borderColor: "#b44c2f" },
+  menuGroupTriggerText: { color: "#231712", fontSize: 15, fontWeight: "700" },
+  menuGroupTriggerTextActive: { color: "#8e3f2c" },
+  menuHeaderRow: { alignItems: "flex-start", flexDirection: "row", gap: 12, justifyContent: "space-between" },
   menuCard: { backgroundColor: "rgba(255, 248, 240, 0.92)", borderRadius: 24, gap: 8, padding: 18 },
+  menuItem: { alignItems: "center", backgroundColor: "#fffaf5", borderColor: "#d7c3af", borderRadius: 16, borderWidth: 1, flexDirection: "row", minHeight: 46, paddingHorizontal: 16 },
+  menuItemActive: { backgroundColor: "rgba(180, 76, 47, 0.12)", borderColor: "#b44c2f" },
+  menuItemDisabled: { opacity: 0.6 },
+  menuItemText: { color: "#231712", fontSize: 14, fontWeight: "700" },
+  menuItemTextActive: { color: "#8e3f2c" },
+  menuItemTextDisabled: { color: "#8f8075" },
   menuGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  menuStack: { gap: 12, marginTop: 12 },
+  menuToggleButton: { alignItems: "center", backgroundColor: "#fffaf5", borderColor: "#d7c3af", borderRadius: 999, borderWidth: 1, justifyContent: "center", minHeight: 42, paddingHorizontal: 14 },
+  menuToggleButtonText: { color: "#6d5a4e", fontSize: 13, fontWeight: "700" },
   menuTitle: { color: "#231712", fontSize: 22, fontWeight: "700" },
   metaText: { color: "#6d5a4e", fontSize: 14, lineHeight: 20 },
   metricCard: { backgroundColor: "#fffaf5", borderColor: "#d7c3af", borderRadius: 16, borderWidth: 1, minWidth: 96, padding: 12 },
@@ -237,6 +306,12 @@ const styles = StyleSheet.create({
   metricWrap: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 12 },
   modalCard: { backgroundColor: "rgba(255, 248, 240, 0.98)", borderRadius: 24, gap: 12, padding: 20, width: "86%" },
   modalOverlay: { alignItems: "center", backgroundColor: "rgba(28, 20, 15, 0.28)", flex: 1, justifyContent: "center", padding: 24 },
+  segmentedControl: { backgroundColor: "rgba(255, 250, 245, 0.94)", borderColor: "#d7c3af", borderRadius: 999, borderWidth: 1, flexDirection: "row", flexWrap: "wrap", gap: 6, padding: 6 },
+  segmentedControlItem: { alignItems: "center", borderRadius: 999, flexGrow: 1, justifyContent: "center", minHeight: 44, minWidth: 94, paddingHorizontal: 14 },
+  segmentedControlItemActive: { backgroundColor: "#b44c2f" },
+  segmentedControlText: { color: "#6d5a4e", fontSize: 13, fontWeight: "700", textAlign: "center" },
+  segmentedControlTextActive: { color: "#ffffff" },
+  segmentedControlWide: { width: "100%" },
   pill: { backgroundColor: "#fffaf5", borderColor: "#d7c3af", borderRadius: 999, borderWidth: 1, minHeight: 40, justifyContent: "center", paddingHorizontal: 14 },
   pillActive: { backgroundColor: "#b44c2f", borderColor: "#b44c2f" },
   pillText: { color: "#6d5a4e", fontSize: 13, fontWeight: "700" },

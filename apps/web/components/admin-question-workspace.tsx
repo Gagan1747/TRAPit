@@ -169,6 +169,8 @@ type AdminWorkspaceSection =
   | "schedule"
   | "self-test";
 
+type AdminMenuGroup = "groups" | "poll" | "test";
+
 type AdminTestListFilter = "admin" | "both" | "participant";
 
 type AdminResultsMode = "polls" | "tests";
@@ -462,6 +464,8 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
   const [reviewByTestId, setReviewByTestId] = useState<Record<string, AdminTestReviewResponse>>({});
   const [reviewLoadingByTestId, setReviewLoadingByTestId] = useState<Record<string, boolean>>({});
   const [resultsMode, setResultsMode] = useState<AdminResultsMode>("tests");
+  const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
+  const [openMenuGroup, setOpenMenuGroup] = useState<AdminMenuGroup | null>(null);
   const [scheduleDurationMinutes, setScheduleDurationMinutes] = useState("30");
   const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
   const [scheduleParticipantGroupIds, setScheduleParticipantGroupIds] = useState<string[]>([]);
@@ -762,6 +766,55 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
 
   function toggleQuestionSelection(questionId: string) {
     setSelectedQuestionIds((currentIds) => toggleArrayValue(currentIds, questionId));
+  }
+
+  function isMenuGroupActive(group: AdminMenuGroup) {
+    if (group === "test") {
+      return openSection === "author" || openSection === "question-bank" || openSection === "schedule" || openSection === "self-test";
+    }
+
+    if (group === "poll") {
+      return openSection === "poll-questions" || openSection === "poll-schedule";
+    }
+
+    return openSection === "create-groups" || openSection === "manage-groups" || openSection === "join-groups";
+  }
+
+  function renderMenuItem(label: string, section: AdminWorkspaceSection) {
+    return (
+      <button
+        key={section}
+        className={`admin-menu-item${openSection === section ? " is-active" : ""}`}
+        type="button"
+        onClick={() => setOpenSection(section)}
+      >
+        {label}
+      </button>
+    );
+  }
+
+  function renderMenuGroup(
+    label: string,
+    group: AdminMenuGroup,
+    items: Array<{ label: string; section: AdminWorkspaceSection }>,
+  ) {
+    const isOpen = openMenuGroup === group;
+    const isActive = isMenuGroupActive(group);
+
+    return (
+      <div className="admin-menu-group" key={group}>
+        <button
+          aria-expanded={isOpen}
+          className={`admin-menu-group-toggle${isOpen || isActive ? " is-active" : ""}`}
+          type="button"
+          onClick={() => setOpenMenuGroup((currentGroup) => (currentGroup === group ? null : group))}
+        >
+          <span>{label}</span>
+          <span className="admin-menu-group-toggle-symbol">{isOpen ? "-" : "+"}</span>
+        </button>
+        {isOpen ? <div className="admin-menu-substack">{items.map((item) => renderMenuItem(item.label, item.section))}</div> : null}
+      </div>
+    );
   }
 
   function handleToggleSelectAllQuestions(questionIds: string[]) {
@@ -1584,106 +1637,47 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
         </div>
       </section>
 
-      <div className="admin-shell">
-        <aside className="admin-menu panel workspace-card">
+      <div className={`admin-shell${isMenuCollapsed ? " is-menu-collapsed" : ""}`}>
+        <aside className={`admin-menu panel workspace-card${isMenuCollapsed ? " is-collapsed" : ""}`}>
           <div className="section-head compact-head">
             <div>
               <p className="eyebrow">Workspace menu</p>
               <h2 className="section-title">Admin navigation</h2>
             </div>
+            <button
+              aria-expanded={!isMenuCollapsed}
+              className="button-secondary small-button admin-menu-toggle"
+              type="button"
+              onClick={() => setIsMenuCollapsed((currentValue) => !currentValue)}
+            >
+              {isMenuCollapsed ? "Show menu" : "Hide menu"}
+            </button>
           </div>
 
+          {isMenuCollapsed ? (
+            <p className="muted-text admin-menu-collapsed-copy">Navigation is hidden. Expand the menu to jump between sections.</p>
+          ) : (
           <div className="admin-menu-stack">
             <div className="admin-menu-group">
-              <p className="admin-menu-label">Home</p>
-              <button
-                className={`admin-menu-item${openSection === "history" ? " is-active" : ""}`}
-                type="button"
-                onClick={() => setOpenSection("history")}
-              >
-                Tests and results
-              </button>
+              {renderMenuItem("Home", "history")}
             </div>
-
-            <div className="admin-menu-group">
-              <p className="admin-menu-label">Question</p>
-              <button
-                className={`admin-menu-item${openSection === "author" ? " is-active" : ""}`}
-                type="button"
-                onClick={() => setOpenSection("author")}
-              >
-                Add questions
-              </button>
-              <button
-                className={`admin-menu-item${openSection === "question-bank" ? " is-active" : ""}`}
-                type="button"
-                onClick={() => setOpenSection("question-bank")}
-              >
-                Question Pool
-              </button>
-            </div>
-
-            <div className="admin-menu-group">
-              <p className="admin-menu-label">Test</p>
-              <button
-                className={`admin-menu-item${openSection === "schedule" ? " is-active" : ""}`}
-                type="button"
-                onClick={() => setOpenSection("schedule")}
-              >
-                Schedule test
-              </button>
-              <button
-                className={`admin-menu-item${openSection === "self-test" ? " is-active" : ""}`}
-                type="button"
-                onClick={() => setOpenSection("self-test")}
-              >
-                Self test
-              </button>
-            </div>
-
-            <div className="admin-menu-group">
-              <p className="admin-menu-label">Poll</p>
-              <button
-                className={`admin-menu-item${openSection === "poll-questions" ? " is-active" : ""}`}
-                type="button"
-                onClick={() => setOpenSection("poll-questions")}
-              >
-                Add poll question
-              </button>
-              <button
-                className={`admin-menu-item${openSection === "poll-schedule" ? " is-active" : ""}`}
-                type="button"
-                onClick={() => setOpenSection("poll-schedule")}
-              >
-                Schedule poll
-              </button>
-            </div>
-
-            <div className="admin-menu-group">
-              <p className="admin-menu-label">Groups</p>
-              <button
-                className={`admin-menu-item${openSection === "create-groups" ? " is-active" : ""}`}
-                type="button"
-                onClick={() => setOpenSection("create-groups")}
-              >
-                Create groups
-              </button>
-              <button
-                className={`admin-menu-item${openSection === "manage-groups" ? " is-active" : ""}`}
-                type="button"
-                onClick={() => setOpenSection("manage-groups")}
-              >
-                Manage groups
-              </button>
-              <button
-                className={`admin-menu-item${openSection === "join-groups" ? " is-active" : ""}`}
-                type="button"
-                onClick={() => setOpenSection("join-groups")}
-              >
-                Join groups
-              </button>
-            </div>
+            {renderMenuGroup("Test", "test", [
+              { label: "Add Questions", section: "author" },
+              { label: "Question Pools", section: "question-bank" },
+              { label: "Schedule", section: "schedule" },
+              { label: "Self Test", section: "self-test" },
+            ])}
+            {renderMenuGroup("Poll", "poll", [
+              { label: "Add Questions", section: "poll-questions" },
+              { label: "Schedule", section: "poll-schedule" },
+            ])}
+            {renderMenuGroup("Groups", "groups", [
+              { label: "Create", section: "create-groups" },
+              { label: "Manage", section: "manage-groups" },
+              { label: "Join", section: "join-groups" },
+            ])}
           </div>
+          )}
         </aside>
 
         <div className="admin-main-column">
@@ -2847,16 +2841,18 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
         onToggle={() => toggleSection("history")}
       >
         <div className="form-stack">
-          <div className="inline-actions">
+          <div aria-label="Results mode" className="segmented-control" role="group">
             <button
-              className={resultsMode === "tests" ? "button" : "button-secondary"}
+              aria-pressed={resultsMode === "tests"}
+              className={`segmented-control-item${resultsMode === "tests" ? " is-active" : ""}`}
               type="button"
               onClick={() => setResultsMode("tests")}
             >
               Test results
             </button>
             <button
-              className={resultsMode === "polls" ? "button" : "button-secondary"}
+              aria-pressed={resultsMode === "polls"}
+              className={`segmented-control-item${resultsMode === "polls" ? " is-active" : ""}`}
               type="button"
               onClick={() => setResultsMode("polls")}
             >
@@ -2864,23 +2860,26 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
             </button>
           </div>
 
-          <div className="inline-actions">
+          <div aria-label="Results scope" className="segmented-control segmented-control-wide" role="group">
             <button
-              className={testListFilter === "admin" ? "button" : "button-secondary"}
+              aria-pressed={testListFilter === "admin"}
+              className={`segmented-control-item${testListFilter === "admin" ? " is-active" : ""}`}
               type="button"
               onClick={() => setTestListFilter("admin")}
             >
               {resultsMode === "tests" ? "Scheduled as admin" : "Poll created as admin"}
             </button>
             <button
-              className={testListFilter === "both" ? "button" : "button-secondary"}
+              aria-pressed={testListFilter === "both"}
+              className={`segmented-control-item${testListFilter === "both" ? " is-active" : ""}`}
               type="button"
               onClick={() => setTestListFilter("both")}
             >
               Both
             </button>
             <button
-              className={testListFilter === "participant" ? "button" : "button-secondary"}
+              aria-pressed={testListFilter === "participant"}
+              className={`segmented-control-item${testListFilter === "participant" ? " is-active" : ""}`}
               type="button"
               onClick={() => setTestListFilter("participant")}
             >

@@ -60,6 +60,7 @@ type RestrictedUserDashboardWorkspaceProps = {
 };
 
 type UserDashboardSection = "history" | "join-groups";
+type RestrictedMenuGroup = "groups" | "poll" | "test";
 type ResultsMode = "polls" | "tests";
 type ResultsFilter = "admin" | "both" | "participant";
 
@@ -97,6 +98,8 @@ export function RestrictedUserDashboardWorkspace({
   const [isSendingGroupRequest, setIsSendingGroupRequest] = useState<string | null>(null);
   const [lockedFeatureMessage, setLockedFeatureMessage] = useState<string | null>(null);
   const [openSection, setOpenSection] = useState<UserDashboardSection | null>("history");
+  const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
+  const [openMenuGroup, setOpenMenuGroup] = useState<RestrictedMenuGroup | null>(null);
   const [resultFilter, setResultFilter] = useState<ResultsFilter>("both");
   const [resultsMode, setResultsMode] = useState<ResultsMode>("tests");
   const [reviewByTestId, setReviewByTestId] = useState<Record<string, UserTestReviewResponse>>({});
@@ -173,6 +176,49 @@ export function RestrictedUserDashboardWorkspace({
 
   function openLockedFeatureModal() {
     setLockedFeatureMessage("Get TRAPit Pro to access this feature");
+  }
+
+  function isMenuGroupActive(group: RestrictedMenuGroup) {
+    return group === "groups" && openSection === "join-groups";
+  }
+
+  function renderMenuItem(label: string, section?: UserDashboardSection) {
+    const isActive = Boolean(section && openSection === section);
+
+    return (
+      <button
+        key={`${label}-${section ?? "disabled"}`}
+        className={`admin-menu-item${isActive ? " is-active" : ""}${section ? "" : " is-disabled"}`}
+        type="button"
+        onClick={section ? () => setOpenSection(section) : openLockedFeatureModal}
+      >
+        {label}
+      </button>
+    );
+  }
+
+  function renderMenuGroup(
+    label: string,
+    group: RestrictedMenuGroup,
+    items: Array<{ label: string; section?: UserDashboardSection }>,
+  ) {
+    const isOpen = openMenuGroup === group;
+    const isActive = isMenuGroupActive(group);
+
+    return (
+      <div className="admin-menu-group" key={group}>
+        <button
+          aria-expanded={isOpen}
+          className={`admin-menu-group-toggle${isOpen || isActive ? " is-active" : ""}`}
+          type="button"
+          onClick={() => setOpenMenuGroup((currentGroup) => (currentGroup === group ? null : group))}
+        >
+          <span>{label}</span>
+          <span className="admin-menu-group-toggle-symbol">{isOpen ? "-" : "+"}</span>
+        </button>
+        {isOpen ? <div className="admin-menu-substack">{items.map((item) => renderMenuItem(item.label, item.section))}</div> : null}
+      </div>
+    );
   }
 
   function getLatestGroupRequest(groupId: string) {
@@ -313,74 +359,47 @@ export function RestrictedUserDashboardWorkspace({
         </div>
       </section>
 
-      <div className="admin-shell">
-        <aside className="admin-menu panel workspace-card">
+      <div className={`admin-shell${isMenuCollapsed ? " is-menu-collapsed" : ""}`}>
+        <aside className={`admin-menu panel workspace-card${isMenuCollapsed ? " is-collapsed" : ""}`}>
           <div className="section-head compact-head">
             <div>
               <p className="eyebrow">Workspace menu</p>
               <h2 className="section-title">User navigation</h2>
             </div>
+            <button
+              aria-expanded={!isMenuCollapsed}
+              className="button-secondary small-button admin-menu-toggle"
+              type="button"
+              onClick={() => setIsMenuCollapsed((currentValue) => !currentValue)}
+            >
+              {isMenuCollapsed ? "Show menu" : "Hide menu"}
+            </button>
           </div>
 
+          {isMenuCollapsed ? (
+            <p className="muted-text admin-menu-collapsed-copy">Navigation is hidden. Expand the menu to switch sections.</p>
+          ) : (
           <div className="admin-menu-stack">
             <div className="admin-menu-group">
-              <p className="admin-menu-label">Home</p>
-              <button
-                className={`admin-menu-item${openSection === "history" ? " is-active" : ""}`}
-                type="button"
-                onClick={() => setOpenSection("history")}
-              >
-                Test and poll results
-              </button>
+              {renderMenuItem("Home", "history")}
             </div>
-
-            <div className="admin-menu-group">
-              <p className="admin-menu-label">Question</p>
-              <button className="admin-menu-item is-disabled" type="button" onClick={openLockedFeatureModal}>
-                Add questions
-              </button>
-              <button className="admin-menu-item is-disabled" type="button" onClick={openLockedFeatureModal}>
-                Question Pool
-              </button>
-            </div>
-
-            <div className="admin-menu-group">
-              <p className="admin-menu-label">Test</p>
-              <button className="admin-menu-item is-disabled" type="button" onClick={openLockedFeatureModal}>
-                Schedule test
-              </button>
-              <button className="admin-menu-item is-disabled" type="button" onClick={openLockedFeatureModal}>
-                Self test
-              </button>
-            </div>
-
-            <div className="admin-menu-group">
-              <p className="admin-menu-label">Poll</p>
-              <button className="admin-menu-item is-disabled" type="button" onClick={openLockedFeatureModal}>
-                Add poll question
-              </button>
-              <button className="admin-menu-item is-disabled" type="button" onClick={openLockedFeatureModal}>
-                Schedule poll
-              </button>
-            </div>
-
-            <div className="admin-menu-group">
-              <p className="admin-menu-label">Groups</p>
-              <button className="admin-menu-item is-disabled" type="button" onClick={openLockedFeatureModal}>
-                Create groups
-              </button>
-              <button className="admin-menu-item is-disabled" type="button" onClick={openLockedFeatureModal}>
-                Manage groups
-              </button>
-              <button
-                className={`admin-menu-item${openSection === "join-groups" ? " is-active" : ""}`}
-                type="button"
-                onClick={() => setOpenSection("join-groups")}
-              >
-                Join groups
-              </button>
-            </div>
+            {renderMenuGroup("Test", "test", [
+              { label: "Add Questions" },
+              { label: "Question Pools" },
+              { label: "Schedule" },
+              { label: "Self Test" },
+            ])}
+            {renderMenuGroup("Poll", "poll", [
+              { label: "Add Questions" },
+              { label: "Schedule" },
+            ])}
+            {renderMenuGroup("Groups", "groups", [
+              { label: "Create" },
+              { label: "Manage" },
+              { label: "Join", section: "join-groups" },
+            ])}
           </div>
+          )}
         </aside>
 
         <div className="admin-main-column">
@@ -412,16 +431,18 @@ export function RestrictedUserDashboardWorkspace({
               {feedback ? <p className="muted-text">{feedback}</p> : null}
               {isLoading ? <p className="muted-text">Loading your dashboard...</p> : null}
 
-              <div className="inline-actions">
+              <div aria-label="Results mode" className="segmented-control" role="group">
                 <button
-                  className={resultsMode === "tests" ? "button" : "button-secondary"}
+                  aria-pressed={resultsMode === "tests"}
+                  className={`segmented-control-item${resultsMode === "tests" ? " is-active" : ""}`}
                   type="button"
                   onClick={() => setResultsMode("tests")}
                 >
                   Test results
                 </button>
                 <button
-                  className={resultsMode === "polls" ? "button" : "button-secondary"}
+                  aria-pressed={resultsMode === "polls"}
+                  className={`segmented-control-item${resultsMode === "polls" ? " is-active" : ""}`}
                   type="button"
                   onClick={() => setResultsMode("polls")}
                 >
@@ -429,23 +450,26 @@ export function RestrictedUserDashboardWorkspace({
                 </button>
               </div>
 
-              <div className="inline-actions">
+              <div aria-label="Results scope" className="segmented-control segmented-control-wide" role="group">
                 <button
-                  className={resultFilter === "admin" ? "button" : "button-secondary"}
+                  aria-pressed={resultFilter === "admin"}
+                  className={`segmented-control-item${resultFilter === "admin" ? " is-active" : ""}`}
                   type="button"
                   onClick={() => setResultFilter("admin")}
                 >
                   {resultsMode === "tests" ? "Scheduled as admin" : "Poll created as admin"}
                 </button>
                 <button
-                  className={resultFilter === "both" ? "button" : "button-secondary"}
+                  aria-pressed={resultFilter === "both"}
+                  className={`segmented-control-item${resultFilter === "both" ? " is-active" : ""}`}
                   type="button"
                   onClick={() => setResultFilter("both")}
                 >
                   Both
                 </button>
                 <button
-                  className={resultFilter === "participant" ? "button" : "button-secondary"}
+                  aria-pressed={resultFilter === "participant"}
+                  className={`segmented-control-item${resultFilter === "participant" ? " is-active" : ""}`}
                   type="button"
                   onClick={() => setResultFilter("participant")}
                 >
