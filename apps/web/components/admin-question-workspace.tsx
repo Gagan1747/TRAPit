@@ -3179,6 +3179,28 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                       </p>
                     ) : null}
                     {resolvedPoll.shareCode ? <p className="muted-text">Access code: {resolvedPoll.shareCode}</p> : null}
+                    {resolvedPoll.shareCode ? (
+                      <p className="muted-text">
+                        URL: <a href={getPollAccessUrl(resolvedPoll.shareCode)} target="_blank" rel="noreferrer">{getPollAccessUrl(resolvedPoll.shareCode)}</a>
+                      </p>
+                    ) : null}
+                    {resolvedPoll.shareCode ? (
+                      <div className="form-stack">
+                        <div className="inline-actions">
+                          <a
+                            className="button-secondary small-button"
+                            href={getPollAccessUrl(resolvedPoll.shareCode)}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open poll page
+                          </a>
+                        </div>
+                        {pollQrCodes[resolvedPoll.id] ? (
+                          <img alt={`QR code for ${resolvedPoll.title}`} height={180} src={pollQrCodes[resolvedPoll.id]} width={180} />
+                        ) : null}
+                      </div>
+                    ) : null}
                     {poll.scheduledPoll ? (
                       resolvedPoll.status === "completed" ? (
                         <p className="muted-text">Poll response summaries will appear here when poll participation is recorded.</p>
