@@ -850,7 +850,7 @@ export async function createScheduledPoll(input: {
         }
 
         const timestamp = new Date().toISOString();
-        const shareCode = input.generateQrCode && input.participantType === "open"
+        const shareCode = input.participantType === "open"
           ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
           : null;
         const scheduledPoll: ScheduledPoll = {
@@ -914,7 +914,7 @@ export async function createScheduledPoll(input: {
   }
 
   const timestamp = new Date().toISOString();
-  const shareCode = input.generateQrCode && input.participantType === "open"
+  const shareCode = input.participantType === "open"
     ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
     : null;
   const scheduledPoll: ScheduledPoll = {

@@ -1212,8 +1212,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
           body: JSON.stringify({
             anonymous: pollScheduleAnonymous,
             endsAt,
-            generateQrCode:
-              pollScheduleParticipantType === "open" && pollScheduleGenerateQrCode,
+            generateQrCode: pollScheduleParticipantType === "open",
             mode: "schedule-poll",
             participantGroupIds:
               pollScheduleParticipantType === "registered" ? pollScheduleGroupIds : [],
@@ -2802,17 +2801,13 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                 />
                 <span>Collect responses anonymously</span>
               </label>
-              {pollScheduleParticipantType === "open" ? (
-                <label className="role-option">
-                  <input
-                    checked={pollScheduleGenerateQrCode}
-                    type="checkbox"
-                    onChange={(event) => setPollScheduleGenerateQrCode(event.target.checked)}
-                  />
-                  <span>Generate QR code</span>
-                </label>
-              ) : null}
             </div>
+
+            {pollScheduleParticipantType === "open" ? (
+              <p className="muted-text">
+                Open polls always generate a public URL and QR code so participants can respond.
+              </p>
+            ) : null}
 
             {pollFeedback ? <p className="muted-text">{pollFeedback}</p> : null}
 

@@ -80,6 +80,10 @@ async function readJson<T>(response: Response): Promise<T> {
   return payload;
 }
 
+function getPollAccessPath(shareCode: string) {
+  return `/poll/${encodeURIComponent(shareCode)}`;
+}
+
 export function RestrictedUserDashboardWorkspace({
   authConfigured,
   defaultParticipantIdentifier,
@@ -605,10 +609,19 @@ export function RestrictedUserDashboardWorkspace({
                       <p className="muted-text">Participant type: {poll.participantType === "registered" ? "Registered only" : "Open to all"}</p>
                       <p className="muted-text">Anonymity: {poll.anonymous ? "Anonymous" : "Named"}</p>
                       {poll.shareCode ? <p className="muted-text">Access code: {poll.shareCode}</p> : null}
+                      {poll.shareCode ? (
+                        <div className="inline-actions">
+                          <a className="button-secondary small-button" href={getPollAccessPath(poll.shareCode)}>
+                            {poll.status === "live" ? "Respond to poll" : "Open poll page"}
+                          </a>
+                        </div>
+                      ) : null}
                       {poll.status === "completed" ? (
                         <p className="muted-text">Poll response summaries will appear here when participant poll submissions are recorded.</p>
                       ) : poll.status === "live" ? (
-                        <p className="muted-text">This poll is live now.</p>
+                        <p className="muted-text">
+                          {poll.shareCode ? "This poll is live now. Open the poll page to answer the questions." : "This poll is live now."}
+                        </p>
                       ) : (
                         <p className="muted-text">This poll has not started yet.</p>
                       )}

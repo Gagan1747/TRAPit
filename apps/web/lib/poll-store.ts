@@ -366,7 +366,7 @@ export async function createScheduledPollInBackend(input: CreateScheduledPollInp
     participantGroupIds: dedupe(input.participantGroupIds),
     participantType: input.participantType,
     questionIds,
-    shareCode: input.generateQrCode && input.participantType === "open"
+    shareCode: input.participantType === "open"
       ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
       : null,
     startsAt: input.startsAt,
