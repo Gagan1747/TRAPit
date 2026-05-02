@@ -48,6 +48,7 @@ export type QuestionPool = {
 export type PollQuestionDraft = {
   options: string[];
   prompt: string;
+  topic: string;
 };
 
 export type PersistentPollQuestion = PollQuestionDraft & {
@@ -63,7 +64,7 @@ export type ScheduledPoll = {
   anonymous: boolean;
   createdAt: string;
   createdBy: string | null;
-  durationMinutes: number;
+  endsAt: string;
   id: string;
   participantGroupIds: string[];
   participantType: PollParticipantType;
@@ -73,6 +74,16 @@ export type ScheduledPoll = {
   status: ScheduledTestStatus;
   title: string;
   updatedAt: string;
+};
+
+export type PollAttempt = {
+  answers: Record<string, number | undefined>;
+  completedAt: string;
+  id: string;
+  participantName?: string;
+  pollId: string;
+  startedAt: string;
+  userId: string;
 };
 
 export type ParticipantProfile = {
@@ -177,6 +188,7 @@ export type TestLeaderboard = {
 export type TestingWorkspaceState = {
   attempts: TestAttempt[];
   groupJoinRequests: GroupJoinRequest[];
+  pollAttempts: PollAttempt[];
   participantGroups: ParticipantGroup[];
   participants: ParticipantProfile[];
   pollQuestions: PersistentPollQuestion[];
@@ -417,6 +429,7 @@ export function normalizePollQuestionDraft(draft: PollQuestionDraft): PollQuesti
   return {
     options: draft.options.map((option) => option.trim()),
     prompt: draft.prompt.trim(),
+    topic: draft.topic.trim(),
   };
 }
 
@@ -453,8 +466,26 @@ export function createPersistentPollQuestion(
     id: createPollQuestionId(),
     options: normalized.options,
     prompt: normalized.prompt,
+    topic: normalized.topic,
     updatedAt: timestamp,
   };
+}
+
+export function resolveScheduledPollStatus(
+  poll: Pick<ScheduledPoll, "endsAt" | "startsAt">,
+): ScheduledPoll["status"] {
+  const startsAtMs = new Date(poll.startsAt).getTime();
+  const endsAtMs = new Date(poll.endsAt).getTime();
+
+  if (startsAtMs > Date.now()) {
+    return "scheduled";
+  }
+
+  if (Date.now() >= endsAtMs) {
+    return "completed";
+  }
+
+  return "live";
 }
 
 export function createParticipantProfile(input: {
@@ -704,6 +735,7 @@ export function createEmptyTestingWorkspaceState(): TestingWorkspaceState {
   return {
     attempts: [],
     groupJoinRequests: [],
+    pollAttempts: [],
     participantGroups: [],
     participants: [],
     pollQuestions: [],

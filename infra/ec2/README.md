@@ -6,19 +6,22 @@ The Expo mobile app is not hosted on EC2. Only the web app under `apps/web` is d
 
 ## Important persistence constraint
 
-TRAPit web currently stores admin questions, groups, schedules, attempts, and history in one JSON file on disk, not in a database.
+TRAPit web currently stores tests, groups, question banks, and history in one JSON file on disk by default.
+
+Poll questions, scheduled polls, and poll attempts can be moved to DynamoDB by setting the poll-store environment variables documented below.
 
 That means this deployment guide is safe for:
 
 1. One EC2 instance
 2. One PM2 app process
 3. Persistent data stored outside the Git checkout
+4. Optional DynamoDB-backed poll storage for cross-device poll access
 
 That also means this guide is not safe for:
 
 1. Multiple EC2 instances behind a load balancer
 2. Multiple PM2 cluster workers writing the same file
-3. Auto-scaling without moving persistence to a real database
+3. Auto-scaling without moving the remaining file-backed state to a real database
 
 ## Recommended architecture
 
@@ -113,11 +116,24 @@ NEXT_PUBLIC_COGNITO_USER_POOL_ID=...
 NEXT_PUBLIC_COGNITO_WEB_CLIENT_ID=...
 EXPO_PUBLIC_API_BASE_URL=https://trapit.in
 TRAPIT_DATA_DIR=/var/lib/trapit
+TRAPIT_POLL_STORE_MODE=file
 ```
 
 If you want automatic user group assignment in Cognito, also provide AWS credentials on the instance with permission for `cognito-idp:AdminAddUserToGroup`.
 
 One common EC2 approach is to attach an IAM role to the instance instead of storing AWS keys in env files.
+
+If you want poll responses shared across web devices and public QR sessions, switch the poll store to DynamoDB instead:
+
+```bash
+TRAPIT_POLL_STORE_MODE=dynamodb
+TRAPIT_DYNAMODB_REGION=us-east-1
+TRAPIT_POLL_QUESTIONS_TABLE=trapit-poll-questions
+TRAPIT_SCHEDULED_POLLS_TABLE=trapit-scheduled-polls
+TRAPIT_POLL_ATTEMPTS_TABLE=trapit-poll-attempts
+```
+
+Create those tables using the examples in `infra/dynamodb/README.md`, and give the EC2 instance role these permissions on them: `dynamodb:BatchGetItem`, `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:Query`, and `dynamodb:Scan`.
 
 `TRAPIT_DATA_DIR` moves the web app data file outside the Git checkout so deployments do not overwrite test history, group data, or results. The live file becomes `/var/lib/trapit/testing-workspace.json`.
 

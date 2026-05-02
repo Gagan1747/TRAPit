@@ -51,10 +51,18 @@ function createDefaultScheduleTime() {
   return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
 }
 
+function createDefaultPollEndTime() {
+  const date = new Date(Date.now() + 2 * 60 * 60 * 1000);
+  const timezoneOffsetMs = date.getTimezoneOffset() * 60 * 1000;
+
+  return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
+}
+
 function createEmptyPollQuestionDraft(): PollQuestionDraft {
   return {
     options: ["", ""],
     prompt: "",
+    topic: "",
   };
 }
 
@@ -443,13 +451,13 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
   ]);
   const [pollQuestions, setPollQuestions] = useState<PersistentPollQuestion[]>([]);
   const [pollScheduleAnonymous, setPollScheduleAnonymous] = useState(false);
-  const [pollScheduleDurationMinutes, setPollScheduleDurationMinutes] = useState("10");
   const [pollScheduleGenerateQrCode, setPollScheduleGenerateQrCode] = useState(true);
   const [pollScheduleGroupIds, setPollScheduleGroupIds] = useState<string[]>([]);
   const [pollScheduleParticipantType, setPollScheduleParticipantType] = useState<PollParticipantType>("registered");
   const [pollScheduleQuestionIds, setPollScheduleQuestionIds] = useState<string[]>([]);
-  const [pollScheduleStartMode, setPollScheduleStartMode] = useState<"later" | "now">("now");
+  const [pollScheduleStartNow, setPollScheduleStartNow] = useState(true);
   const [pollScheduleStartsAtInput, setPollScheduleStartsAtInput] = useState(createDefaultScheduleTime());
+  const [pollScheduleEndsAtInput, setPollScheduleEndsAtInput] = useState(createDefaultPollEndTime());
   const [scheduledPolls, setScheduledPolls] = useState<ScheduledPoll[]>([]);
   const [poolFeedback, setPoolFeedback] = useState<string | null>(null);
   const [poolName, setPoolName] = useState("");
@@ -567,7 +575,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
     void Promise.all(
       pollsWithQrCodes.map(async (poll) => [
         poll.id,
-        await QRCode.toDataURL(poll.shareCode ?? "", { margin: 1, width: 180 }),
+        await QRCode.toDataURL(getPollAccessUrl(poll.shareCode ?? ""), { margin: 1, width: 180 }),
       ] as const),
     ).then((entries) => {
       if (!isMounted) {
@@ -581,6 +589,18 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       isMounted = false;
     };
   }, [scheduledPolls]);
+
+  function getPollAccessUrl(shareCode: string) {
+    if (!shareCode.trim()) {
+      return "";
+    }
+
+    if (typeof window === "undefined") {
+      return `/poll/${shareCode}`;
+    }
+
+    return `${window.location.origin}/poll/${shareCode}`;
+  }
 
   function updateEditableOption(index: number, value: string) {
     setEditingQuestionDraft((currentDraft) => {
@@ -1140,11 +1160,10 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
   }
 
   function handleSchedulePoll() {
-    const durationMinutes = Number(pollScheduleDurationMinutes);
-    const startsAt =
-      pollScheduleStartMode === "now"
-        ? new Date().toISOString()
-        : new Date(pollScheduleStartsAtInput).toISOString();
+    const startsAt = pollScheduleStartNow
+      ? new Date().toISOString()
+      : new Date(pollScheduleStartsAtInput).toISOString();
+    const endsAt = new Date(pollScheduleEndsAtInput).toISOString();
 
     if (!pollQuestions.length) {
       setPollFeedback("Add poll questions before scheduling a poll.");
@@ -1156,16 +1175,21 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       return;
     }
 
-    if (!Number.isFinite(durationMinutes) || durationMinutes < 1) {
-      setPollFeedback("Poll duration must be at least 1 minute.");
+    if (
+      !pollScheduleStartNow &&
+      (!pollScheduleStartsAtInput || Number.isNaN(new Date(pollScheduleStartsAtInput).getTime()))
+    ) {
+      setPollFeedback("Choose a valid poll start date and time.");
       return;
     }
 
-    if (
-      pollScheduleStartMode === "later" &&
-      (!pollScheduleStartsAtInput || Number.isNaN(new Date(pollScheduleStartsAtInput).getTime()))
-    ) {
-      setPollFeedback("Choose a valid poll date and time.");
+    if (!pollScheduleEndsAtInput || Number.isNaN(new Date(pollScheduleEndsAtInput).getTime())) {
+      setPollFeedback("Choose a valid poll end date and time.");
+      return;
+    }
+
+    if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
+      setPollFeedback("Poll end time must be after the start time.");
       return;
     }
 
@@ -1174,19 +1198,29 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       return;
     }
 
+    const selectedQuestions = pollQuestions.filter((question) => pollScheduleQuestionIds.includes(question.id));
+    const selectedTopics = Array.from(
+      new Set(selectedQuestions.map((question) => question.topic.trim()).filter(Boolean)),
+    );
+    const title = selectedTopics.length === 1
+      ? selectedTopics[0]
+      : `${pollScheduleQuestionIds.length} question poll`;
+
     void mutateWorkspace(async () => {
       await readJson<PollsResponse>(
         await fetch("/api/admin/polls", {
           body: JSON.stringify({
             anonymous: pollScheduleAnonymous,
-            durationMinutes,
-            generateQrCode: pollScheduleGenerateQrCode,
+            endsAt,
+            generateQrCode:
+              pollScheduleParticipantType === "open" && pollScheduleGenerateQrCode,
             mode: "schedule-poll",
             participantGroupIds:
               pollScheduleParticipantType === "registered" ? pollScheduleGroupIds : [],
             participantType: pollScheduleParticipantType,
             questionIds: pollScheduleQuestionIds,
             startsAt,
+            title,
           }),
           headers: {
             "Content-Type": "application/json",
@@ -1197,13 +1231,13 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
 
       setPollFeedback("Poll scheduled.");
       setPollScheduleAnonymous(false);
-      setPollScheduleDurationMinutes("10");
       setPollScheduleGenerateQrCode(true);
       setPollScheduleGroupIds([]);
       setPollScheduleParticipantType("registered");
       setPollScheduleQuestionIds([]);
-      setPollScheduleStartMode("now");
+      setPollScheduleStartNow(true);
       setPollScheduleStartsAtInput(createDefaultScheduleTime());
+      setPollScheduleEndsAtInput(createDefaultPollEndTime());
     }).catch((error) => {
       setPollFeedback(error instanceof Error ? error.message : "Unable to schedule the poll.");
     });
@@ -2628,7 +2662,10 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
               <div className="question-list">
                 {pollQuestions.map((question, index) => (
                   <article className="question-card nested-card" key={question.id}>
-                    <strong>Question {index + 1}</strong>
+                    <div className="question-head">
+                      <strong>Question {index + 1}</strong>
+                      {question.topic ? <span className="status-chip warning">{question.topic}</span> : null}
+                    </div>
                     <p>{question.prompt}</p>
                     <ol className="question-options compact-question-options">
                       {question.options.map((option, optionIndex) => (
@@ -2652,53 +2689,41 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
       >
         <div className="form-stack">
           <div className="question-card form-stack">
-            <div className="field-row">
-              <div className="field">
-                <label htmlFor="poll-duration">Duration in minutes</label>
-                <input
-                  id="poll-duration"
-                  min={1}
-                  type="number"
-                  value={pollScheduleDurationMinutes}
-                  onChange={(event) => setPollScheduleDurationMinutes(event.target.value)}
-                />
-              </div>
-              <div className="field">
-                <label>Start mode</label>
-                <div className="selection-grid">
-                  <label className="role-option">
-                    <input
-                      checked={pollScheduleStartMode === "now"}
-                      name="poll-start-mode"
-                      type="radio"
-                      onChange={() => setPollScheduleStartMode("now")}
-                    />
-                    <span>Start now</span>
-                  </label>
-                  <label className="role-option">
-                    <input
-                      checked={pollScheduleStartMode === "later"}
-                      name="poll-start-mode"
-                      type="radio"
-                      onChange={() => setPollScheduleStartMode("later")}
-                    />
-                    <span>Schedule for later</span>
-                  </label>
-                </div>
+            <div className="field">
+              <label>Start now</label>
+              <div className="selection-grid">
+                <label className="role-option">
+                  <input
+                    checked={pollScheduleStartNow}
+                    type="checkbox"
+                    onChange={(event) => setPollScheduleStartNow(event.target.checked)}
+                  />
+                  <span>Start now</span>
+                </label>
               </div>
             </div>
 
-            {pollScheduleStartMode === "later" ? (
+            <div className="field-row">
               <div className="field">
-                <label htmlFor="poll-starts-at">Poll date and time</label>
+                <label htmlFor="poll-starts-at">Start time</label>
                 <input
+                  disabled={pollScheduleStartNow}
                   id="poll-starts-at"
                   type="datetime-local"
                   value={pollScheduleStartsAtInput}
                   onChange={(event) => setPollScheduleStartsAtInput(event.target.value)}
                 />
               </div>
-            ) : null}
+              <div className="field">
+                <label htmlFor="poll-ends-at">End time</label>
+                <input
+                  id="poll-ends-at"
+                  type="datetime-local"
+                  value={pollScheduleEndsAtInput}
+                  onChange={(event) => setPollScheduleEndsAtInput(event.target.value)}
+                />
+              </div>
+            </div>
 
             <div className="field">
               <label>Select poll questions</label>
@@ -2712,7 +2737,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                         setPollScheduleQuestionIds((currentIds) => toggleArrayValue(currentIds, question.id))
                       }
                     />
-                    <span>{question.prompt}</span>
+                    <span>{question.topic ? `${question.topic}: ${question.prompt}` : question.prompt}</span>
                   </label>
                 ))}
               </div>
@@ -2726,7 +2751,10 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                     checked={pollScheduleParticipantType === "registered"}
                     name="poll-participant-type"
                     type="radio"
-                    onChange={() => setPollScheduleParticipantType("registered")}
+                    onChange={() => {
+                      setPollScheduleParticipantType("registered");
+                      setPollScheduleGenerateQrCode(false);
+                    }}
                   />
                   <span>Registered only</span>
                 </label>
@@ -2735,7 +2763,10 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                     checked={pollScheduleParticipantType === "open"}
                     name="poll-participant-type"
                     type="radio"
-                    onChange={() => setPollScheduleParticipantType("open")}
+                    onChange={() => {
+                      setPollScheduleParticipantType("open");
+                      setPollScheduleGenerateQrCode(true);
+                    }}
                   />
                   <span>Open to all</span>
                 </label>
@@ -2771,14 +2802,16 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                 />
                 <span>Collect responses anonymously</span>
               </label>
-              <label className="role-option">
-                <input
-                  checked={pollScheduleGenerateQrCode}
-                  type="checkbox"
-                  onChange={(event) => setPollScheduleGenerateQrCode(event.target.checked)}
-                />
-                <span>Generate QR code</span>
-              </label>
+              {pollScheduleParticipantType === "open" ? (
+                <label className="role-option">
+                  <input
+                    checked={pollScheduleGenerateQrCode}
+                    type="checkbox"
+                    onChange={(event) => setPollScheduleGenerateQrCode(event.target.checked)}
+                  />
+                  <span>Generate QR code</span>
+                </label>
+              ) : null}
             </div>
 
             {pollFeedback ? <p className="muted-text">{pollFeedback}</p> : null}
@@ -2801,7 +2834,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                     </span>
                   </div>
                   <p className="muted-text">Starts: {formatShortDateTime(poll.startsAt)}</p>
-                  <p className="muted-text">Duration: {poll.durationMinutes} min</p>
+                  <p className="muted-text">Ends: {formatShortDateTime(poll.endsAt)}</p>
                   <p className="muted-text">Questions: {poll.questionIds.length}</p>
                   <p className="muted-text">Participant type: {poll.participantType === "registered" ? "Registered only" : "Open to all"}</p>
                   <p className="muted-text">Anonymity: {poll.anonymous ? "Anonymous" : "Named"}</p>
@@ -2817,6 +2850,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                   {poll.shareCode ? (
                     <div className="form-stack">
                       <p className="muted-text">Access code: {poll.shareCode}</p>
+                      <p className="muted-text">URL: <a href={getPollAccessUrl(poll.shareCode)} target="_blank" rel="noreferrer">{getPollAccessUrl(poll.shareCode)}</a></p>
                       {pollQrCodes[poll.id] ? (
                         <img alt={`QR code for ${poll.title}`} height={180} src={pollQrCodes[poll.id]} width={180} />
                       ) : null}
@@ -3136,7 +3170,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
                       </div>
                     </div>
                     <p className="muted-text">Starts: {formatShortDateTime(resolvedPoll.startsAt)}</p>
-                    <p className="muted-text">Duration: {resolvedPoll.durationMinutes} min</p>
+                    <p className="muted-text">Ends: {formatShortDateTime(resolvedPoll.endsAt)}</p>
                     <p className="muted-text">Questions: {resolvedPoll.questionIds.length}</p>
                     <p className="muted-text">Participant type: {resolvedPoll.participantType === "registered" ? "Registered only" : "Open to all"}</p>
                     <p className="muted-text">Anonymity: {resolvedPoll.anonymous ? "Anonymous" : "Named"}</p>

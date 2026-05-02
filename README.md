@@ -52,6 +52,28 @@ The current scaffold now includes real Cognito-backed handlers:
    - `EXPO_PUBLIC_API_BASE_URL` should point to the web app base URL. For local simulator use, `http://localhost:3000` is usually fine. For a physical device, set it to your machine's LAN IP, for example `http://192.168.1.10:3000`.
    - Automatic assignment to the `users` group requires the Next.js server to have AWS credentials that can call `cognito-idp:AdminAddUserToGroup`.
 
+   ### Shared poll storage
+
+   The web poll APIs can now store poll questions, scheduled polls, and poll attempts in DynamoDB instead of the local JSON file.
+
+   Set these variables in `.env.local` to enable that mode:
+
+   ```bash
+   TRAPIT_POLL_STORE_MODE=dynamodb
+   TRAPIT_DYNAMODB_REGION=us-east-1
+   TRAPIT_POLL_QUESTIONS_TABLE=trapit-poll-questions
+   TRAPIT_SCHEDULED_POLLS_TABLE=trapit-scheduled-polls
+   TRAPIT_POLL_ATTEMPTS_TABLE=trapit-poll-attempts
+   ```
+
+   Table details and example AWS CLI commands live in `infra/dynamodb/README.md`.
+
+   Current scope note:
+
+   - Web admin poll authoring, web/public poll access, and open-poll submissions use DynamoDB when this mode is enabled.
+   - Tests, groups, question banks, and the mobile local workspace are still backed by their existing stores.
+   - Mobile poll flows are not device-shared yet because mobile still authenticates directly with Cognito and does not call the protected web poll APIs.
+
 3. Start the web app:
 
    ```bash
@@ -69,3 +91,4 @@ The current scaffold now includes real Cognito-backed handlers:
 1. Fill in `.env.local` with your real Cognito values and, if you want automatic user-group assignment, provide AWS credentials to the web server.
 2. Start the web and mobile apps and test phone-number sign-up, SMS confirmation, sign-in, and role-based redirects with real Cognito users.
 3. Add refresh-token handling and backend API authorization checks if you need long-lived authenticated sessions.
+4. If you want mobile poll authoring and registered mobile poll responses to share the same backend state, add token-authenticated mobile API access next.

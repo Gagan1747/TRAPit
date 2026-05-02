@@ -87,12 +87,13 @@ type QuestionBankContextValue = {
   createScheduledPoll: (input: {
     anonymous: boolean;
     createdBy: string | null;
-    durationMinutes: number;
+    endsAt: string;
     generateQrCode: boolean;
     participantGroupIds: string[];
     participantType: PollParticipantType;
     questionIds: string[];
     startsAt: string;
+    title: string;
   }) => ScheduledPoll;
   createScheduledTest: (input: {
     createdBy: string | null;
@@ -240,10 +241,29 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
     groupJoinRequests: parsed.groupJoinRequests ?? [],
     participantGroups: parsed.participantGroups ?? [],
     participants: parsed.participants ?? [],
-    pollQuestions: parsed.pollQuestions ?? [],
+    pollAttempts: parsed.pollAttempts ?? [],
+    pollQuestions: (parsed.pollQuestions ?? []).map((question) => ({
+      ...question,
+      topic: question.topic?.trim() ?? "",
+    })),
     pools: parsed.pools ?? [],
     questions: parsed.questions ?? [],
-    scheduledPolls: parsed.scheduledPolls ?? [],
+    scheduledPolls: (parsed.scheduledPolls ?? []).map((poll) => {
+      const legacyDurationValue = (poll as ScheduledPoll & { durationMinutes?: number }).durationMinutes;
+      const legacyDurationMinutes = typeof legacyDurationValue === "number" ? legacyDurationValue : null;
+      const startsAt = poll.startsAt;
+      const endsAt = poll.endsAt
+        ?? (legacyDurationMinutes !== null
+          ? new Date(new Date(startsAt).getTime() + legacyDurationMinutes * 60 * 1000).toISOString()
+          : startsAt);
+
+      return {
+        ...poll,
+        endsAt,
+        participantGroupIds: dedupe(poll.participantGroupIds ?? []),
+        title: poll.title?.trim() || `${(poll.questionIds ?? []).length} question poll`,
+      };
+    }),
     scheduledTests: parsed.scheduledTests ?? [],
   };
 }
@@ -266,9 +286,9 @@ function parseStoredWorkspace(value: string): TestingWorkspaceState {
   return normalizeState(parsed);
 }
 
-function resolveScheduledPollStatus(poll: Pick<ScheduledPoll, "durationMinutes" | "startsAt">) {
+function resolveScheduledPollStatus(poll: Pick<ScheduledPoll, "endsAt" | "startsAt">) {
   const startsAtMs = new Date(poll.startsAt).getTime();
-  const endsAtMs = startsAtMs + poll.durationMinutes * 60 * 1000;
+  const endsAtMs = new Date(poll.endsAt).getTime();
 
   if (startsAtMs > Date.now()) {
     return "scheduled" as const;
@@ -719,6 +739,7 @@ export function QuestionBankProvider({ children }: { children: React.ReactNode }
       .map((draft) => ({
         options: draft.options.map((option) => option.trim()),
         prompt: draft.prompt.trim(),
+        topic: draft.topic.trim(),
       }))
       .filter((draft) => draft.prompt || draft.options.some((option) => option));
 
@@ -749,12 +770,13 @@ export function QuestionBankProvider({ children }: { children: React.ReactNode }
   function createScheduledPoll(input: {
     anonymous: boolean;
     createdBy: string | null;
-    durationMinutes: number;
+    endsAt: string;
     generateQrCode: boolean;
     participantGroupIds: string[];
     participantType: PollParticipantType;
     questionIds: string[];
     startsAt: string;
+    title: string;
   }) {
     const questionIds = dedupe(input.questionIds);
 
@@ -771,17 +793,17 @@ export function QuestionBankProvider({ children }: { children: React.ReactNode }
       anonymous: input.anonymous,
       createdAt: timestamp,
       createdBy: input.createdBy,
-      durationMinutes: input.durationMinutes,
+      endsAt: input.endsAt,
       id: createEntityId("poll"),
       participantGroupIds: dedupe(input.participantGroupIds),
       participantType: input.participantType,
       questionIds,
-      shareCode: input.generateQrCode
+      shareCode: input.generateQrCode && input.participantType === "open"
         ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
         : null,
       startsAt: input.startsAt,
-      status: new Date(input.startsAt).getTime() > Date.now() ? "scheduled" : "live",
-      title: `${questionIds.length} question poll`,
+      status: resolveScheduledPollStatus({ endsAt: input.endsAt, startsAt: input.startsAt }),
+      title: input.title.trim() || `${questionIds.length} question poll`,
       updatedAt: timestamp,
     };
 

@@ -16,13 +16,14 @@ type PollBody =
     }
   | {
       anonymous?: boolean;
-      durationMinutes?: number;
+      endsAt?: string;
       generateQrCode?: boolean;
       mode?: "schedule-poll";
       participantGroupIds?: string[];
       participantType?: PollParticipantType;
       questionIds?: string[];
       startsAt?: string;
+      title?: string;
     };
 
 export async function GET() {
@@ -78,20 +79,25 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Poll start time is required." }, { status: 400 });
     }
 
-    if (!("durationMinutes" in body) || !body.durationMinutes || body.durationMinutes < 1) {
-      return NextResponse.json({ error: "Duration must be at least 1 minute." }, { status: 400 });
+    if (!("endsAt" in body) || !body.endsAt) {
+      return NextResponse.json({ error: "Poll end time is required." }, { status: 400 });
+    }
+
+    if (!("title" in body) || !body.title?.trim()) {
+      return NextResponse.json({ error: "Poll topic is required." }, { status: 400 });
     }
 
     try {
       const scheduledPolls = await createScheduledPoll({
         anonymous: Boolean(body.anonymous),
         createdBy: actor.sub,
-        durationMinutes: body.durationMinutes,
+        endsAt: body.endsAt,
         generateQrCode: Boolean(body.generateQrCode),
         participantGroupIds: body.participantGroupIds ?? [],
         participantType: body.participantType ?? "registered",
         questionIds: body.questionIds,
         startsAt: body.startsAt,
+        title: body.title,
       });
       const pollQuestions = await listPollQuestions(actor.sub);
       return NextResponse.json({ pollQuestions, scheduledPolls });

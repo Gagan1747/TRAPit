@@ -223,7 +223,7 @@ export function MobileRestrictedUserDashboardWorkspace({ currentUserIdentifier }
             <View key={poll.id} style={styles.itemCard}>
               <View style={styles.itemHead}><Text style={styles.cardTitle}>{poll.title}</Text><Text style={styles.statusText}>{poll.status}</Text></View>
               <Text style={styles.metaText}>Starts: {formatShortDateTime(poll.startsAt)}</Text>
-              <Text style={styles.metaText}>Duration: {poll.durationMinutes} min</Text>
+              <Text style={styles.metaText}>Ends: {formatShortDateTime(poll.endsAt)}</Text>
               <Text style={styles.metaText}>Questions: {poll.questionIds.length}</Text>
               <Text style={styles.metaText}>Participant type: {poll.participantType === "registered" ? "Registered only" : "Open to all"}</Text>
               <Text style={styles.metaText}>Poll response summaries will appear here when participation is recorded.</Text>

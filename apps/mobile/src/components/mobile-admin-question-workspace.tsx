@@ -23,10 +23,18 @@ function createDefaultScheduleTime() {
   return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
 }
 
+function createDefaultPollEndTime() {
+  const date = new Date(Date.now() + 2 * 60 * 60 * 1000);
+  const timezoneOffsetMs = date.getTimezoneOffset() * 60 * 1000;
+
+  return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
+}
+
 function createEmptyPollQuestionDraft(): PollQuestionDraft {
   return {
     options: ["", ""],
     prompt: "",
+    topic: "",
   };
 }
 
@@ -129,12 +137,12 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
   const [pollFeedback, setPollFeedback] = useState<string | null>(null);
   const [pollQuestionDrafts, setPollQuestionDrafts] = useState<PollQuestionDraft[]>([createEmptyPollQuestionDraft()]);
   const [pollScheduleAnonymous, setPollScheduleAnonymous] = useState(false);
-  const [pollScheduleDurationMinutes, setPollScheduleDurationMinutes] = useState("10");
   const [pollScheduleGenerateQrCode, setPollScheduleGenerateQrCode] = useState(true);
   const [pollScheduleGroupIds, setPollScheduleGroupIds] = useState<string[]>([]);
   const [pollScheduleParticipantType, setPollScheduleParticipantType] = useState<PollParticipantType>("registered");
   const [pollScheduleQuestionIds, setPollScheduleQuestionIds] = useState<string[]>([]);
-  const [pollScheduleStartMode, setPollScheduleStartMode] = useState<"later" | "now">("now");
+  const [pollScheduleStartNow, setPollScheduleStartNow] = useState(true);
+  const [pollScheduleEndsAtInput, setPollScheduleEndsAtInput] = useState(createDefaultPollEndTime());
   const [pollScheduleStartsAtInput, setPollScheduleStartsAtInput] = useState(createDefaultScheduleTime());
   const [prompt, setPrompt] = useState("");
   const [questionPoolIds, setQuestionPoolIds] = useState<string[]>([]);
@@ -251,6 +259,7 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
 
   const mergedPolls = useMemo(() => {
     const merged = new Map<string, {
+      endsAt: string;
       hasAdminScope: boolean;
       hasParticipantScope: boolean;
       id: string;
@@ -263,6 +272,7 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
 
     for (const scheduledPoll of visibleScheduledPolls) {
       merged.set(scheduledPoll.id, {
+        endsAt: scheduledPoll.endsAt,
         hasAdminScope: true,
         hasParticipantScope: false,
         id: scheduledPoll.id,
@@ -277,6 +287,7 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
       const existing = merged.get(participantPoll.id);
 
       merged.set(participantPoll.id, {
+        endsAt: existing?.endsAt ?? participantPoll.endsAt,
         hasAdminScope: existing?.hasAdminScope ?? false,
         hasParticipantScope: true,
         id: participantPoll.id,
@@ -517,27 +528,47 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
 
   function handleSchedulePoll() {
     try {
+      const startsAt = pollScheduleStartNow
+        ? new Date().toISOString()
+        : new Date(pollScheduleStartsAtInput).toISOString();
+      const endsAt = new Date(pollScheduleEndsAtInput).toISOString();
+
+      if (Number.isNaN(new Date(startsAt).getTime()) || Number.isNaN(new Date(endsAt).getTime())) {
+        setPollFeedback("Choose a valid start and end time for the poll.");
+        return;
+      }
+
+      if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
+        setPollFeedback("End time must be after the poll start time.");
+        return;
+      }
+
+      const selectedPollQuestions = visiblePollQuestions.filter((question) =>
+        pollScheduleQuestionIds.includes(question.id),
+      );
+      const title = Array.from(
+        new Set(selectedPollQuestions.map((question) => question.topic.trim()).filter(Boolean)),
+      ).join(" / ") || `${pollScheduleQuestionIds.length} question poll`;
+
       createScheduledPoll({
         anonymous: pollScheduleAnonymous,
         createdBy: currentAdminIdentifier,
-        durationMinutes: Number(pollScheduleDurationMinutes),
+        endsAt,
         generateQrCode: pollScheduleGenerateQrCode,
         participantGroupIds: pollScheduleParticipantType === "registered" ? pollScheduleGroupIds : [],
         participantType: pollScheduleParticipantType,
         questionIds: pollScheduleQuestionIds,
-        startsAt:
-          pollScheduleStartMode === "now"
-            ? new Date().toISOString()
-            : new Date(pollScheduleStartsAtInput).toISOString(),
+        startsAt,
+        title,
       });
       setPollFeedback("Poll scheduled.");
       setPollScheduleAnonymous(false);
-      setPollScheduleDurationMinutes("10");
       setPollScheduleGenerateQrCode(true);
       setPollScheduleGroupIds([]);
       setPollScheduleParticipantType("registered");
       setPollScheduleQuestionIds([]);
-      setPollScheduleStartMode("now");
+      setPollScheduleStartNow(true);
+      setPollScheduleEndsAtInput(createDefaultPollEndTime());
       setPollScheduleStartsAtInput(createDefaultScheduleTime());
     } catch (error) {
       setPollFeedback(error instanceof Error ? error.message : "Unable to schedule the poll.");
@@ -741,7 +772,7 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
                 <View style={styles.itemHead}><Text style={styles.cardTitle}>{resolvedPoll.title}</Text><Text style={styles.statusText}>{resolvedPoll.status}</Text></View>
                 <Text style={styles.metaText}>Scope: {scopeLabel}</Text>
                 <Text style={styles.metaText}>Starts: {formatShortDateTime(resolvedPoll.startsAt)}</Text>
-                <Text style={styles.metaText}>Duration: {resolvedPoll.durationMinutes} min</Text>
+                <Text style={styles.metaText}>Ends: {formatShortDateTime(resolvedPoll.endsAt)}</Text>
                 <Text style={styles.metaText}>Questions: {resolvedPoll.questionIds.length}</Text>
                 <Text style={styles.metaText}>Participant type: {resolvedPoll.participantType === "registered" ? "Registered only" : "Open to all"}</Text>
                 <Text style={styles.metaText}>Anonymity: {resolvedPoll.anonymous ? "Anonymous" : "Named"}</Text>
@@ -889,6 +920,20 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
       </MobileCollapsibleSection>
 
       <MobileCollapsibleSection eyebrow="Poll" isOpen={openSection === "poll-questions"} title="Add Poll Question" onToggle={() => toggleSection("poll-questions")}>
+        <TextInput
+          placeholder="Poll topic"
+          placeholderTextColor="#8e7d70"
+          style={styles.input}
+          value={pollQuestionDrafts[0]?.topic ?? ""}
+          onChangeText={(value) =>
+            setPollQuestionDrafts((currentDrafts) =>
+              currentDrafts.map((draft) => ({
+                ...draft,
+                topic: value,
+              })),
+            )
+          }
+        />
         {pollQuestionDrafts.map((draft, draftIndex) => (
           <View key={`poll-${draftIndex}`} style={styles.itemCard}>
             <Text style={styles.cardTitle}>Poll question {draftIndex + 1}</Text>
@@ -908,19 +953,19 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
           <Pressable style={styles.primaryButton} onPress={handleSavePollQuestions}><Text style={styles.primaryButtonText}>Save poll questions</Text></Pressable>
         </View>
         {visiblePollQuestions.length ? visiblePollQuestions.map((question) => (
-          <View key={question.id} style={styles.subCard}><Text style={styles.subCardTitle}>{question.prompt}</Text>{question.options.map((option, index) => <Text key={`${question.id}-${index}`} style={styles.metaText}>{index + 1}. {option}</Text>)}</View>
+          <View key={question.id} style={styles.subCard}><Text style={styles.subCardTitle}>{question.prompt}</Text>{question.topic ? <Text style={styles.metaText}>Topic: {question.topic}</Text> : null}{question.options.map((option, index) => <Text key={`${question.id}-${index}`} style={styles.metaText}>{index + 1}. {option}</Text>)}</View>
         )) : null}
       </MobileCollapsibleSection>
 
       <MobileCollapsibleSection eyebrow="Poll" isOpen={openSection === "poll-schedule"} title="Schedule Poll" onToggle={() => toggleSection("poll-schedule")}>
-        <TextInput placeholder="Duration in minutes" placeholderTextColor="#8e7d70" style={styles.input} keyboardType="number-pad" value={pollScheduleDurationMinutes} onChangeText={setPollScheduleDurationMinutes} />
         <View style={styles.toggleRow}>
-          <Pressable style={[styles.pill, pollScheduleStartMode === "now" && styles.pillActive]} onPress={() => setPollScheduleStartMode("now")}><Text style={[styles.pillText, pollScheduleStartMode === "now" && styles.pillTextActive]}>Start now</Text></Pressable>
-          <Pressable style={[styles.pill, pollScheduleStartMode === "later" && styles.pillActive]} onPress={() => setPollScheduleStartMode("later")}><Text style={[styles.pillText, pollScheduleStartMode === "later" && styles.pillTextActive]}>Schedule later</Text></Pressable>
+          <Pressable style={[styles.pill, pollScheduleStartNow && styles.pillActive]} onPress={() => setPollScheduleStartNow(true)}><Text style={[styles.pillText, pollScheduleStartNow && styles.pillTextActive]}>Start now</Text></Pressable>
+          <Pressable style={[styles.pill, !pollScheduleStartNow && styles.pillActive]} onPress={() => setPollScheduleStartNow(false)}><Text style={[styles.pillText, !pollScheduleStartNow && styles.pillTextActive]}>Choose start time</Text></Pressable>
         </View>
-        {pollScheduleStartMode === "later" ? <TextInput placeholder="YYYY-MM-DDTHH:mm" placeholderTextColor="#8e7d70" style={styles.input} value={pollScheduleStartsAtInput} onChangeText={setPollScheduleStartsAtInput} /> : null}
+        {!pollScheduleStartNow ? <TextInput placeholder="YYYY-MM-DDTHH:mm" placeholderTextColor="#8e7d70" style={styles.input} value={pollScheduleStartsAtInput} onChangeText={setPollScheduleStartsAtInput} /> : null}
+        <TextInput placeholder="End time YYYY-MM-DDTHH:mm" placeholderTextColor="#8e7d70" style={styles.input} value={pollScheduleEndsAtInput} onChangeText={setPollScheduleEndsAtInput} />
         <Text style={styles.label}>Select poll questions</Text>
-        <View style={styles.chipWrap}>{visiblePollQuestions.map((question) => <Pressable key={question.id} style={[styles.selectionCard, pollScheduleQuestionIds.includes(question.id) && styles.selectionCardActive]} onPress={() => setPollScheduleQuestionIds((currentIds) => toggleArrayValue(currentIds, question.id))}><Text style={[styles.selectionTitle, pollScheduleQuestionIds.includes(question.id) && styles.selectionTitleActive]} numberOfLines={2}>{question.prompt}</Text></Pressable>)}</View>
+        <View style={styles.chipWrap}>{visiblePollQuestions.map((question) => <Pressable key={question.id} style={[styles.selectionCard, pollScheduleQuestionIds.includes(question.id) && styles.selectionCardActive]} onPress={() => setPollScheduleQuestionIds((currentIds) => toggleArrayValue(currentIds, question.id))}><Text style={[styles.selectionTitle, pollScheduleQuestionIds.includes(question.id) && styles.selectionTitleActive]} numberOfLines={2}>{question.topic ? `${question.topic}: ${question.prompt}` : question.prompt}</Text></Pressable>)}</View>
         <View style={styles.toggleRow}>
           <Pressable style={[styles.pill, pollScheduleParticipantType === "registered" && styles.pillActive]} onPress={() => setPollScheduleParticipantType("registered")}><Text style={[styles.pillText, pollScheduleParticipantType === "registered" && styles.pillTextActive]}>Registered only</Text></Pressable>
           <Pressable style={[styles.pill, pollScheduleParticipantType === "open" && styles.pillActive]} onPress={() => setPollScheduleParticipantType("open")}><Text style={[styles.pillText, pollScheduleParticipantType === "open" && styles.pillTextActive]}>Open to all</Text></Pressable>
@@ -928,11 +973,12 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
         {pollScheduleParticipantType === "registered" ? <View style={styles.chipWrap}>{visibleGroups.map((group) => <Pressable key={group.id} style={[styles.selectionCard, pollScheduleGroupIds.includes(group.id) && styles.selectionCardActive]} onPress={() => setPollScheduleGroupIds((currentIds) => toggleArrayValue(currentIds, group.id))}><Text style={[styles.selectionTitle, pollScheduleGroupIds.includes(group.id) && styles.selectionTitleActive]}>{group.name}</Text></Pressable>)}</View> : null}
         <View style={styles.toggleRow}>
           <Pressable style={[styles.pill, pollScheduleAnonymous && styles.pillActive]} onPress={() => setPollScheduleAnonymous((currentValue) => !currentValue)}><Text style={[styles.pillText, pollScheduleAnonymous && styles.pillTextActive]}>Anonymous</Text></Pressable>
-          <Pressable style={[styles.pill, pollScheduleGenerateQrCode && styles.pillActive]} onPress={() => setPollScheduleGenerateQrCode((currentValue) => !currentValue)}><Text style={[styles.pillText, pollScheduleGenerateQrCode && styles.pillTextActive]}>Generate code</Text></Pressable>
+          {pollScheduleParticipantType === "open" ? <Pressable style={[styles.pill, pollScheduleGenerateQrCode && styles.pillActive]} onPress={() => setPollScheduleGenerateQrCode((currentValue) => !currentValue)}><Text style={[styles.pillText, pollScheduleGenerateQrCode && styles.pillTextActive]}>Generate QR code</Text></Pressable> : null}
         </View>
+        {pollScheduleParticipantType === "registered" ? <Text style={styles.metaText}>QR and public access links are only available for open polls.</Text> : null}
         {pollFeedback ? <Text style={styles.metaText}>{pollFeedback}</Text> : null}
         <Pressable style={styles.primaryButton} onPress={handleSchedulePoll}><Text style={styles.primaryButtonText}>Schedule poll</Text></Pressable>
-        {visibleScheduledPolls.length ? visibleScheduledPolls.map((poll) => <View key={poll.id} style={styles.subCard}><Text style={styles.subCardTitle}>{poll.title}</Text><Text style={styles.metaText}>Starts: {formatShortDateTime(poll.startsAt)}</Text><Text style={styles.metaText}>Status: {poll.status}</Text><Text style={styles.metaText}>Access code: {poll.shareCode ?? "Not generated"}</Text></View>) : null}
+        {visibleScheduledPolls.length ? visibleScheduledPolls.map((poll) => <View key={poll.id} style={styles.subCard}><Text style={styles.subCardTitle}>{poll.title}</Text><Text style={styles.metaText}>Starts: {formatShortDateTime(poll.startsAt)}</Text><Text style={styles.metaText}>Ends: {formatShortDateTime(poll.endsAt)}</Text><Text style={styles.metaText}>Status: {poll.status}</Text><Text style={styles.metaText}>Access code: {poll.shareCode ?? "Not generated"}</Text></View>) : null}
       </MobileCollapsibleSection>
 
       <MobileCollapsibleSection eyebrow="Groups" isOpen={openSection === "join-groups"} title="Join Groups" onToggle={() => toggleSection("join-groups")}>

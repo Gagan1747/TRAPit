@@ -600,7 +600,7 @@ export function RestrictedUserDashboardWorkspace({
                         </div>
                       </div>
                       <p className="muted-text">Starts: {formatShortDateTime(poll.startsAt)}</p>
-                      <p className="muted-text">Duration: {poll.durationMinutes} min</p>
+                      <p className="muted-text">Ends: {formatShortDateTime(poll.endsAt)}</p>
                       <p className="muted-text">Questions: {poll.questionIds.length}</p>
                       <p className="muted-text">Participant type: {poll.participantType === "registered" ? "Registered only" : "Open to all"}</p>
                       <p className="muted-text">Anonymity: {poll.anonymous ? "Anonymous" : "Named"}</p>
