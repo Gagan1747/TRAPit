@@ -74,6 +74,32 @@ function resolveStorePath() {
 
 const STORE_PATH = resolveStorePath();
 
+function isMissingPollStoreResourceError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return error.name === "ResourceNotFoundException"
+    || /requested resource not found/i.test(error.message)
+    || /table.*not found/i.test(error.message);
+}
+
+async function withPollStoreFallback<T>(
+  backendAction: () => Promise<T>,
+  fileAction: () => Promise<T>,
+) {
+  try {
+    return await backendAction();
+  } catch (error) {
+    if (!isMissingPollStoreResourceError(error)) {
+      throw error;
+    }
+
+    console.warn("DynamoDB poll store resource missing; falling back to file storage.", error);
+    return fileAction();
+  }
+}
+
 export type AvailableUserTest = {
   durationMinutes: number;
   hasAttempt: boolean;
@@ -692,7 +718,13 @@ export async function previewImport(text: string): Promise<BulkImportPreview> {
 
 export async function listPollQuestions(actorId: string | null = null) {
   if (isDynamoDbPollStoreEnabled()) {
-    return listPollQuestionsFromBackend(actorId);
+    return withPollStoreFallback(
+      () => listPollQuestionsFromBackend(actorId),
+      async () => {
+        const state = await readStore();
+        return filterPollQuestionsForActor(state.pollQuestions, actorId);
+      },
+    );
   }
 
   const state = await readStore();
@@ -704,7 +736,30 @@ export async function createPollQuestions(
   actorId: string | null,
 ) {
   if (isDynamoDbPollStoreEnabled()) {
-    return createPollQuestionsInBackend(drafts, actorId);
+    return withPollStoreFallback(
+      () => createPollQuestionsInBackend(drafts, actorId),
+      async () => {
+        const state = await readStore();
+        const normalizedDrafts = drafts.map((draft) => normalizePollQuestionDraft(draft));
+
+        for (const draft of normalizedDrafts) {
+          const validationError = validatePollQuestionDraft(draft);
+
+          if (validationError) {
+            throw new Error(validationError);
+          }
+        }
+
+        const pollQuestions = normalizedDrafts.map((draft) =>
+          createPersistentPollQuestion(draft, { createdBy: actorId }),
+        );
+
+        state.pollQuestions = [...pollQuestions.reverse(), ...state.pollQuestions];
+        await writeStore(state);
+
+        return filterPollQuestionsForActor(state.pollQuestions, actorId);
+      },
+    );
   }
 
   const state = await readStore();
@@ -730,7 +785,13 @@ export async function createPollQuestions(
 
 export async function listScheduledPolls(actorId: string | null = null) {
   if (isDynamoDbPollStoreEnabled()) {
-    return listScheduledPollsFromBackend(actorId);
+    return withPollStoreFallback(
+      () => listScheduledPollsFromBackend(actorId),
+      async () => {
+        const state = await readStore();
+        return filterScheduledPollsForActor(hydrateScheduledPolls(state), actorId);
+      },
+    );
   }
 
   const state = await readStore();
@@ -749,7 +810,71 @@ export async function createScheduledPoll(input: {
   title: string;
 }) {
   if (isDynamoDbPollStoreEnabled()) {
-    return createScheduledPollInBackend(input);
+    return withPollStoreFallback(
+      () => createScheduledPollInBackend(input),
+      async () => {
+        const state = await readStore();
+        const questionIds = dedupe(input.questionIds);
+
+        if (!questionIds.length) {
+          throw new Error("Select at least one poll question.");
+        }
+
+        for (const questionId of questionIds) {
+          ensureActorOwnsPollQuestion(state, questionId, input.createdBy);
+        }
+
+        if (input.participantType === "registered" && !dedupe(input.participantGroupIds).length) {
+          throw new Error("Select at least one group for registered-only polls.");
+        }
+
+        const startsAtMs = new Date(input.startsAt).getTime();
+        const endsAtMs = new Date(input.endsAt).getTime();
+
+        if (Number.isNaN(startsAtMs)) {
+          throw new Error("Choose a valid poll start date and time.");
+        }
+
+        if (Number.isNaN(endsAtMs)) {
+          throw new Error("Choose a valid poll end date and time.");
+        }
+
+        if (endsAtMs <= startsAtMs) {
+          throw new Error("Poll end time must be after the start time.");
+        }
+
+        const title = input.title.trim();
+
+        if (!title) {
+          throw new Error("Poll topic is required.");
+        }
+
+        const timestamp = new Date().toISOString();
+        const shareCode = input.generateQrCode && input.participantType === "open"
+          ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
+          : null;
+        const scheduledPoll: ScheduledPoll = {
+          anonymous: input.anonymous,
+          createdAt: timestamp,
+          createdBy: input.createdBy,
+          endsAt: input.endsAt,
+          id: createEntityId("poll"),
+          participantGroupIds: dedupe(input.participantGroupIds),
+          participantType: input.participantType,
+          questionIds,
+          shareCode,
+          startsAt: input.startsAt,
+          status: resolveScheduledPollStatus({ endsAt: input.endsAt, startsAt: input.startsAt }),
+          title,
+          updatedAt: timestamp,
+        };
+
+        state.scheduledPolls = [scheduledPoll, ...state.scheduledPolls];
+        await writeStore(state);
+
+        return filterScheduledPollsForActor(hydrateScheduledPolls(state), input.createdBy);
+      },
+    );
   }
 
   const state = await readStore();
@@ -1370,7 +1495,10 @@ export async function listAvailablePollsForParticipant(identifier: string): Prom
   );
 
   const scheduledPolls = isDynamoDbPollStoreEnabled()
-    ? await listAllScheduledPollsFromBackend()
+    ? await withPollStoreFallback(
+      () => listAllScheduledPollsFromBackend(),
+      async () => hydrateScheduledPolls(state),
+    )
     : hydrateScheduledPolls(state);
 
   return scheduledPolls
@@ -1395,7 +1523,52 @@ export async function listAvailablePollsForParticipant(identifier: string): Prom
 
 export async function getPollByShareCode(shareCode: string, viewerId?: string | null) {
   if (isDynamoDbPollStoreEnabled()) {
-    return getPollByShareCodeFromBackend(shareCode, viewerId);
+    return withPollStoreFallback(
+      () => getPollByShareCodeFromBackend(shareCode, viewerId),
+      async () => {
+        const state = await readStore();
+        const normalizedShareCode = shareCode.trim().toUpperCase();
+        const poll = hydrateScheduledPolls(state).find(
+          (entry) => entry.shareCode?.trim().toUpperCase() === normalizedShareCode,
+        );
+
+        if (!poll) {
+          throw new Error("The selected poll could not be found.");
+        }
+
+        const questionMap = new Map(state.pollQuestions.map((question) => [question.id, question]));
+        const questions = poll.questionIds
+          .map((questionId) => questionMap.get(questionId))
+          .filter((question): question is PersistentPollQuestion => Boolean(question));
+        const attempts = state.pollAttempts.filter((attempt) => attempt.pollId === poll.id);
+        const hasSubmitted = viewerId
+          ? attempts.some((attempt) => identifiersMatch(attempt.userId, viewerId))
+          : false;
+        const summary = questions.map((question) => {
+          const optionSelectionCounts = question.options.map(
+            (_, optionIndex) =>
+              attempts.filter((attempt) => attempt.answers[question.id] === optionIndex).length,
+          );
+
+          return {
+            optionSelectionCounts,
+            options: question.options,
+            prompt: question.prompt,
+            questionId: question.id,
+            topic: question.topic,
+            totalResponses: attempts.length,
+          };
+        });
+
+        return {
+          poll,
+          questions,
+          hasSubmitted,
+          summary,
+          totalResponses: attempts.length,
+        };
+      },
+    );
   }
 
   const state = await readStore();
@@ -1450,7 +1623,94 @@ export async function recordPollAttempt(input: {
   userId: string;
 }) {
   if (isDynamoDbPollStoreEnabled()) {
-    return recordPollAttemptInBackend(input);
+    return withPollStoreFallback(
+      () => recordPollAttemptInBackend(input),
+      async () => {
+        const state = await readStore();
+        const normalizedUserId = normalizeParticipantIdentifier(input.userId);
+        const normalizedShareCode = input.shareCode.trim().toUpperCase();
+        const poll = hydrateScheduledPolls(state).find(
+          (entry) => entry.shareCode?.trim().toUpperCase() === normalizedShareCode,
+        );
+
+        if (!poll) {
+          throw new Error("The selected poll could not be found.");
+        }
+
+        if (poll.participantType !== "open") {
+          throw new Error("This poll is not available through a public QR code.");
+        }
+
+        if (poll.status === "scheduled") {
+          throw new Error("This poll is not live yet.");
+        }
+
+        if (poll.status === "completed") {
+          throw new Error("This poll is no longer available.");
+        }
+
+        if (
+          state.pollAttempts.some(
+            (attempt) => attempt.pollId === poll.id && identifiersMatch(attempt.userId, normalizedUserId),
+          )
+        ) {
+          throw new Error("This poll has already been submitted.");
+        }
+
+        const questionMap = new Map(state.pollQuestions.map((question) => [question.id, question]));
+        const questions = poll.questionIds
+          .map((questionId) => questionMap.get(questionId))
+          .filter((question): question is PersistentPollQuestion => Boolean(question));
+        const startedAtMs = new Date(input.startedAt).getTime();
+        const completedAtMs = new Date(input.completedAt).getTime();
+        const startsAtMs = new Date(poll.startsAt).getTime();
+        const endsAtMs = new Date(poll.endsAt).getTime();
+
+        if (completedAtMs < startsAtMs) {
+          throw new Error("This poll is not live yet.");
+        }
+
+        if (completedAtMs > endsAtMs) {
+          throw new Error("This poll is no longer available.");
+        }
+
+        const participantName = input.participantName?.trim();
+
+        if (!participantName) {
+          throw new Error("Participant name is required before starting the poll.");
+        }
+
+        for (const question of questions) {
+          const answer = input.answers[question.id];
+
+          if (typeof answer !== "number" || answer < 0 || answer >= question.options.length) {
+            throw new Error("Answer every poll question before submitting.");
+          }
+        }
+
+        if (Number.isNaN(startedAtMs) || Number.isNaN(completedAtMs) || completedAtMs < startedAtMs) {
+          throw new Error("The poll session timestamps are invalid.");
+        }
+
+        const attempt: PollAttempt = {
+          answers: questions.reduce<Record<string, number>>((accumulator, question) => {
+            accumulator[question.id] = input.answers[question.id] as number;
+            return accumulator;
+          }, {}),
+          completedAt: input.completedAt,
+          id: createEntityId("poll-attempt"),
+          participantName,
+          pollId: poll.id,
+          startedAt: input.startedAt,
+          userId: normalizedUserId,
+        };
+
+        state.pollAttempts = [attempt, ...state.pollAttempts];
+        await writeStore(state);
+
+        return attempt;
+      },
+    );
   }
 
   const state = await readStore();
