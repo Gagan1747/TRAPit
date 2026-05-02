@@ -15,19 +15,26 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "User access is required." }, { status: 403 });
   }
 
-  const [availablePolls, availableTests, groupJoinRequests, history] = await Promise.all([
-    listAvailablePollsForParticipant(actor.identifier),
-    listAvailableTestsForParticipant(actor.identifier),
-    listGroupJoinRequestsForUser(actor.identifier),
-    listUserHistory(actor.identifier),
-  ]);
+  try {
+    const [availablePolls, availableTests, groupJoinRequests, history] = await Promise.all([
+      listAvailablePollsForParticipant(actor.identifier),
+      listAvailableTestsForParticipant(actor.identifier),
+      listGroupJoinRequestsForUser(actor.identifier),
+      listUserHistory(actor.identifier),
+    ]);
 
-  return NextResponse.json({
-    availablePolls,
-    availableTests,
-    groupJoinRequests,
-    history,
-    identifier: actor.identifier,
-    usingFallbackIdentifier: actor.usingFallbackIdentifier,
-  });
+    return NextResponse.json({
+      availablePolls,
+      availableTests,
+      groupJoinRequests,
+      history,
+      identifier: actor.identifier,
+      usingFallbackIdentifier: actor.usingFallbackIdentifier,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to load the dashboard." },
+      { status: 500 },
+    );
+  }
 }

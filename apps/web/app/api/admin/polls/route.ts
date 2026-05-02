@@ -33,12 +33,19 @@ export async function GET() {
     return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
   }
 
-  const [pollQuestions, scheduledPolls] = await Promise.all([
-    listPollQuestions(actor.sub),
-    listScheduledPolls(actor.sub),
-  ]);
+  try {
+    const [pollQuestions, scheduledPolls] = await Promise.all([
+      listPollQuestions(actor.sub),
+      listScheduledPolls(actor.sub),
+    ]);
 
-  return NextResponse.json({ pollQuestions, scheduledPolls });
+    return NextResponse.json({ pollQuestions, scheduledPolls });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to load polls." },
+      { status: 500 },
+    );
+  }
 }
 
 export async function POST(request: Request) {

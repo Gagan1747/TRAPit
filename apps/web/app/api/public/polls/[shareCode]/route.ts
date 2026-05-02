@@ -34,12 +34,12 @@ async function getRegisteredActor() {
 
 export async function GET(
   _request: Request,
-  context: { params: { sharecode: string } },
+  context: { params: { shareCode: string } },
 ) {
   const actor = await getRegisteredActor();
 
   try {
-    const payload = await getPollByShareCode(context.params.sharecode, actor.identifier);
+    const payload = await getPollByShareCode(context.params.shareCode, actor.identifier);
 
     return NextResponse.json({
       actor,

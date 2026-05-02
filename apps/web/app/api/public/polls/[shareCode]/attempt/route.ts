@@ -26,7 +26,7 @@ async function getRegisteredActor() {
 
 export async function POST(
   request: Request,
-  context: { params: { sharecode: string } },
+  context: { params: { shareCode: string } },
 ) {
   const actor = await getRegisteredActor();
   const body = (await request.json()) as {
@@ -50,11 +50,11 @@ export async function POST(
       answers: body.answers,
       completedAt: body.completedAt,
       participantName: body.participantName,
-      shareCode: context.params.sharecode,
+      shareCode: context.params.shareCode,
       startedAt: body.startedAt,
       userId,
     });
-    const poll = await getPollByShareCode(context.params.sharecode, userId);
+    const poll = await getPollByShareCode(context.params.shareCode, userId);
 
     return NextResponse.json({
       actor: actor ?? {
