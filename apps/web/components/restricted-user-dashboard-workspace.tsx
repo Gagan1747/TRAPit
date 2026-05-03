@@ -11,8 +11,10 @@ import { useEffect, useState } from "react";
 
 import { formatShortDateTime } from "../lib/date-format";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
+import { NotificationBell, type NotificationBellItem } from "./notification-bell";
 
 type AvailableTest = {
+  createdAt: string;
   durationMinutes: number;
   hasAttempt: boolean;
   id: string;
@@ -25,6 +27,7 @@ type AvailableTest = {
     elapsedMs: number;
     participantName: string;
   };
+  updatedAt: string;
 };
 
 type DashboardResponse = {
@@ -57,6 +60,7 @@ type UserTestReviewResponse = {
 type RestrictedUserDashboardWorkspaceProps = {
   authConfigured: boolean;
   defaultParticipantIdentifier: string | null;
+  previousSignInAt: string | null;
 };
 
 type UserDashboardSection = "history" | "join-groups";
@@ -87,6 +91,7 @@ function getPollAccessPath(shareCode: string) {
 export function RestrictedUserDashboardWorkspace({
   authConfigured,
   defaultParticipantIdentifier,
+  previousSignInAt,
 }: RestrictedUserDashboardWorkspaceProps) {
   const [availablePolls, setAvailablePolls] = useState<ScheduledPoll[]>([]);
   const [availableTests, setAvailableTests] = useState<AvailableTest[]>([]);
@@ -102,7 +107,8 @@ export function RestrictedUserDashboardWorkspace({
   const [isSendingGroupRequest, setIsSendingGroupRequest] = useState<string | null>(null);
   const [lockedFeatureMessage, setLockedFeatureMessage] = useState<string | null>(null);
   const [openSection, setOpenSection] = useState<UserDashboardSection | null>("history");
-  const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
+  const [isMenuCollapsed, setIsMenuCollapsed] = useState(true);
+  const [isMenuHovered, setIsMenuHovered] = useState(false);
   const [openMenuGroup, setOpenMenuGroup] = useState<RestrictedMenuGroup | null>(null);
   const [resultFilter, setResultFilter] = useState<ResultsFilter>("both");
   const [resultsMode, setResultsMode] = useState<ResultsMode>("tests");
@@ -131,9 +137,36 @@ export function RestrictedUserDashboardWorkspace({
   });
   const filteredAvailableTests = resultFilter === "admin" ? [] : sortedAvailableTests;
   const filteredAvailablePolls = resultFilter === "admin" ? [] : sortedAvailablePolls;
+  const notificationBaseline = previousSignInAt ? new Date(previousSignInAt).getTime() : null;
   const pendingGroupRequestsCount = groupJoinRequests.filter((request) => request.status === "pending").length;
   const completedTestsCount = sortedAvailableTests.filter((test) => test.status === "completed").length;
   const liveTestsCount = sortedAvailableTests.filter((test) => test.status === "live").length;
+  const livePollsCount = sortedAvailablePolls.filter((poll) => poll.status === "live").length;
+  const newTestsSinceLastSignInCount = notificationBaseline === null
+    ? 0
+    : sortedAvailableTests.filter((test) => new Date(test.createdAt).getTime() > notificationBaseline).length;
+  const newPollsSinceLastSignInCount = notificationBaseline === null
+    ? 0
+    : sortedAvailablePolls.filter((poll) => new Date(poll.createdAt).getTime() > notificationBaseline).length;
+  const releasedTestResultsCount = notificationBaseline === null
+    ? 0
+    : sortedAvailableTests.filter(
+      (test) => test.status === "completed" && new Date(test.updatedAt).getTime() > notificationBaseline,
+    ).length;
+  const releasedPollResultsCount = notificationBaseline === null
+    ? 0
+    : sortedAvailablePolls.filter(
+      (poll) => poll.status === "completed" && new Date(poll.updatedAt).getTime() > notificationBaseline,
+    ).length;
+  const notificationItems: NotificationBellItem[] = [
+    { count: liveTestsCount, label: "Live tests" },
+    { count: livePollsCount, label: "Live polls" },
+    { count: newTestsSinceLastSignInCount, label: "New tests since last sign in" },
+    { count: newPollsSinceLastSignInCount, label: "New polls since last sign in" },
+    { count: releasedTestResultsCount, label: "Test results released since last sign in" },
+    { count: releasedPollResultsCount, label: "Poll results released since last sign in" },
+    { count: pendingGroupRequestsCount, label: "Group requests pending" },
+  ];
 
   async function loadDashboard(nextIdentifier?: string) {
     const participantIdentifier = (nextIdentifier ?? identifier).trim();
@@ -178,8 +211,8 @@ export function RestrictedUserDashboardWorkspace({
     setOpenSection((currentSection) => (currentSection === section ? null : section));
   }
 
-  function openLockedFeatureModal() {
-    setLockedFeatureMessage("Get TRAPit Pro to access this feature");
+  function openLockedFeatureModal(featureLabel: string) {
+    setLockedFeatureMessage(`${featureLabel} is available in TRAPit Pro.`);
   }
 
   function isMenuGroupActive(group: RestrictedMenuGroup) {
@@ -194,7 +227,7 @@ export function RestrictedUserDashboardWorkspace({
         key={`${label}-${section ?? "disabled"}`}
         className={`admin-menu-item${isActive ? " is-active" : ""}${section ? "" : " is-disabled"}`}
         type="button"
-        onClick={section ? () => setOpenSection(section) : openLockedFeatureModal}
+        onClick={section ? () => setOpenSection(section) : () => openLockedFeatureModal(label)}
       >
         {label}
       </button>
@@ -205,24 +238,58 @@ export function RestrictedUserDashboardWorkspace({
     label: string,
     group: RestrictedMenuGroup,
     items: Array<{ label: string; section?: UserDashboardSection }>,
+    options?: { locked?: boolean },
   ) {
     const isOpen = openMenuGroup === group;
     const isActive = isMenuGroupActive(group);
+    const isLocked = options?.locked ?? false;
 
     return (
       <div className="admin-menu-group" key={group}>
         <button
-          aria-expanded={isOpen}
-          className={`admin-menu-group-toggle${isOpen || isActive ? " is-active" : ""}`}
+          aria-expanded={isLocked ? false : isOpen}
+          className={`admin-menu-group-toggle${isOpen || isActive ? " is-active" : ""}${isLocked ? " is-disabled" : ""}`}
           type="button"
-          onClick={() => setOpenMenuGroup((currentGroup) => (currentGroup === group ? null : group))}
+          onClick={() => {
+            if (isLocked) {
+              openLockedFeatureModal(label);
+              return;
+            }
+
+            setOpenMenuGroup((currentGroup) => (currentGroup === group ? null : group));
+          }}
         >
           <span>{label}</span>
-          <span className="admin-menu-group-toggle-symbol">{isOpen ? "-" : "+"}</span>
+          <span className="admin-menu-group-toggle-symbol" aria-hidden="true">{isOpen ? "▲" : "▼"}</span>
         </button>
-        {isOpen ? <div className="admin-menu-substack">{items.map((item) => renderMenuItem(item.label, item.section))}</div> : null}
+        {!isLocked && isOpen ? <div className="admin-menu-substack">{items.map((item) => renderMenuItem(item.label, item.section))}</div> : null}
       </div>
     );
+  }
+
+  const isMenuExpanded = !isMenuCollapsed || isMenuHovered;
+
+  function handleCollapsedMenuPreview() {
+    if (isMenuCollapsed) {
+      setIsMenuHovered(true);
+    }
+  }
+
+  function handleCollapsedMenuExit() {
+    setIsMenuHovered(false);
+  }
+
+  function handleMenuToggle(event: React.MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    setIsMenuHovered(false);
+    setIsMenuCollapsed((currentValue) => !currentValue);
+  }
+
+  function handleCollapsedMenuClick() {
+    if (isMenuCollapsed) {
+      setIsMenuHovered(false);
+      setIsMenuCollapsed(false);
+    }
   }
 
   function getLatestGroupRequest(groupId: string) {
@@ -327,61 +394,41 @@ export function RestrictedUserDashboardWorkspace({
 
   return (
     <div className="workspace-stack">
-      <section className="panel workspace-card">
-        <div className="section-head compact-head">
-          <div>
-            <p className="eyebrow">Web user rollout</p>
-            <h2 className="section-title">Questions, Test, Results</h2>
-          </div>
-        </div>
+      <div className="workspace-toolbar">
+        <NotificationBell
+          items={notificationItems}
+          subtitle={notificationBaseline === null ? "Counts reflect the current dashboard state." : "Counts are measured from your previous sign in."}
+          title="User dashboard alerts"
+        />
+      </div>
 
-        <div className="metric-row">
-          <div className="metric-card">
-            <strong>{availableTests.length}</strong>
-            <span>tests</span>
-          </div>
-          <div className="metric-card">
-            <strong>{availablePolls.length}</strong>
-            <span>polls</span>
-          </div>
-          <div className="metric-card">
-            <strong>{liveTestsCount}</strong>
-            <span>test live</span>
-          </div>
-          <div className="metric-card">
-            <strong>{groupJoinRequests.length}</strong>
-            <span>group requests</span>
-          </div>
-          <div className="metric-card">
-            <strong>{pendingGroupRequestsCount}</strong>
-            <span>pending</span>
-          </div>
-          <div className="metric-card">
-            <strong>{completedTestsCount}</strong>
-            <span>test completed</span>
-          </div>
-        </div>
-      </section>
-
-      <div className={`admin-shell${isMenuCollapsed ? " is-menu-collapsed" : ""}`}>
-        <aside className={`admin-menu panel workspace-card${isMenuCollapsed ? " is-collapsed" : ""}`}>
+      <div className={`admin-shell${isMenuExpanded ? "" : " is-menu-collapsed"}`}>
+        <aside
+          className={`admin-menu panel workspace-card${isMenuExpanded ? "" : " is-collapsed"}`}
+          onClick={handleCollapsedMenuClick}
+          onMouseEnter={handleCollapsedMenuPreview}
+          onMouseLeave={handleCollapsedMenuExit}
+        >
           <div className="section-head compact-head">
             <div>
               <p className="eyebrow">Workspace menu</p>
               <h2 className="section-title">User navigation</h2>
             </div>
             <button
-              aria-expanded={!isMenuCollapsed}
+              aria-expanded={isMenuExpanded}
               className="button-secondary small-button admin-menu-toggle"
               type="button"
-              onClick={() => setIsMenuCollapsed((currentValue) => !currentValue)}
+              onClick={handleMenuToggle}
             >
-              {isMenuCollapsed ? "Show menu" : "Hide menu"}
+              {isMenuCollapsed ? (isMenuHovered ? "Pin menu" : "Expand") : "Collapse"}
             </button>
           </div>
 
-          {isMenuCollapsed ? (
-            <p className="muted-text admin-menu-collapsed-copy">Navigation is hidden. Expand the menu to switch sections.</p>
+          {!isMenuExpanded ? (
+            <div className="admin-menu-collapsed-rail" aria-label="Collapsed user navigation">
+              <p className="admin-menu-collapsed-title">Menu</p>
+              <p className="muted-text admin-menu-collapsed-copy">Hover or click to expand.</p>
+            </div>
           ) : (
           <div className="admin-menu-stack">
             <div className="admin-menu-group">
@@ -392,11 +439,11 @@ export function RestrictedUserDashboardWorkspace({
               { label: "Question Pools" },
               { label: "Schedule" },
               { label: "Self Test" },
-            ])}
+            ], { locked: true })}
             {renderMenuGroup("Poll", "poll", [
               { label: "Add Questions" },
               { label: "Schedule" },
-            ])}
+            ], { locked: true })}
             {renderMenuGroup("Groups", "groups", [
               { label: "Create" },
               { label: "Manage" },

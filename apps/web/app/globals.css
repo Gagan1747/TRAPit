@@ -220,7 +220,7 @@ main {
 }
 
 .admin-shell.is-menu-collapsed {
-  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
+  grid-template-columns: 88px minmax(0, 1fr);
 }
 
 .admin-main-column {
@@ -235,18 +235,41 @@ main {
 .admin-menu {
   position: sticky;
   top: 24px;
+  overflow: hidden;
+  transition: padding 180ms ease, width 180ms ease;
 }
 
 .admin-menu.is-collapsed {
-  padding-bottom: 20px;
+  padding: 18px 14px;
+  cursor: pointer;
 }
 
 .admin-menu-toggle {
   white-space: nowrap;
 }
 
+.admin-menu-collapsed-rail {
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.admin-menu-collapsed-title {
+  margin: 0;
+  color: var(--accent-deep);
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
 .admin-menu-collapsed-copy {
   margin: 0;
+  max-width: 9ch;
 }
 
 .admin-menu-stack {
@@ -280,6 +303,17 @@ main {
   border-color: rgba(180, 76, 47, 0.42);
   background: rgba(180, 76, 47, 0.12);
   color: var(--accent-deep);
+}
+
+.admin-menu-group-toggle.is-disabled {
+  opacity: 0.58;
+  cursor: pointer;
+}
+
+.admin-menu-group-toggle.is-disabled:hover,
+.admin-menu-group-toggle.is-disabled:focus-visible {
+  border-color: rgba(180, 76, 47, 0.22);
+  background: rgba(180, 76, 47, 0.08);
 }
 
 .admin-menu-group-toggle-symbol {
@@ -446,6 +480,93 @@ main {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+}
+
+.workspace-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.notification-bell {
+  position: relative;
+}
+
+.notification-bell-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 18px;
+  border: 1px solid rgba(180, 76, 47, 0.24);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(247, 228, 217, 0.92));
+  color: var(--accent-deep);
+  box-shadow: 0 18px 36px rgba(96, 42, 25, 0.14);
+}
+
+.notification-bell-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.notification-bell-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--accent-deep);
+  color: #fff;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.notification-panel {
+  position: absolute;
+  top: calc(100% + 14px);
+  right: 0;
+  z-index: 20;
+  width: min(360px, calc(100vw - 48px));
+  display: grid;
+  gap: 14px;
+}
+
+.notification-panel-subtitle {
+  margin: 0;
+}
+
+.notification-panel-list {
+  display: grid;
+  gap: 10px;
+}
+
+.notification-panel-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(180, 76, 47, 0.16);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .segmented-control {

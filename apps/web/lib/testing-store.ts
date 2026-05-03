@@ -101,6 +101,7 @@ async function withPollStoreFallback<T>(
 }
 
 export type AvailableUserTest = {
+  createdAt: string;
   durationMinutes: number;
   hasAttempt: boolean;
   id: string;
@@ -115,6 +116,7 @@ export type AvailableUserTest = {
   startsAt: string;
   status: ScheduledTest["status"];
   title: string;
+  updatedAt: string;
 };
 
 async function ensureStoreDirectory() {
@@ -1434,6 +1436,7 @@ export async function listAvailableTestsForParticipant(
 
   return scheduledTests
     .map((scheduledTest) => ({
+    createdAt: scheduledTest.createdAt,
     durationMinutes: scheduledTest.durationMinutes,
     hasAttempt: state.attempts.some(
       (attempt) =>
@@ -1461,6 +1464,7 @@ export async function listAvailableTestsForParticipant(
     startsAt: scheduledTest.startsAt,
     status: scheduledTest.status,
     title: scheduledTest.title,
+    updatedAt: scheduledTest.updatedAt,
   }))
     .sort((left, right) => {
       if (left.status === "completed" && right.status !== "completed") {

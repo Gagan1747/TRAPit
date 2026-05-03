@@ -64,6 +64,7 @@ The current scaffold now includes real Cognito-backed handlers:
    TRAPIT_POLL_QUESTIONS_TABLE=trapit-poll-questions
    TRAPIT_SCHEDULED_POLLS_TABLE=trapit-scheduled-polls
    TRAPIT_POLL_ATTEMPTS_TABLE=trapit-poll-attempts
+   TRAPIT_SIGNIN_ACTIVITY_TABLE=trapit-signin-activity
    ```
 
    Table details and example AWS CLI commands live in `infra/dynamodb/README.md`.
@@ -72,6 +73,7 @@ The current scaffold now includes real Cognito-backed handlers:
 
    - Web admin poll authoring, web/public poll access, and open-poll submissions use DynamoDB when this mode is enabled.
    - Tests, groups, question banks, and the mobile local workspace are still backed by their existing stores.
+   - Dashboard notification baselines and the dashboard header's last-signed-in timestamp now come from `TRAPIT_SIGNIN_ACTIVITY_TABLE` in DynamoDB instead of the local JSON file.
    - Mobile poll flows are not device-shared yet because mobile still authenticates directly with Cognito and does not call the protected web poll APIs.
 
 3. Start the web app:

@@ -23,6 +23,7 @@ import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
+import { NotificationBell, type NotificationBellItem } from "./notification-bell";
 
 const AI_OCR_EXAMPLE = `Question: 5+3?
 Option A: 10
@@ -413,9 +414,10 @@ function ParticipantSearchPicker({
 
 type AdminQuestionWorkspaceProps = {
   currentAdminIdentifier: string | null;
+  previousSignInAt: string | null;
 };
 
-export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestionWorkspaceProps) {
+export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInAt }: AdminQuestionWorkspaceProps) {
   const [editingGroupDraft, setEditingGroupDraft] = useState<EditableGroupDraft | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingQuestionDraft, setEditingQuestionDraft] = useState<EditableQuestionDraft | null>(null);
@@ -472,7 +474,8 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
   const [reviewByTestId, setReviewByTestId] = useState<Record<string, AdminTestReviewResponse>>({});
   const [reviewLoadingByTestId, setReviewLoadingByTestId] = useState<Record<string, boolean>>({});
   const [resultsMode, setResultsMode] = useState<AdminResultsMode>("tests");
-  const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
+  const [isMenuCollapsed, setIsMenuCollapsed] = useState(true);
+  const [isMenuHovered, setIsMenuHovered] = useState(false);
   const [openMenuGroup, setOpenMenuGroup] = useState<AdminMenuGroup | null>(null);
   const [scheduleDurationMinutes, setScheduleDurationMinutes] = useState("30");
   const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
@@ -830,11 +833,36 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
           onClick={() => setOpenMenuGroup((currentGroup) => (currentGroup === group ? null : group))}
         >
           <span>{label}</span>
-          <span className="admin-menu-group-toggle-symbol">{isOpen ? "-" : "+"}</span>
+          <span className="admin-menu-group-toggle-symbol" aria-hidden="true">{isOpen ? "▲" : "▼"}</span>
         </button>
         {isOpen ? <div className="admin-menu-substack">{items.map((item) => renderMenuItem(item.label, item.section))}</div> : null}
       </div>
     );
+  }
+
+  const isMenuExpanded = !isMenuCollapsed || isMenuHovered;
+
+  function handleCollapsedMenuPreview() {
+    if (isMenuCollapsed) {
+      setIsMenuHovered(true);
+    }
+  }
+
+  function handleCollapsedMenuExit() {
+    setIsMenuHovered(false);
+  }
+
+  function handleMenuToggle(event: React.MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    setIsMenuHovered(false);
+    setIsMenuCollapsed((currentValue) => !currentValue);
+  }
+
+  function handleCollapsedMenuClick() {
+    if (isMenuCollapsed) {
+      setIsMenuHovered(false);
+      setIsMenuCollapsed(false);
+    }
   }
 
   function handleToggleSelectAllQuestions(questionIds: string[]) {
@@ -1573,8 +1601,35 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
 
       return new Date(rightPoll.startsAt).getTime() - new Date(leftPoll.startsAt).getTime();
     });
-  const completedTestsCount = sortedScheduledTests.filter((test) => test.status === "completed").length;
-  const upcomingTestsCount = sortedScheduledTests.filter((test) => test.status === "scheduled").length;
+  const notificationBaseline = previousSignInAt ? new Date(previousSignInAt).getTime() : null;
+  const liveTestsCount = sortedScheduledTests.filter((test) => test.status === "live").length;
+  const livePollsCount = sortedScheduledPolls.filter((poll) => poll.status === "live").length;
+  const pendingGroupRequestsCount = groupJoinRequests.filter((request) => request.status === "pending").length;
+  const newTestsSinceLastSignInCount = notificationBaseline === null
+    ? 0
+    : sortedScheduledTests.filter((test) => new Date(test.createdAt).getTime() > notificationBaseline).length;
+  const newPollsSinceLastSignInCount = notificationBaseline === null
+    ? 0
+    : sortedScheduledPolls.filter((poll) => new Date(poll.createdAt).getTime() > notificationBaseline).length;
+  const releasedTestResultsCount = notificationBaseline === null
+    ? 0
+    : sortedScheduledTests.filter(
+      (test) => test.status === "completed" && new Date(test.updatedAt).getTime() > notificationBaseline,
+    ).length;
+  const releasedPollResultsCount = notificationBaseline === null
+    ? 0
+    : sortedScheduledPolls.filter(
+      (poll) => poll.status === "completed" && new Date(poll.updatedAt).getTime() > notificationBaseline,
+    ).length;
+  const notificationItems: NotificationBellItem[] = [
+    { count: liveTestsCount, label: "Live tests" },
+    { count: livePollsCount, label: "Live polls" },
+    { count: newTestsSinceLastSignInCount, label: "New tests since last sign in" },
+    { count: newPollsSinceLastSignInCount, label: "New polls since last sign in" },
+    { count: releasedTestResultsCount, label: "Test results released since last sign in" },
+    { count: releasedPollResultsCount, label: "Poll results released since last sign in" },
+    { count: pendingGroupRequestsCount, label: "Group requests pending" },
+  ];
 
   useEffect(() => {
     const visibleQuestionIds = new Set(
@@ -1634,61 +1689,41 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier }: AdminQuestion
 
   return (
     <div className="workspace-stack">
-      <section className="panel workspace-card">
-        <div className="section-head compact-head">
-          <div>
-            <p className="eyebrow">Web admin rollout</p>
-            <h2 className="section-title">Questions, Test, Results</h2>
-          </div>
-        </div>
+      <div className="workspace-toolbar">
+        <NotificationBell
+          items={notificationItems}
+          subtitle={notificationBaseline === null ? "Counts reflect the current workspace state." : "Counts are measured from your previous sign in."}
+          title="Admin workspace alerts"
+        />
+      </div>
 
-        <div className="metric-row">
-          <div className="metric-card">
-            <strong>{summary.participants}</strong>
-            <span>participants</span>
-          </div>
-          <div className="metric-card">
-            <strong>{summary.questions}</strong>
-            <span>questions</span>
-          </div>
-          <div className="metric-card">
-            <strong>{upcomingTestsCount}</strong>
-            <span>test upcoming</span>
-          </div>
-          <div className="metric-card">
-            <strong>{summary.groups}</strong>
-            <span>groups</span>
-          </div>
-          <div className="metric-card">
-            <strong>{summary.pools}</strong>
-            <span>pools</span>
-          </div>
-          <div className="metric-card">
-            <strong>{completedTestsCount}</strong>
-            <span>test completed</span>
-          </div>
-        </div>
-      </section>
-
-      <div className={`admin-shell${isMenuCollapsed ? " is-menu-collapsed" : ""}`}>
-        <aside className={`admin-menu panel workspace-card${isMenuCollapsed ? " is-collapsed" : ""}`}>
+      <div className={`admin-shell${isMenuExpanded ? "" : " is-menu-collapsed"}`}>
+        <aside
+          className={`admin-menu panel workspace-card${isMenuExpanded ? "" : " is-collapsed"}`}
+          onClick={handleCollapsedMenuClick}
+          onMouseEnter={handleCollapsedMenuPreview}
+          onMouseLeave={handleCollapsedMenuExit}
+        >
           <div className="section-head compact-head">
             <div>
               <p className="eyebrow">Workspace menu</p>
               <h2 className="section-title">Admin navigation</h2>
             </div>
             <button
-              aria-expanded={!isMenuCollapsed}
+              aria-expanded={isMenuExpanded}
               className="button-secondary small-button admin-menu-toggle"
               type="button"
-              onClick={() => setIsMenuCollapsed((currentValue) => !currentValue)}
+              onClick={handleMenuToggle}
             >
-              {isMenuCollapsed ? "Show menu" : "Hide menu"}
+              {isMenuCollapsed ? (isMenuHovered ? "Pin menu" : "Expand") : "Collapse"}
             </button>
           </div>
 
-          {isMenuCollapsed ? (
-            <p className="muted-text admin-menu-collapsed-copy">Navigation is hidden. Expand the menu to jump between sections.</p>
+          {!isMenuExpanded ? (
+            <div className="admin-menu-collapsed-rail" aria-label="Collapsed admin navigation">
+              <p className="admin-menu-collapsed-title">Menu</p>
+              <p className="muted-text admin-menu-collapsed-copy">Hover or click to expand.</p>
+            </div>
           ) : (
           <div className="admin-menu-stack">
             <div className="admin-menu-group">

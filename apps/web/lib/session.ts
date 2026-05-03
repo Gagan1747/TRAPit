@@ -1,17 +1,32 @@
 import "server-only";
 
-import { getDashboardPath, type AuthSession, type UserRole } from "@trapit/auth";
+import { getDashboardPath, getSessionIdentifier, type AuthSession, type UserRole } from "@trapit/auth";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { getWebAuthSetupMessage, isWebAuthConfigured } from "./auth-config";
 import { verifyWebTokens, type CognitoTokens } from "./cognito";
+import { getSignInActivity, recordSignInActivity } from "./sign-in-activity-store";
 
 const COOKIE_NAMES = {
   accessToken: "trapit-access-token",
   idToken: "trapit-id-token",
   refreshToken: "trapit-refresh-token",
 } as const;
+
+function getSessionActorKey(session: AuthSession) {
+  if (session.sub) {
+    return `sub:${session.sub}`;
+  }
+
+  const identifier = getSessionIdentifier(session) ?? session.phoneNumber ?? session.email;
+
+  if (!identifier) {
+    return null;
+  }
+
+  return `role:${session.role}:identifier:${identifier.trim().toLowerCase()}`;
+}
 
 function getCookieOptions(maxAge?: number) {
   return {
@@ -52,6 +67,32 @@ export async function destroyWebSession() {
   cookieStore.delete(COOKIE_NAMES.idToken);
   cookieStore.delete(COOKIE_NAMES.accessToken);
   cookieStore.delete(COOKIE_NAMES.refreshToken);
+}
+
+export async function recordWebSignIn(session: AuthSession) {
+  const actorKey = getSessionActorKey(session);
+
+  if (!actorKey) {
+    return {
+      actorKey: "",
+      currentSignInAt: new Date().toISOString(),
+      previousSignInAt: null,
+    };
+  }
+
+  return recordSignInActivity(actorKey);
+}
+
+export async function getPreviousWebSignIn(session: AuthSession) {
+  const actorKey = getSessionActorKey(session);
+
+  if (!actorKey) {
+    return null;
+  }
+
+  const activity = await getSignInActivity(actorKey);
+
+  return activity?.previousSignInAt ?? null;
 }
 
 export async function getWebSession(): Promise<AuthSession | null> {

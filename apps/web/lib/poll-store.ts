@@ -1,9 +1,7 @@
 import "server-only";
 
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import {
   BatchGetCommand,
-  DynamoDBDocumentClient,
   PutCommand,
   QueryCommand,
   ScanCommand,
@@ -20,6 +18,8 @@ import {
   type PersistentPollQuestion,
   type ScheduledPoll,
 } from "@trapit/testing";
+
+import { getDynamoDbDocumentClient } from "./dynamodb";
 
 type CreateScheduledPollInput = {
   anonymous: boolean;
@@ -92,27 +92,8 @@ export function isDynamoDbPollStoreEnabled() {
     && Boolean(tables.attempts && tables.questions && tables.scheduledPolls);
 }
 
-let documentClient: DynamoDBDocumentClient | null = null;
-
 function getDocumentClient() {
-  if (documentClient) {
-    return documentClient;
-  }
-
-  const region = process.env.TRAPIT_DYNAMODB_REGION?.trim()
-    || process.env.AWS_REGION?.trim()
-    || process.env.AWS_DEFAULT_REGION?.trim()
-    || process.env.COGNITO_REGION?.trim()
-    || "us-east-1";
-  const client = new DynamoDBClient({ region });
-
-  documentClient = DynamoDBDocumentClient.from(client, {
-    marshallOptions: {
-      removeUndefinedValues: true,
-    },
-  });
-
-  return documentClient;
+  return getDynamoDbDocumentClient();
 }
 
 async function scanAllItems<T>(tableName: string): Promise<T[]> {

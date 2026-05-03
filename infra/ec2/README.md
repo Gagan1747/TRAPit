@@ -131,9 +131,12 @@ TRAPIT_DYNAMODB_REGION=us-east-1
 TRAPIT_POLL_QUESTIONS_TABLE=trapit-poll-questions
 TRAPIT_SCHEDULED_POLLS_TABLE=trapit-scheduled-polls
 TRAPIT_POLL_ATTEMPTS_TABLE=trapit-poll-attempts
+TRAPIT_SIGNIN_ACTIVITY_TABLE=trapit-signin-activity
 ```
 
 Create those tables using the examples in `infra/dynamodb/README.md`, and give the EC2 instance role these permissions on them: `dynamodb:BatchGetItem`, `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:Query`, and `dynamodb:Scan`.
+
+For the new sign-in activity table specifically, you can attach the example policy document in `infra/dynamodb/trapit-signin-activity-policy.json` after replacing `REGION` and `ACCOUNT_ID` with your AWS values.
 
 `TRAPIT_DATA_DIR` moves the web app data file outside the Git checkout so deployments do not overwrite test history, group data, or results. The live file becomes `/var/lib/trapit/testing-workspace.json`.
 

@@ -3,13 +3,15 @@ import { getSessionDisplayName, getSessionIdentifier } from "@trapit/auth";
 import { AdminQuestionWorkspace } from "../../components/admin-question-workspace";
 import { SignOutButton } from "../../components/sign-out-button";
 import { isWebAuthConfigured } from "../../lib/auth-config";
-import { requireWebSession } from "../../lib/session";
+import { formatShortDateTime } from "../../lib/date-format";
+import { getPreviousWebSignIn, requireWebSession } from "../../lib/session";
 
 export default async function AdminPage() {
   const session = await requireWebSession("admin");
   const authConfigured = isWebAuthConfigured();
   const sessionIdentifier = getSessionIdentifier(session);
   const displayName = getSessionDisplayName(session) ?? "Admin";
+  const previousSignInAt = authConfigured ? await getPreviousWebSignIn(session) : null;
 
   return (
     <main className="page-shell">
@@ -22,12 +24,15 @@ export default async function AdminPage() {
                 ? `Signed in with ${sessionIdentifier ?? "admin"}`
                 : "Auth setup pending. Admin area is open for feature work."}
             </p>
+            <p className="hero-text">
+              Last signed in: {previousSignInAt ? formatShortDateTime(previousSignInAt) : "First recorded sign in"}
+            </p>
           </div>
           <div className="inline-actions">
             {authConfigured ? <SignOutButton /> : null}
           </div>
         </div>
-        <AdminQuestionWorkspace currentAdminIdentifier={sessionIdentifier} />
+        <AdminQuestionWorkspace currentAdminIdentifier={sessionIdentifier} previousSignInAt={previousSignInAt} />
       </section>
     </main>
   );

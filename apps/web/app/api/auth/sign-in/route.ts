@@ -2,7 +2,7 @@ import { getDashboardPath } from "@trapit/auth";
 import { NextResponse } from "next/server";
 
 import { getCognitoErrorMessage, signInWithCognito, verifyWebTokens } from "../../../../lib/cognito";
-import { createWebSession, getWebSession } from "../../../../lib/session";
+import { createWebSession, getWebSession, recordWebSignIn } from "../../../../lib/session";
 
 export async function POST(request: Request) {
   try {
@@ -39,7 +39,10 @@ export async function POST(request: Request) {
     }
 
     await createWebSession(tokens);
+    const signInActivity = await recordWebSignIn(session);
+
     return NextResponse.json({
+      previousSignInAt: signInActivity.previousSignInAt,
       redirectTo: getDashboardPath(session.role),
       session,
     });
