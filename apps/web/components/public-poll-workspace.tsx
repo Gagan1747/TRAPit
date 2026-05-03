@@ -36,7 +36,7 @@ type PublicPollResponse = {
 };
 
 const guestRegistrationMessage =
-  "Guest responses stay anonymous, but live and final results are only visible to the poll creator and registered participants who responded.";
+  "Register to see live results and to respond to upcoming instances.";
 
 async function readJson<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as T & { error?: string };
@@ -291,7 +291,7 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
                       {question.topic ? <span className="status-chip warning">{question.topic}</span> : null}
                     </div>
                     <p className="muted-text">Live responses: {question.totalResponses}</p>
-                    <ol className="question-options compact-question-options">
+                    <div className="poll-result-chart" role="list" aria-label={`${question.prompt} response distribution`}>
                       {question.options.map((option, optionIndex) => {
                         const count = question.optionSelectionCounts[optionIndex] ?? 0;
                         const percentage = question.totalResponses
@@ -299,12 +299,20 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
                           : 0;
 
                         return (
-                          <li key={`${question.questionId}-summary-${optionIndex}`}>
-                            {option} - {count} vote{count === 1 ? "" : "s"} ({percentage}%)
-                          </li>
+                          <div className="poll-result-row" key={`${question.questionId}-summary-${optionIndex}`} role="listitem">
+                            <div className="poll-result-row-head">
+                              <span className="poll-result-option">{option}</span>
+                              <span className="poll-result-meta">
+                                {count} vote{count === 1 ? "" : "s"} ({percentage}%)
+                              </span>
+                            </div>
+                            <div className="poll-result-bar-track" aria-hidden="true">
+                              <div className="poll-result-bar-fill" style={{ width: `${percentage}%` }} />
+                            </div>
+                          </div>
                         );
                       })}
-                    </ol>
+                    </div>
                   </article>
                 ))}
               </div>
@@ -319,9 +327,17 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
             ) : null}
 
             {!payload.actor.isRegistered ? (
-              <p className="muted-text">
-                Register with <a href="https://www.trapit.in" target="_blank" rel="noreferrer">www.TRAPit.in</a> if you want your submitted responses to unlock live and final results on future polls.
-              </p>
+              <div className="form-stack">
+                <p className="muted-text">Register to see live results and to respond to upcoming instances.</p>
+                <div aria-label="Guest authentication links" className="segmented-control segmented-control-wide" role="group">
+                  <a className="segmented-control-item" href="/sign-in">
+                    Sign in
+                  </a>
+                  <a className="segmented-control-item" href="/sign-up">
+                    Sign up
+                  </a>
+                </div>
+              </div>
             ) : null}
           </div>
         ) : null}

@@ -66,7 +66,6 @@ type RestrictedUserDashboardWorkspaceProps = {
 type UserDashboardSection = "history" | "join-groups";
 type RestrictedMenuGroup = "groups" | "poll" | "test";
 type ResultsMode = "polls" | "tests";
-type ResultsFilter = "admin" | "both" | "participant";
 
 const statusPriority: Record<AvailableTest["status"], number> = {
   live: 0,
@@ -108,7 +107,6 @@ export function RestrictedUserDashboardWorkspace({
   const [lockedFeatureMessage, setLockedFeatureMessage] = useState<string | null>(null);
   const [openSection, setOpenSection] = useState<UserDashboardSection | null>("history");
   const [openMenuGroup, setOpenMenuGroup] = useState<RestrictedMenuGroup | null>(null);
-  const [resultFilter, setResultFilter] = useState<ResultsFilter>("both");
   const [resultsMode, setResultsMode] = useState<ResultsMode>("tests");
   const [reviewByTestId, setReviewByTestId] = useState<Record<string, UserTestReviewResponse>>({});
   const [reviewLoadingByTestId, setReviewLoadingByTestId] = useState<Record<string, boolean>>({});
@@ -133,8 +131,6 @@ export function RestrictedUserDashboardWorkspace({
 
     return new Date(rightPoll.startsAt).getTime() - new Date(leftPoll.startsAt).getTime();
   });
-  const filteredAvailableTests = resultFilter === "admin" ? [] : sortedAvailableTests;
-  const filteredAvailablePolls = resultFilter === "admin" ? [] : sortedAvailablePolls;
   const notificationBaseline = previousSignInAt ? new Date(previousSignInAt).getTime() : null;
   const pendingGroupRequestsCount = groupJoinRequests.filter((request) => request.status === "pending").length;
   const completedTestsCount = sortedAvailableTests.filter((test) => test.status === "completed").length;
@@ -453,37 +449,10 @@ export function RestrictedUserDashboardWorkspace({
                 </button>
               </div>
 
-              <div aria-label="Results scope" className="segmented-control segmented-control-wide" role="group">
-                <button
-                  aria-pressed={resultFilter === "admin"}
-                  className={`segmented-control-item${resultFilter === "admin" ? " is-active" : ""}`}
-                  type="button"
-                  onClick={() => setResultFilter("admin")}
-                >
-                  {resultsMode === "tests" ? "Scheduled as admin" : "Poll created as admin"}
-                </button>
-                <button
-                  aria-pressed={resultFilter === "both"}
-                  className={`segmented-control-item${resultFilter === "both" ? " is-active" : ""}`}
-                  type="button"
-                  onClick={() => setResultFilter("both")}
-                >
-                  Both
-                </button>
-                <button
-                  aria-pressed={resultFilter === "participant"}
-                  className={`segmented-control-item${resultFilter === "participant" ? " is-active" : ""}`}
-                  type="button"
-                  onClick={() => setResultFilter("participant")}
-                >
-                  {resultsMode === "tests" ? "Attended as participant" : "Poll responded as participant"}
-                </button>
-              </div>
-
               {resultsMode === "tests" ? (
-                filteredAvailableTests.length ? (
+                sortedAvailableTests.length ? (
                   <div className="question-list">
-                    {filteredAvailableTests.map((test) => {
+                    {sortedAvailableTests.map((test) => {
                       const historyEntry = historyByTestId.get(test.id);
                       const isCompleted = test.status === "completed";
 
@@ -589,9 +558,9 @@ export function RestrictedUserDashboardWorkspace({
                     <p className="muted-text">No tests match this view yet.</p>
                   </div>
                 )
-              ) : filteredAvailablePolls.length ? (
+              ) : sortedAvailablePolls.length ? (
                 <div className="question-list">
-                  {filteredAvailablePolls.map((poll) => (
+                  {sortedAvailablePolls.map((poll) => (
                     <article className="question-card" key={poll.id}>
                       <div className="question-head">
                         <strong>{poll.title}</strong>

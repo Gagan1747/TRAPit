@@ -13,6 +13,8 @@ type AuthFormProps = {
   mode: "sign-in" | "sign-up";
 };
 
+type SignUpSubMode = "confirm" | "create";
+
 async function readAuthResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
   const contentType = response.headers.get("content-type") ?? "";
 
@@ -31,6 +33,7 @@ async function readAuthResponse<T>(response: Response, fallbackMessage: string):
 export function AuthForm({ mode }: AuthFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const initialSignUpSubMode = searchParams.get("step") === "confirm" ? "confirm" : "create";
   const [confirmationCode, setConfirmationCode] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [fullName, setFullName] = useState("");
@@ -39,6 +42,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [countryCode, setCountryCode] = useState("+91");
   const [phoneNumber, setPhoneNumber] = useState("");
+  const [signUpSubMode, setSignUpSubMode] = useState<SignUpSubMode>(initialSignUpSubMode);
   const [signUpState, setSignUpState] = useState<{
     destination: string | null;
     requiresConfirmation: boolean;
@@ -60,20 +64,25 @@ export function AuthForm({ mode }: AuthFormProps) {
 
   const combinedPhoneNumber = combinePhoneNumber(countryCode, phoneNumber);
 
-    function handlePhoneNumberChange(nextPhoneNumber: string) {
+  function setNextSignUpSubMode(nextMode: SignUpSubMode) {
+    setSignUpSubMode(nextMode);
+    setErrorMessage(null);
+  }
+
+  function handlePhoneNumberChange(nextPhoneNumber: string) {
     const sanitizedPhoneNumber = sanitizeNationalPhoneInput(nextPhoneNumber);
 
     if (sanitizedPhoneNumber === phoneNumber) {
-        return;
-      }
+      return;
+    }
 
     setPhoneNumber(sanitizedPhoneNumber);
-      setPassword("");
-      setIsPasswordVisible(false);
-      setConfirmationCode("");
-      setSignUpState(null);
-      setErrorMessage(null);
-    }
+    setPassword("");
+    setIsPasswordVisible(false);
+    setConfirmationCode("");
+    setSignUpState(null);
+    setErrorMessage(null);
+  }
 
   function handleCountryCodeChange(nextCountryCode: string) {
     const sanitizedCountryCode = sanitizeCountryCodeInput(nextCountryCode);
@@ -96,6 +105,11 @@ export function AuthForm({ mode }: AuthFormProps) {
 
     if (!authConfigured) {
       setErrorMessage(getPublicWebAuthSetupMessage());
+      return;
+    }
+
+    if (mode === "sign-up" && signUpSubMode === "confirm") {
+      await handleConfirmSignUp();
       return;
     }
 
@@ -140,6 +154,7 @@ export function AuthForm({ mode }: AuthFormProps) {
           requiresConfirmation: payload.requiresConfirmation ?? true,
           warning: payload.warning,
         });
+        setSignUpSubMode("confirm");
 
         if (!(payload.requiresConfirmation ?? true)) {
           router.push("/sign-in?created=1");
@@ -220,7 +235,15 @@ export function AuthForm({ mode }: AuthFormProps) {
   return (
     <form className="form-stack" onSubmit={handleSubmit}>
       <div>
-        <h2>{mode === "sign-up" ? "Create account" : "Welcome back"}</h2>
+        <div aria-label="Authentication mode" className="segmented-control segmented-control-wide" role="group">
+          <a className={`segmented-control-item${mode === "sign-in" ? " is-active" : ""}`} href="/sign-in">
+            Sign in
+          </a>
+          <a className={`segmented-control-item${mode === "sign-up" ? " is-active" : ""}`} href="/sign-up">
+            Sign up
+          </a>
+        </div>
+        <h2>{mode === "sign-up" ? signUpSubMode === "confirm" ? "Confirm account" : "Create account" : "Welcome back"}</h2>
         {mode === "sign-up" ? (
           <p className="muted-text">
             Public sign-up is enabled for normal users. Admins should be provisioned separately.
@@ -230,6 +253,27 @@ export function AuthForm({ mode }: AuthFormProps) {
       </div>
 
       {mode === "sign-up" ? (
+        <div aria-label="Sign up step" className="segmented-control segmented-control-wide" role="group">
+          <button
+            aria-pressed={signUpSubMode === "create"}
+            className={`segmented-control-item${signUpSubMode === "create" ? " is-active" : ""}`}
+            type="button"
+            onClick={() => setNextSignUpSubMode("create")}
+          >
+            Create account
+          </button>
+          <button
+            aria-pressed={signUpSubMode === "confirm"}
+            className={`segmented-control-item${signUpSubMode === "confirm" ? " is-active" : ""}`}
+            type="button"
+            onClick={() => setNextSignUpSubMode("confirm")}
+          >
+            Confirm account
+          </button>
+        </div>
+      ) : null}
+
+      {mode === "sign-up" && signUpSubMode === "create" ? (
         <div className="field">
           <label htmlFor="full-name">Full name</label>
           <input
@@ -267,29 +311,37 @@ export function AuthForm({ mode }: AuthFormProps) {
         </div>
       </div>
 
-      <div className="field">
-        <label htmlFor="password">Password</label>
-        <div className="field-row auth-password-row">
-          <input
-            id="password"
-            type={isPasswordVisible ? "text" : "password"}
-            placeholder="At least 8 characters"
-            disabled={!authConfigured}
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-          <button
-            className="button-secondary small-button"
-            disabled={!authConfigured}
-            type="button"
-            onClick={() => setIsPasswordVisible((currentValue) => !currentValue)}
-          >
-            {isPasswordVisible ? "Hide" : "Show"}
-          </button>
+      {mode === "sign-in" || signUpSubMode === "create" ? (
+        <div className="field">
+          <label htmlFor="password">Password</label>
+          <div className="field-row auth-password-row">
+            <input
+              id="password"
+              type={isPasswordVisible ? "text" : "password"}
+              placeholder="At least 8 characters"
+              disabled={!authConfigured}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+            <button
+              className="button-secondary small-button"
+              disabled={!authConfigured}
+              type="button"
+              onClick={() => setIsPasswordVisible((currentValue) => !currentValue)}
+            >
+              {isPasswordVisible ? "Hide" : "Show"}
+            </button>
+          </div>
         </div>
-      </div>
+      ) : null}
 
-      {mode === "sign-up" && signUpState?.requiresConfirmation ? (
+      {mode === "sign-up" && signUpSubMode === "confirm" ? (
+        <p className="muted-text">
+          Enter the same phone number you used during sign-up, then submit the SMS OTP to finish creating the account.
+        </p>
+      ) : null}
+
+      {mode === "sign-up" && signUpSubMode === "confirm" ? (
         <div className="field">
           <label htmlFor="confirmation-code">Confirmation code</label>
           <input
@@ -302,9 +354,9 @@ export function AuthForm({ mode }: AuthFormProps) {
         </div>
       ) : null}
 
-      {signUpState?.requiresConfirmation ? (
+      {mode === "sign-up" && signUpSubMode === "confirm" ? (
         <p className="muted-text">
-          SMS code sent{signUpState.destination ? ` to ${signUpState.destination}` : ""}. Confirm the account before signing in.
+          SMS code sent{signUpState?.destination ? ` to ${signUpState.destination}` : ""}. Confirm the account before signing in.
         </p>
       ) : null}
 
@@ -322,7 +374,9 @@ export function AuthForm({ mode }: AuthFormProps) {
           : !authConfigured
             ? "Auth setup pending"
           : mode === "sign-up"
-            ? "Create user account"
+            ? signUpSubMode === "confirm"
+              ? "Confirm account"
+              : "Create user account"
             : "Sign in"}
       </button>
 
@@ -332,20 +386,9 @@ export function AuthForm({ mode }: AuthFormProps) {
         </a>
       ) : null}
 
-      {mode === "sign-up" && signUpState?.requiresConfirmation ? (
-        <button
-          className="button-secondary"
-          disabled={isPending || !authConfigured}
-          type="button"
-          onClick={handleConfirmSignUp}
-        >
-          Confirm account
-        </button>
-      ) : null}
-
       {mode === "sign-in" ? null : (
-        <a className="button-secondary" href="/sign-in">
-          Already confirmed? Sign in
+        <a className="button-secondary" href={signUpSubMode === "confirm" ? "/sign-in" : "/sign-up?step=confirm"}>
+          {signUpSubMode === "confirm" ? "Already confirmed? Sign in" : "Already created an account? Confirm it"}
         </a>
       )}
     </form>
