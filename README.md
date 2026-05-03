@@ -47,6 +47,7 @@ The current scaffold now includes real Cognito-backed handlers:
    Required notes:
 
    - `COGNITO_REGION`, `COGNITO_USER_POOL_ID`, `COGNITO_WEB_CLIENT_ID`, and `COGNITO_MOBILE_CLIENT_ID` must match your Cognito setup.
+   - Set `TRAPIT_COOKIE_DOMAIN=trapit.in` in production when you serve both `trapit.in` and `www.trapit.in` so the web sign-in cookies work on both hosts.
    - `ADMIN_ACCESS_CONTACT_EMAIL` and `ADMIN_ACCESS_CONTACT_PHONE` are optional. If you set them, users who try to sign in as admins without the admin role will see who to contact for access.
    - Configure the Cognito user pool for phone-number sign-in and SMS verification. The current app flow does not use email-based confirmation.
    - `EXPO_PUBLIC_API_BASE_URL` should point to the web app base URL. For local simulator use, `http://localhost:3000` is usually fine. For a physical device, set it to your machine's LAN IP, for example `http://192.168.1.10:3000`.

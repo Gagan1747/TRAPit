@@ -111,6 +111,7 @@ COGNITO_WEB_CLIENT_ID=...
 COGNITO_MOBILE_CLIENT_ID=...
 COGNITO_ADMIN_GROUP=admins
 COGNITO_USER_GROUP=users
+TRAPIT_COOKIE_DOMAIN=trapit.in
 NEXT_PUBLIC_COGNITO_REGION=...
 NEXT_PUBLIC_COGNITO_USER_POOL_ID=...
 NEXT_PUBLIC_COGNITO_WEB_CLIENT_ID=...
@@ -120,6 +121,8 @@ TRAPIT_POLL_STORE_MODE=file
 ```
 
 If you want automatic user group assignment in Cognito, also provide AWS credentials on the instance with permission for `cognito-idp:AdminAddUserToGroup`.
+
+Set `TRAPIT_COOKIE_DOMAIN=trapit.in` when both `trapit.in` and `www.trapit.in` point at this deployment. That makes the secure auth cookies available on both hosts so signed-in users keep their session when opening a public poll link on either domain.
 
 One common EC2 approach is to attach an IAM role to the instance instead of storing AWS keys in env files.
 

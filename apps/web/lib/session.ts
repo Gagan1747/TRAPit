@@ -14,6 +14,23 @@ const COOKIE_NAMES = {
   refreshToken: "trapit-refresh-token",
 } as const;
 
+function getCookieDomain() {
+  if (process.env.NODE_ENV !== "production") {
+    return undefined;
+  }
+
+  const configuredDomain = process.env.TRAPIT_COOKIE_DOMAIN?.trim();
+
+  if (!configuredDomain) {
+    return undefined;
+  }
+
+  return configuredDomain
+    .replace(/^https?:\/\//i, "")
+    .replace(/\/.*$/, "")
+    .replace(/^\./, "");
+}
+
 function getSessionActorKey(session: AuthSession) {
   if (session.sub) {
     return `sub:${session.sub}`;
@@ -29,7 +46,10 @@ function getSessionActorKey(session: AuthSession) {
 }
 
 function getCookieOptions(maxAge?: number) {
+  const domain = getCookieDomain();
+
   return {
+    ...(domain ? { domain } : {}),
     httpOnly: true,
     maxAge,
     path: "/",
@@ -64,9 +84,9 @@ export async function createWebSession(tokens: CognitoTokens) {
 export async function destroyWebSession() {
   const cookieStore = cookies();
 
-  cookieStore.delete(COOKIE_NAMES.idToken);
-  cookieStore.delete(COOKIE_NAMES.accessToken);
-  cookieStore.delete(COOKIE_NAMES.refreshToken);
+  cookieStore.set(COOKIE_NAMES.idToken, "", getCookieOptions(0));
+  cookieStore.set(COOKIE_NAMES.accessToken, "", getCookieOptions(0));
+  cookieStore.set(COOKIE_NAMES.refreshToken, "", getCookieOptions(0));
 }
 
 export async function recordWebSignIn(session: AuthSession) {
