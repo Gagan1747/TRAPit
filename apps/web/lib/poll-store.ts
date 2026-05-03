@@ -24,6 +24,8 @@ import { getDynamoDbDocumentClient } from "./dynamodb";
 type CreateScheduledPollInput = {
   anonymous: boolean;
   createdBy: string | null;
+  creatorDisplayName?: string | null;
+  creatorIdentifier?: string | null;
   endsAt: string;
   generateQrCode: boolean;
   participantGroupIds: string[];
@@ -31,6 +33,16 @@ type CreateScheduledPollInput = {
   questionIds: string[];
   startsAt: string;
   title: string;
+};
+
+type UpdateScheduledPollInput = CreateScheduledPollInput & {
+  pollId: string;
+};
+
+type PollViewer = {
+  isRegistered?: boolean;
+  responseUserId?: string | null;
+  sub?: string | null;
 };
 
 type PollSummaryEntry = {
@@ -117,6 +129,8 @@ async function scanAllItems<T>(tableName: string): Promise<T[]> {
 function hydrateScheduledPolls(polls: ScheduledPoll[]) {
   return polls.map((poll) => ({
     ...poll,
+    creatorDisplayName: poll.creatorDisplayName ?? null,
+    creatorIdentifier: poll.creatorIdentifier ?? null,
     status: resolveScheduledPollStatus(poll),
   }));
 }
@@ -208,11 +222,14 @@ function buildPollSummary(
   poll: ScheduledPoll,
   questions: PersistentPollQuestion[],
   attempts: PollAttempt[],
-  viewerId?: string | null,
+  viewer?: PollViewer,
 ) {
-  const hasSubmitted = viewerId
-    ? attempts.some((attempt) => identifiersMatch(attempt.userId, viewerId))
+  const viewerResponseUserId = viewer?.responseUserId ?? null;
+  const hasSubmitted = viewerResponseUserId
+    ? attempts.some((attempt) => identifiersMatch(attempt.userId, viewerResponseUserId))
     : false;
+  const isCreator = Boolean(viewer?.sub && poll.createdBy && viewer.sub === poll.createdBy);
+  const canViewResults = isCreator || Boolean(viewer?.isRegistered && hasSubmitted);
   const summary: PollSummaryEntry[] = questions.map((question) => ({
     optionSelectionCounts: question.options.map(
       (_, optionIndex) => attempts.filter((attempt) => attempt.answers[question.id] === optionIndex).length,
@@ -225,11 +242,12 @@ function buildPollSummary(
   }));
 
   return {
+    canViewResults,
     hasSubmitted,
     poll,
     questions,
-    summary,
-    totalResponses: attempts.length,
+    summary: canViewResults ? summary : [],
+    totalResponses: canViewResults ? attempts.length : null,
   };
 }
 
@@ -337,11 +355,14 @@ export async function createScheduledPollInBackend(input: CreateScheduledPollInp
     throw new Error("Poll topic is required.");
   }
 
+  const anonymous = input.participantType === "open" ? true : input.anonymous;
   const timestamp = new Date().toISOString();
   const scheduledPoll: ScheduledPoll = {
-    anonymous: input.anonymous,
+    anonymous,
     createdAt: timestamp,
     createdBy: input.createdBy,
+    creatorDisplayName: input.creatorDisplayName?.trim() || null,
+    creatorIdentifier: input.creatorIdentifier?.trim() || null,
     endsAt: input.endsAt,
     id: createEntityId("poll"),
     participantGroupIds: dedupe(input.participantGroupIds),
@@ -364,7 +385,93 @@ export async function createScheduledPollInBackend(input: CreateScheduledPollInp
   return listScheduledPollsFromBackend(input.createdBy);
 }
 
-export async function getPollByShareCodeFromBackend(shareCode: string, viewerId?: string | null) {
+export async function updateScheduledPollInBackend(input: UpdateScheduledPollInput) {
+  const polls = hydrateScheduledPolls(await scanAllItems<ScheduledPoll>(getPollTables().scheduledPolls));
+  const existingPoll = polls.find((poll) => poll.id === input.pollId);
+
+  if (!existingPoll) {
+    throw new Error("The selected poll could not be found.");
+  }
+
+  if (input.createdBy && existingPoll.createdBy !== input.createdBy) {
+    throw new Error("You can only manage polls you scheduled.");
+  }
+
+  if (existingPoll.status !== "scheduled") {
+    throw new Error("Only polls that have not started can be edited.");
+  }
+
+  const questionIds = dedupe(input.questionIds);
+
+  if (!questionIds.length) {
+    throw new Error("Select at least one poll question.");
+  }
+
+  const questions = await getPollQuestionsByIds(questionIds);
+
+  if (questions.length !== questionIds.length) {
+    throw new Error("Poll question not found.");
+  }
+
+  for (const question of questions) {
+    if (input.createdBy && question.createdBy !== input.createdBy) {
+      throw new Error("You can only manage poll questions you created.");
+    }
+  }
+
+  if (input.participantType === "registered" && !dedupe(input.participantGroupIds).length) {
+    throw new Error("Select at least one group for registered-only polls.");
+  }
+
+  const startsAtMs = new Date(input.startsAt).getTime();
+  const endsAtMs = new Date(input.endsAt).getTime();
+
+  if (Number.isNaN(startsAtMs)) {
+    throw new Error("Choose a valid poll start date and time.");
+  }
+
+  if (Number.isNaN(endsAtMs)) {
+    throw new Error("Choose a valid poll end date and time.");
+  }
+
+  if (endsAtMs <= startsAtMs) {
+    throw new Error("Poll end time must be after the start time.");
+  }
+
+  const title = input.title.trim();
+
+  if (!title) {
+    throw new Error("Poll topic is required.");
+  }
+
+  const anonymous = input.participantType === "open" ? true : input.anonymous;
+  const nextPoll: ScheduledPoll = {
+    ...existingPoll,
+    anonymous,
+    creatorDisplayName: input.creatorDisplayName?.trim() || existingPoll.creatorDisplayName || null,
+    creatorIdentifier: input.creatorIdentifier?.trim() || existingPoll.creatorIdentifier || null,
+    endsAt: input.endsAt,
+    participantGroupIds: dedupe(input.participantGroupIds),
+    participantType: input.participantType,
+    questionIds,
+    shareCode: input.participantType === "open"
+      ? existingPoll.shareCode ?? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
+      : null,
+    startsAt: input.startsAt,
+    status: resolveScheduledPollStatus({ endsAt: input.endsAt, startsAt: input.startsAt }),
+    title,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await getDocumentClient().send(new PutCommand({
+    Item: nextPoll,
+    TableName: getPollTables().scheduledPolls,
+  }));
+
+  return listScheduledPollsFromBackend(input.createdBy);
+}
+
+export async function getPollByShareCodeFromBackend(shareCode: string, viewer?: PollViewer) {
   const poll = await findPollByShareCode(shareCode);
 
   if (!poll) {
@@ -376,7 +483,7 @@ export async function getPollByShareCodeFromBackend(shareCode: string, viewerId?
     getPollAttemptsByPollId(poll.id),
   ]);
 
-  return buildPollSummary(poll, questions, attempts, viewerId);
+  return buildPollSummary(poll, questions, attempts, viewer);
 }
 
 export async function recordPollAttemptInBackend(input: {

@@ -21,7 +21,22 @@ async function getRegisteredActor() {
     displayName: getSessionDisplayName(session),
     identifier,
     isRegistered: true,
+    sub: session.sub,
   };
+}
+
+function maskPhoneNumber(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const digits = value.replace(/\D/g, "");
+
+  if (digits.length < 4) {
+    return null;
+  }
+
+  return `${"*".repeat(Math.max(0, digits.length - 4))}${digits.slice(-4)}`;
 }
 
 export async function POST(
@@ -54,13 +69,21 @@ export async function POST(
       startedAt: body.startedAt,
       userId,
     });
-    const poll = await getPollByShareCode(context.params.shareCode, userId);
+    const poll = await getPollByShareCode(context.params.shareCode, {
+      isRegistered: Boolean(actor?.isRegistered),
+      responseUserId: userId,
+      sub: actor?.sub ?? null,
+    });
 
     return NextResponse.json({
       actor: actor ?? {
         displayName: null,
         identifier: null,
         isRegistered: false,
+      },
+      creator: {
+        displayName: poll.poll.creatorDisplayName ?? null,
+        maskedIdentifier: maskPhoneNumber(poll.poll.creatorIdentifier ?? null),
       },
       attempt,
       ...poll,

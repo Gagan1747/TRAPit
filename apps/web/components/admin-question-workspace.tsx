@@ -59,6 +59,13 @@ function createDefaultPollEndTime() {
   return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
 }
 
+function toDateTimeInputValue(value: string) {
+  const date = new Date(value);
+  const timezoneOffsetMs = date.getTimezoneOffset() * 60 * 1000;
+
+  return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
+}
+
 function createEmptyPollQuestionDraft(): PollQuestionDraft {
   return {
     options: ["", ""],
@@ -452,6 +459,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
     createEmptyPollQuestionDraft(),
   ]);
   const [pollQuestions, setPollQuestions] = useState<PersistentPollQuestion[]>([]);
+  const [editingScheduledPollId, setEditingScheduledPollId] = useState<string | null>(null);
   const [pollScheduleAnonymous, setPollScheduleAnonymous] = useState(false);
   const [pollScheduleGenerateQrCode, setPollScheduleGenerateQrCode] = useState(true);
   const [pollScheduleGroupIds, setPollScheduleGroupIds] = useState<string[]>([]);
@@ -474,9 +482,9 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
   const [reviewByTestId, setReviewByTestId] = useState<Record<string, AdminTestReviewResponse>>({});
   const [reviewLoadingByTestId, setReviewLoadingByTestId] = useState<Record<string, boolean>>({});
   const [resultsMode, setResultsMode] = useState<AdminResultsMode>("tests");
-  const [isMenuCollapsed, setIsMenuCollapsed] = useState(true);
-  const [isMenuHovered, setIsMenuHovered] = useState(false);
   const [openMenuGroup, setOpenMenuGroup] = useState<AdminMenuGroup | null>(null);
+  const [editingScheduledTestId, setEditingScheduledTestId] = useState<string | null>(null);
+  const [editingSelfTestId, setEditingSelfTestId] = useState<string | null>(null);
   const [scheduleDurationMinutes, setScheduleDurationMinutes] = useState("30");
   const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
   const [scheduleParticipantGroupIds, setScheduleParticipantGroupIds] = useState<string[]>([]);
@@ -603,6 +611,72 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
     }
 
     return `${window.location.origin}/poll/${shareCode}`;
+  }
+
+  function resetPollScheduleForm() {
+    setEditingScheduledPollId(null);
+    setPollScheduleAnonymous(false);
+    setPollScheduleGenerateQrCode(true);
+    setPollScheduleGroupIds([]);
+    setPollScheduleParticipantType("registered");
+    setPollScheduleQuestionIds([]);
+    setPollScheduleStartNow(true);
+    setPollScheduleStartsAtInput(createDefaultScheduleTime());
+    setPollScheduleEndsAtInput(createDefaultPollEndTime());
+  }
+
+  function resetScheduledTestForm() {
+    setEditingScheduledTestId(null);
+    setScheduleDurationMinutes("30");
+    setScheduleParticipantGroupIds([]);
+    setScheduleQuestionCount("1");
+    setScheduleStartMode("now");
+    setScheduleStartsAtInput(createDefaultScheduleTime());
+  }
+
+  function resetSelfTestForm() {
+    setEditingSelfTestId(null);
+    setSelfTestDurationMinutes("30");
+    setSelfTestQuestionCount("1");
+    setSelfTestStartMode("now");
+    setSelfTestStartsAtInput(createDefaultScheduleTime());
+  }
+
+  function handleStartEditingPoll(poll: ScheduledPoll) {
+    setEditingScheduledPollId(poll.id);
+    setPollScheduleParticipantType(poll.participantType);
+    setPollScheduleAnonymous(poll.participantType === "open" ? true : poll.anonymous);
+    setPollScheduleGenerateQrCode(poll.participantType === "open");
+    setPollScheduleGroupIds([...poll.participantGroupIds]);
+    setPollScheduleQuestionIds([...poll.questionIds]);
+    setPollScheduleStartNow(false);
+    setPollScheduleStartsAtInput(toDateTimeInputValue(poll.startsAt));
+    setPollScheduleEndsAtInput(toDateTimeInputValue(poll.endsAt));
+    setPollFeedback(null);
+    setOpenSection("poll-schedule");
+  }
+
+  function handleStartEditingScheduledTest(test: ScheduledTest) {
+    setEditingScheduledTestId(test.id);
+    setSchedulePoolId(test.poolId);
+    setScheduleQuestionCount(String(test.questionCount));
+    setScheduleDurationMinutes(String(test.durationMinutes));
+    setScheduleParticipantGroupIds([...test.participantGroupIds]);
+    setScheduleStartMode("later");
+    setScheduleStartsAtInput(toDateTimeInputValue(test.startsAt));
+    setScheduleFeedback(null);
+    setOpenSection("schedule");
+  }
+
+  function handleStartEditingSelfTest(test: ScheduledTest) {
+    setEditingSelfTestId(test.id);
+    setSelfTestPoolId(test.poolId);
+    setSelfTestQuestionCount(String(test.questionCount));
+    setSelfTestDurationMinutes(String(test.durationMinutes));
+    setSelfTestStartMode("later");
+    setSelfTestStartsAtInput(toDateTimeInputValue(test.startsAt));
+    setSelfTestFeedback(null);
+    setOpenSection("self-test");
   }
 
   function updateEditableOption(index: number, value: string) {
@@ -838,31 +912,6 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
         {isOpen ? <div className="admin-menu-substack">{items.map((item) => renderMenuItem(item.label, item.section))}</div> : null}
       </div>
     );
-  }
-
-  const isMenuExpanded = !isMenuCollapsed || isMenuHovered;
-
-  function handleCollapsedMenuPreview() {
-    if (isMenuCollapsed) {
-      setIsMenuHovered(true);
-    }
-  }
-
-  function handleCollapsedMenuExit() {
-    setIsMenuHovered(false);
-  }
-
-  function handleMenuToggle(event: React.MouseEvent<HTMLButtonElement>) {
-    event.stopPropagation();
-    setIsMenuHovered(false);
-    setIsMenuCollapsed((currentValue) => !currentValue);
-  }
-
-  function handleCollapsedMenuClick() {
-    if (isMenuCollapsed) {
-      setIsMenuHovered(false);
-      setIsMenuCollapsed(false);
-    }
   }
 
   function handleToggleSelectAllQuestions(questionIds: string[]) {
@@ -1241,10 +1290,11 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
             anonymous: pollScheduleAnonymous,
             endsAt,
             generateQrCode: pollScheduleParticipantType === "open",
-            mode: "schedule-poll",
+            mode: editingScheduledPollId ? "update-poll" : "schedule-poll",
             participantGroupIds:
               pollScheduleParticipantType === "registered" ? pollScheduleGroupIds : [],
             participantType: pollScheduleParticipantType,
+            pollId: editingScheduledPollId,
             questionIds: pollScheduleQuestionIds,
             startsAt,
             title,
@@ -1256,17 +1306,10 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
         }),
       );
 
-      setPollFeedback("Poll scheduled.");
-      setPollScheduleAnonymous(false);
-      setPollScheduleGenerateQrCode(true);
-      setPollScheduleGroupIds([]);
-      setPollScheduleParticipantType("registered");
-      setPollScheduleQuestionIds([]);
-      setPollScheduleStartNow(true);
-      setPollScheduleStartsAtInput(createDefaultScheduleTime());
-      setPollScheduleEndsAtInput(createDefaultPollEndTime());
+      setPollFeedback(editingScheduledPollId ? "Poll updated." : "Poll scheduled.");
+      resetPollScheduleForm();
     }).catch((error) => {
-      setPollFeedback(error instanceof Error ? error.message : "Unable to schedule the poll.");
+      setPollFeedback(error instanceof Error ? error.message : "Unable to save the poll.");
     });
   }
 
@@ -1359,22 +1402,19 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
             poolId: schedulePoolId,
             questionCount,
             startsAt,
+            testId: editingScheduledTestId,
           }),
           headers: {
             "Content-Type": "application/json",
           },
-          method: "POST",
+          method: editingScheduledTestId ? "PATCH" : "POST",
         }),
       );
 
-      setScheduleFeedback("Test scheduled.");
-      setScheduleDurationMinutes("30");
-      setScheduleParticipantGroupIds([]);
-      setScheduleQuestionCount("1");
-      setScheduleStartMode("now");
-      setScheduleStartsAtInput(createDefaultScheduleTime());
+      setScheduleFeedback(editingScheduledTestId ? "Test updated." : "Test scheduled.");
+      resetScheduledTestForm();
     }).catch((error) => {
-      setScheduleFeedback(error instanceof Error ? error.message : "Unable to schedule the test.");
+      setScheduleFeedback(error instanceof Error ? error.message : "Unable to save the test.");
     });
   }
 
@@ -1424,24 +1464,22 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
             poolId: selfTestPoolId,
             questionCount,
             startsAt,
+            testId: editingSelfTestId,
           }),
           headers: {
             "Content-Type": "application/json",
           },
-          method: "POST",
+          method: editingSelfTestId ? "PATCH" : "POST",
         }),
       );
 
-      setSelfTestFeedback("Self test scheduled.");
-      setSelfTestDurationMinutes("30");
-      setSelfTestQuestionCount("1");
-      setSelfTestStartMode("now");
-      setSelfTestStartsAtInput(createDefaultScheduleTime());
+      setSelfTestFeedback(editingSelfTestId ? "Self test updated." : "Self test scheduled.");
+      resetSelfTestForm();
       setResultsMode("tests");
       setTestListFilter("both");
       setOpenSection("history");
     }).catch((error) => {
-      setSelfTestFeedback(error instanceof Error ? error.message : "Unable to schedule the self test.");
+      setSelfTestFeedback(error instanceof Error ? error.message : "Unable to save the self test.");
     });
   }
 
@@ -1697,34 +1735,14 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
         />
       </div>
 
-      <div className={`admin-shell${isMenuExpanded ? "" : " is-menu-collapsed"}`}>
-        <aside
-          className={`admin-menu panel workspace-card${isMenuExpanded ? "" : " is-collapsed"}`}
-          onClick={handleCollapsedMenuClick}
-          onMouseEnter={handleCollapsedMenuPreview}
-          onMouseLeave={handleCollapsedMenuExit}
-        >
+      <div className="admin-shell">
+        <aside className="admin-menu panel workspace-card">
           <div className="section-head compact-head">
             <div>
               <p className="eyebrow">Workspace menu</p>
               <h2 className="section-title">Admin navigation</h2>
             </div>
-            <button
-              aria-expanded={isMenuExpanded}
-              className="button-secondary small-button admin-menu-toggle"
-              type="button"
-              onClick={handleMenuToggle}
-            >
-              {isMenuCollapsed ? (isMenuHovered ? "Pin menu" : "Expand") : "Collapse"}
-            </button>
           </div>
-
-          {!isMenuExpanded ? (
-            <div className="admin-menu-collapsed-rail" aria-label="Collapsed admin navigation">
-              <p className="admin-menu-collapsed-title">Menu</p>
-              <p className="muted-text admin-menu-collapsed-copy">Hover or click to expand.</p>
-            </div>
-          ) : (
           <div className="admin-menu-stack">
             <div className="admin-menu-group">
               {renderMenuItem("Home", "history")}
@@ -1745,7 +1763,6 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
               { label: "Join", section: "join-groups" },
             ])}
           </div>
-          )}
         </aside>
 
         <div className="admin-main-column">
@@ -2467,8 +2484,13 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
           {scheduleFeedback ? <p className="muted-text">{scheduleFeedback}</p> : null}
           <div className="inline-actions">
             <button className="button" disabled={isMutating} type="button" onClick={handleScheduleTest}>
-              Schedule test
+              {editingScheduledTestId ? "Update test" : "Schedule test"}
             </button>
+            {editingScheduledTestId ? (
+              <button className="button-secondary" disabled={isMutating} type="button" onClick={resetScheduledTestForm}>
+                Cancel edit
+              </button>
+            ) : null}
           </div>
         </div>
       </CollapsibleWorkspaceSection>
@@ -2565,8 +2587,13 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
 
           <div className="inline-actions">
             <button className="button" disabled={isMutating} type="button" onClick={handleScheduleSelfTest}>
-              Schedule self test
+              {editingSelfTestId ? "Update self test" : "Schedule self test"}
             </button>
+            {editingSelfTestId ? (
+              <button className="button-secondary" disabled={isMutating} type="button" onClick={resetSelfTestForm}>
+                Cancel edit
+              </button>
+            ) : null}
           </div>
         </div>
       </CollapsibleWorkspaceSection>
@@ -2787,6 +2814,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
                     type="radio"
                     onChange={() => {
                       setPollScheduleParticipantType("registered");
+                      setPollScheduleAnonymous(false);
                       setPollScheduleGenerateQrCode(false);
                     }}
                   />
@@ -2799,6 +2827,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
                     type="radio"
                     onChange={() => {
                       setPollScheduleParticipantType("open");
+                      setPollScheduleAnonymous(true);
                       setPollScheduleGenerateQrCode(true);
                     }}
                   />
@@ -2830,7 +2859,8 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
             <div className="selection-grid">
               <label className="role-option">
                 <input
-                  checked={pollScheduleAnonymous}
+                  checked={pollScheduleParticipantType === "open" ? true : pollScheduleAnonymous}
+                  disabled={pollScheduleParticipantType === "open"}
                   type="checkbox"
                   onChange={(event) => setPollScheduleAnonymous(event.target.checked)}
                 />
@@ -2840,7 +2870,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
 
             {pollScheduleParticipantType === "open" ? (
               <p className="muted-text">
-                Open polls always generate a public URL and QR code so participants can respond.
+                Open polls are accessible only through their URL or QR code, are not pushed to all registered users, and always collect anonymous responses.
               </p>
             ) : null}
 
@@ -2848,8 +2878,13 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
 
             <div className="inline-actions">
               <button className="button" disabled={isMutating} type="button" onClick={handleSchedulePoll}>
-                Schedule poll
+                {editingScheduledPollId ? "Update poll" : "Schedule poll"}
               </button>
+              {editingScheduledPollId ? (
+                <button className="button-secondary" disabled={isMutating} type="button" onClick={resetPollScheduleForm}>
+                  Cancel edit
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -2859,9 +2894,16 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
                 <article className="question-card" key={poll.id}>
                   <div className="question-head">
                     <strong>{poll.title}</strong>
-                    <span className={`status-chip ${poll.status === "live" ? "success" : "warning"}`}>
-                      {poll.status}
-                    </span>
+                    <div className="inline-actions">
+                      {poll.status === "scheduled" ? (
+                        <button className="button-secondary small-button" type="button" onClick={() => handleStartEditingPoll(poll)}>
+                          Edit poll
+                        </button>
+                      ) : null}
+                      <span className={`status-chip ${poll.status === "live" ? "success" : "warning"}`}>
+                        {poll.status}
+                      </span>
+                    </div>
                   </div>
                   <p className="muted-text">Starts: {formatShortDateTime(poll.startsAt)}</p>
                   <p className="muted-text">Ends: {formatShortDateTime(poll.endsAt)}</p>
@@ -2987,6 +3029,19 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
                     <div className="question-head">
                       <strong>{test.title}</strong>
                       <div className="inline-actions">
+                        {scheduledTest && scheduledTest.status === "scheduled" ? (
+                          <button
+                            className="button-secondary small-button"
+                            type="button"
+                            onClick={() =>
+                              scheduledTest.participantIds.length
+                                ? handleStartEditingSelfTest(scheduledTest)
+                                : handleStartEditingScheduledTest(scheduledTest)
+                            }
+                          >
+                            Edit test
+                          </button>
+                        ) : null}
                         <span className="status-chip success">{scopeLabel}</span>
                         <span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>
                           {test.status}

@@ -11,6 +11,11 @@ type PublicPollResponse = {
     identifier: string | null;
     isRegistered: boolean;
   };
+  canViewResults: boolean;
+  creator: {
+    displayName: string | null;
+    maskedIdentifier: string | null;
+  };
   hasSubmitted: boolean;
   poll: ScheduledPoll;
   questions: Array<{
@@ -27,11 +32,11 @@ type PublicPollResponse = {
     topic: string;
     totalResponses: number;
   }>;
-  totalResponses: number;
+  totalResponses: number | null;
 };
 
 const guestRegistrationMessage =
-  "Register with www.TRAPit.in to see live results and to respond to upcoming instances of recurring poll";
+  "Guest responses stay anonymous, but live and final results are only visible to the poll creator and registered participants who responded.";
 
 async function readJson<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as T & { error?: string };
@@ -191,8 +196,14 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
             <p className="hero-text">
               {payload?.actor.isRegistered
                 ? `Signed in as ${payload.actor.displayName ?? payload.actor.identifier ?? "participant"}`
-                : "Respond without registration, or sign in to see live results."}
+                : "This poll is accessible only through its direct link or QR code. Responses are anonymous."}
             </p>
+            {payload?.creator.displayName || payload?.creator.maskedIdentifier ? (
+              <p className="muted-text">
+                Poll by {payload.creator.displayName ?? "TRAPit admin"}
+                {payload.creator.maskedIdentifier ? ` (${payload.creator.maskedIdentifier})` : ""}
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -211,7 +222,10 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
               <p className="muted-text">Starts: {formatShortDateTime(payload.poll.startsAt)}</p>
               <p className="muted-text">Ends: {formatShortDateTime(payload.poll.endsAt)}</p>
               <p className="muted-text">Questions: {payload.questions.length}</p>
-              <p className="muted-text">Responses so far: {payload.totalResponses}</p>
+              <p className="muted-text">Response mode: Anonymous only</p>
+              {typeof payload.totalResponses === "number" ? (
+                <p className="muted-text">Responses so far: {payload.totalResponses}</p>
+              ) : null}
             </div>
 
             {payload.poll.status === "live" && !payload.hasSubmitted ? (
@@ -268,7 +282,7 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
               <p className="muted-text">This poll is no longer accepting responses.</p>
             )}
 
-            {payload.actor.isRegistered ? (
+            {payload.canViewResults ? (
               <div className="question-list">
                 {payload.summary.map((question) => (
                   <article className="question-card" key={`summary-${question.questionId}`}>
@@ -294,11 +308,19 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
                   </article>
                 ))}
               </div>
+            ) : payload.hasSubmitted && !payload.actor.isRegistered ? (
+              <p className="muted-text">
+                Your anonymous response was recorded. Results are only shown to the poll creator and registered participants who responded.
+              </p>
+            ) : payload.actor.isRegistered ? (
+              <p className="muted-text">
+                Results become visible here after you submit as a registered participant, or immediately if you are the poll creator.
+              </p>
             ) : null}
 
             {!payload.actor.isRegistered ? (
               <p className="muted-text">
-                Register with <a href="https://www.trapit.in" target="_blank" rel="noreferrer">www.TRAPit.in</a> to see live results and to respond to upcoming instances of recurring poll.
+                Register with <a href="https://www.trapit.in" target="_blank" rel="noreferrer">www.TRAPit.in</a> if you want your submitted responses to unlock live and final results on future polls.
               </p>
             ) : null}
           </div>

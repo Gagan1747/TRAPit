@@ -64,6 +64,8 @@ export type ScheduledPoll = {
   anonymous: boolean;
   createdAt: string;
   createdBy: string | null;
+  creatorDisplayName?: string | null;
+  creatorIdentifier?: string | null;
   endsAt: string;
   id: string;
   participantGroupIds: string[];

@@ -1,9 +1,9 @@
 import { getSessionDisplayName, getSessionIdentifier } from "@trapit/auth";
 
 import { AdminQuestionWorkspace } from "../../components/admin-question-workspace";
+import { LocalDateTimeText } from "../../components/local-date-time-text";
 import { SignOutButton } from "../../components/sign-out-button";
 import { isWebAuthConfigured } from "../../lib/auth-config";
-import { formatShortDateTime } from "../../lib/date-format";
 import { getPreviousWebSignIn, requireWebSession } from "../../lib/session";
 
 export default async function AdminPage() {
@@ -25,7 +25,7 @@ export default async function AdminPage() {
                 : "Auth setup pending. Admin area is open for feature work."}
             </p>
             <p className="hero-text">
-              Last signed in: {previousSignInAt ? formatShortDateTime(previousSignInAt) : "First recorded sign in"}
+              Last signed in: <LocalDateTimeText fallback="First recorded sign in" value={previousSignInAt} />
             </p>
           </div>
           <div className="inline-actions">

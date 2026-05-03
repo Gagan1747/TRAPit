@@ -50,6 +50,7 @@ import {
   listPollQuestionsFromBackend,
   listScheduledPollsFromBackend,
   recordPollAttemptInBackend,
+  updateScheduledPollInBackend,
 } from "./poll-store";
 
 const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
@@ -196,6 +197,8 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
 
       return {
         ...poll,
+        creatorDisplayName: poll.creatorDisplayName?.trim() || null,
+        creatorIdentifier: poll.creatorIdentifier?.trim() || null,
         endsAt,
         participantGroupIds: dedupe(poll.participantGroupIds ?? []),
         title: poll.title?.trim() || `${(poll.questionIds ?? []).length} question poll`,
@@ -406,6 +409,24 @@ function ensureActorOwnsScheduledTest(
   }
 
   return scheduledTest;
+}
+
+function ensureActorOwnsScheduledPoll(
+  state: TestingWorkspaceState,
+  pollId: string,
+  actorId: string | null,
+) {
+  const scheduledPoll = hydrateScheduledPolls(state).find((poll) => poll.id === pollId);
+
+  if (!scheduledPoll) {
+    throw new Error("The selected poll could not be found.");
+  }
+
+  if (actorId && scheduledPoll.createdBy !== actorId) {
+    throw new Error("You can only manage polls you scheduled.");
+  }
+
+  return scheduledPoll;
 }
 
 function ensureActorOwnsPollQuestion(
@@ -803,6 +824,8 @@ export async function listScheduledPolls(actorId: string | null = null) {
 export async function createScheduledPoll(input: {
   anonymous: boolean;
   createdBy: string | null;
+  creatorDisplayName?: string | null;
+  creatorIdentifier?: string | null;
   endsAt: string;
   generateQrCode: boolean;
   participantGroupIds: string[];
@@ -851,14 +874,17 @@ export async function createScheduledPoll(input: {
           throw new Error("Poll topic is required.");
         }
 
+        const anonymous = input.participantType === "open" ? true : input.anonymous;
         const timestamp = new Date().toISOString();
         const shareCode = input.participantType === "open"
           ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
           : null;
         const scheduledPoll: ScheduledPoll = {
-          anonymous: input.anonymous,
+          anonymous,
           createdAt: timestamp,
           createdBy: input.createdBy,
+          creatorDisplayName: input.creatorDisplayName?.trim() || null,
+          creatorIdentifier: input.creatorIdentifier?.trim() || null,
           endsAt: input.endsAt,
           id: createEntityId("poll"),
           participantGroupIds: dedupe(input.participantGroupIds),
@@ -915,14 +941,17 @@ export async function createScheduledPoll(input: {
     throw new Error("Poll topic is required.");
   }
 
+  const anonymous = input.participantType === "open" ? true : input.anonymous;
   const timestamp = new Date().toISOString();
   const shareCode = input.participantType === "open"
     ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
     : null;
   const scheduledPoll: ScheduledPoll = {
-    anonymous: input.anonymous,
+    anonymous,
     createdAt: timestamp,
     createdBy: input.createdBy,
+    creatorDisplayName: input.creatorDisplayName?.trim() || null,
+    creatorIdentifier: input.creatorIdentifier?.trim() || null,
     endsAt: input.endsAt,
     id: createEntityId("poll"),
     participantGroupIds: dedupe(input.participantGroupIds),
@@ -936,6 +965,160 @@ export async function createScheduledPoll(input: {
   };
 
   state.scheduledPolls = [scheduledPoll, ...state.scheduledPolls];
+  await writeStore(state);
+
+  return filterScheduledPollsForActor(hydrateScheduledPolls(state), input.createdBy);
+}
+
+export async function updateScheduledPoll(input: {
+  anonymous: boolean;
+  createdBy: string | null;
+  creatorDisplayName?: string | null;
+  creatorIdentifier?: string | null;
+  endsAt: string;
+  generateQrCode: boolean;
+  participantGroupIds: string[];
+  participantType: PollParticipantType;
+  pollId: string;
+  questionIds: string[];
+  startsAt: string;
+  title: string;
+}) {
+  if (isDynamoDbPollStoreEnabled()) {
+    return withPollStoreFallback(
+      () => updateScheduledPollInBackend(input),
+      async () => {
+        const state = await readStore();
+        const existingPoll = ensureActorOwnsScheduledPoll(state, input.pollId, input.createdBy);
+
+        if (existingPoll.status !== "scheduled") {
+          throw new Error("Only polls that have not started can be edited.");
+        }
+
+        const questionIds = dedupe(input.questionIds);
+
+        if (!questionIds.length) {
+          throw new Error("Select at least one poll question.");
+        }
+
+        for (const questionId of questionIds) {
+          ensureActorOwnsPollQuestion(state, questionId, input.createdBy);
+        }
+
+        if (input.participantType === "registered" && !dedupe(input.participantGroupIds).length) {
+          throw new Error("Select at least one group for registered-only polls.");
+        }
+
+        const startsAtMs = new Date(input.startsAt).getTime();
+        const endsAtMs = new Date(input.endsAt).getTime();
+
+        if (Number.isNaN(startsAtMs)) {
+          throw new Error("Choose a valid poll start date and time.");
+        }
+
+        if (Number.isNaN(endsAtMs)) {
+          throw new Error("Choose a valid poll end date and time.");
+        }
+
+        if (endsAtMs <= startsAtMs) {
+          throw new Error("Poll end time must be after the start time.");
+        }
+
+        const timestamp = new Date().toISOString();
+        const anonymous = input.participantType === "open" ? true : input.anonymous;
+
+        state.scheduledPolls = state.scheduledPolls.map((poll) =>
+          poll.id === input.pollId
+            ? {
+                ...poll,
+                anonymous,
+                creatorDisplayName: input.creatorDisplayName?.trim() || poll.creatorDisplayName || null,
+                creatorIdentifier: input.creatorIdentifier?.trim() || poll.creatorIdentifier || null,
+                endsAt: input.endsAt,
+                participantGroupIds: dedupe(input.participantGroupIds),
+                participantType: input.participantType,
+                questionIds,
+                shareCode: input.participantType === "open"
+                  ? poll.shareCode ?? (input.generateQrCode
+                    ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
+                    : null)
+                  : null,
+                startsAt: input.startsAt,
+                title: input.title.trim(),
+                updatedAt: timestamp,
+              }
+            : poll,
+        );
+
+        await writeStore(state);
+
+        return filterScheduledPollsForActor(hydrateScheduledPolls(state), input.createdBy);
+      },
+    );
+  }
+
+  const state = await readStore();
+  const existingPoll = ensureActorOwnsScheduledPoll(state, input.pollId, input.createdBy);
+
+  if (existingPoll.status !== "scheduled") {
+    throw new Error("Only polls that have not started can be edited.");
+  }
+
+  const questionIds = dedupe(input.questionIds);
+
+  if (!questionIds.length) {
+    throw new Error("Select at least one poll question.");
+  }
+
+  for (const questionId of questionIds) {
+    ensureActorOwnsPollQuestion(state, questionId, input.createdBy);
+  }
+
+  if (input.participantType === "registered" && !dedupe(input.participantGroupIds).length) {
+    throw new Error("Select at least one group for registered-only polls.");
+  }
+
+  const startsAtMs = new Date(input.startsAt).getTime();
+  const endsAtMs = new Date(input.endsAt).getTime();
+
+  if (Number.isNaN(startsAtMs)) {
+    throw new Error("Choose a valid poll start date and time.");
+  }
+
+  if (Number.isNaN(endsAtMs)) {
+    throw new Error("Choose a valid poll end date and time.");
+  }
+
+  if (endsAtMs <= startsAtMs) {
+    throw new Error("Poll end time must be after the start time.");
+  }
+
+  const timestamp = new Date().toISOString();
+  const anonymous = input.participantType === "open" ? true : input.anonymous;
+
+  state.scheduledPolls = state.scheduledPolls.map((poll) =>
+    poll.id === input.pollId
+      ? {
+          ...poll,
+          anonymous,
+          creatorDisplayName: input.creatorDisplayName?.trim() || poll.creatorDisplayName || null,
+          creatorIdentifier: input.creatorIdentifier?.trim() || poll.creatorIdentifier || null,
+          endsAt: input.endsAt,
+          participantGroupIds: dedupe(input.participantGroupIds),
+          participantType: input.participantType,
+          questionIds,
+          shareCode: input.participantType === "open"
+            ? poll.shareCode ?? (input.generateQrCode
+              ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
+              : null)
+            : null,
+          startsAt: input.startsAt,
+          title: input.title.trim(),
+          updatedAt: timestamp,
+        }
+      : poll,
+  );
+
   await writeStore(state);
 
   return filterScheduledPollsForActor(hydrateScheduledPolls(state), input.createdBy);
@@ -1328,6 +1511,72 @@ export async function createScheduledTest(input: {
   return filterScheduledTestsForActor(hydrateScheduledTests(state), input.createdBy);
 }
 
+export async function updateScheduledTest(input: {
+  createdBy: string | null;
+  durationMinutes: number;
+  participantGroupIds: string[];
+  participantIds: string[];
+  poolId: string;
+  questionCount: number;
+  startsAt: string;
+  testId: string;
+}) {
+  const state = await readStore();
+  const existingTest = ensureActorOwnsScheduledTest(state, input.testId, input.createdBy);
+
+  if (existingTest.status !== "scheduled") {
+    throw new Error("Only tests that have not started can be edited.");
+  }
+
+  const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy);
+  const poolQuestionIds = dedupe(pool.questionIds).filter((questionId) =>
+    state.questions.some((question) => question.id === questionId),
+  );
+
+  if (input.questionCount > poolQuestionIds.length) {
+    throw new Error("Question count cannot exceed the number of questions in the selected pool.");
+  }
+
+  const resolvedParticipantIdentifiers = resolveParticipantIdentifiers(
+    state,
+    dedupe(input.participantIds),
+    dedupe(input.participantGroupIds),
+  );
+
+  if (!resolvedParticipantIdentifiers.length) {
+    throw new Error("Choose at least one participant or group.");
+  }
+
+  const timestamp = new Date().toISOString();
+
+  state.scheduledTests = state.scheduledTests.map((scheduledTest) =>
+    scheduledTest.id === input.testId
+      ? {
+          ...scheduledTest,
+          durationMinutes: input.durationMinutes,
+          participantGroupIds: dedupe(input.participantGroupIds),
+          participantIds: dedupe(input.participantIds),
+          poolId: input.poolId,
+          questionCount: input.questionCount,
+          questionIds: selectQuestionIdsForScheduledTest(
+            poolQuestionIds,
+            input.questionCount,
+            [input.poolId, input.startsAt, resolvedParticipantIdentifiers.join(","), scheduledTest.id].join(":"),
+          ),
+          resolvedParticipantIdentifiers,
+          startsAt: input.startsAt,
+          status: new Date(input.startsAt).getTime() > Date.now() ? "scheduled" : "live",
+          title: `${pool.name} test`,
+          updatedAt: timestamp,
+        }
+      : scheduledTest,
+  );
+
+  await writeStore(state);
+
+  return filterScheduledTestsForActor(hydrateScheduledTests(state), input.createdBy);
+}
+
 export async function listHistory(actorId: string | null = null) {
   const state = await readStore();
   const scheduledTests = filterScheduledTestsForActor(hydrateScheduledTests(state), actorId);
@@ -1506,13 +1755,8 @@ export async function listAvailablePollsForParticipant(identifier: string): Prom
     : hydrateScheduledPolls(state);
 
   return scheduledPolls
-    .filter((poll) => {
-      if (poll.participantType === "open") {
-        return true;
-      }
-
-      return poll.participantGroupIds.some((groupId) => participantGroupIds.has(groupId));
-    })
+    .filter((poll) => poll.participantType === "registered")
+    .filter((poll) => poll.participantGroupIds.some((groupId) => participantGroupIds.has(groupId)))
     .sort((leftPoll, rightPoll) => {
       const priorityDifference =
         pollStatusPriority[leftPoll.status] - pollStatusPriority[rightPoll.status];
@@ -1525,10 +1769,17 @@ export async function listAvailablePollsForParticipant(identifier: string): Prom
     });
 }
 
-export async function getPollByShareCode(shareCode: string, viewerId?: string | null) {
+export async function getPollByShareCode(
+  shareCode: string,
+  viewer?: {
+    isRegistered?: boolean;
+    responseUserId?: string | null;
+    sub?: string | null;
+  },
+) {
   if (isDynamoDbPollStoreEnabled()) {
     return withPollStoreFallback(
-      () => getPollByShareCodeFromBackend(shareCode, viewerId),
+      () => getPollByShareCodeFromBackend(shareCode, viewer),
       async () => {
         const state = await readStore();
         const normalizedShareCode = shareCode.trim().toUpperCase();
@@ -1545,9 +1796,12 @@ export async function getPollByShareCode(shareCode: string, viewerId?: string | 
           .map((questionId) => questionMap.get(questionId))
           .filter((question): question is PersistentPollQuestion => Boolean(question));
         const attempts = state.pollAttempts.filter((attempt) => attempt.pollId === poll.id);
-        const hasSubmitted = viewerId
-          ? attempts.some((attempt) => identifiersMatch(attempt.userId, viewerId))
+        const viewerResponseUserId = viewer?.responseUserId ?? null;
+        const hasSubmitted = viewerResponseUserId
+          ? attempts.some((attempt) => identifiersMatch(attempt.userId, viewerResponseUserId))
           : false;
+        const isCreator = Boolean(viewer?.sub && poll.createdBy && viewer.sub === poll.createdBy);
+        const canViewResults = isCreator || Boolean(viewer?.isRegistered && hasSubmitted);
         const summary = questions.map((question) => {
           const optionSelectionCounts = question.options.map(
             (_, optionIndex) =>
@@ -1565,11 +1819,12 @@ export async function getPollByShareCode(shareCode: string, viewerId?: string | 
         });
 
         return {
+          canViewResults,
           poll,
           questions,
           hasSubmitted,
-          summary,
-          totalResponses: attempts.length,
+          summary: canViewResults ? summary : [],
+          totalResponses: canViewResults ? attempts.length : null,
         };
       },
     );
@@ -1590,9 +1845,12 @@ export async function getPollByShareCode(shareCode: string, viewerId?: string | 
     .map((questionId) => questionMap.get(questionId))
     .filter((question): question is PersistentPollQuestion => Boolean(question));
   const attempts = state.pollAttempts.filter((attempt) => attempt.pollId === poll.id);
-  const hasSubmitted = viewerId
-    ? attempts.some((attempt) => identifiersMatch(attempt.userId, viewerId))
+  const viewerResponseUserId = viewer?.responseUserId ?? null;
+  const hasSubmitted = viewerResponseUserId
+    ? attempts.some((attempt) => identifiersMatch(attempt.userId, viewerResponseUserId))
     : false;
+  const isCreator = Boolean(viewer?.sub && poll.createdBy && viewer.sub === poll.createdBy);
+  const canViewResults = isCreator || Boolean(viewer?.isRegistered && hasSubmitted);
   const summary = questions.map((question) => {
     const optionSelectionCounts = question.options.map(
       (_, optionIndex) =>
@@ -1610,11 +1868,12 @@ export async function getPollByShareCode(shareCode: string, viewerId?: string | 
   });
 
   return {
+    canViewResults,
     poll,
     questions,
     hasSubmitted,
-    summary,
-    totalResponses: attempts.length,
+    summary: canViewResults ? summary : [],
+    totalResponses: canViewResults ? attempts.length : null,
   };
 }
 

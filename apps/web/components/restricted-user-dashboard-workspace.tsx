@@ -107,8 +107,6 @@ export function RestrictedUserDashboardWorkspace({
   const [isSendingGroupRequest, setIsSendingGroupRequest] = useState<string | null>(null);
   const [lockedFeatureMessage, setLockedFeatureMessage] = useState<string | null>(null);
   const [openSection, setOpenSection] = useState<UserDashboardSection | null>("history");
-  const [isMenuCollapsed, setIsMenuCollapsed] = useState(true);
-  const [isMenuHovered, setIsMenuHovered] = useState(false);
   const [openMenuGroup, setOpenMenuGroup] = useState<RestrictedMenuGroup | null>(null);
   const [resultFilter, setResultFilter] = useState<ResultsFilter>("both");
   const [resultsMode, setResultsMode] = useState<ResultsMode>("tests");
@@ -267,31 +265,6 @@ export function RestrictedUserDashboardWorkspace({
     );
   }
 
-  const isMenuExpanded = !isMenuCollapsed || isMenuHovered;
-
-  function handleCollapsedMenuPreview() {
-    if (isMenuCollapsed) {
-      setIsMenuHovered(true);
-    }
-  }
-
-  function handleCollapsedMenuExit() {
-    setIsMenuHovered(false);
-  }
-
-  function handleMenuToggle(event: React.MouseEvent<HTMLButtonElement>) {
-    event.stopPropagation();
-    setIsMenuHovered(false);
-    setIsMenuCollapsed((currentValue) => !currentValue);
-  }
-
-  function handleCollapsedMenuClick() {
-    if (isMenuCollapsed) {
-      setIsMenuHovered(false);
-      setIsMenuCollapsed(false);
-    }
-  }
-
   function getLatestGroupRequest(groupId: string) {
     return groupJoinRequests.find((request) => request.adminGroupId === groupId);
   }
@@ -402,34 +375,14 @@ export function RestrictedUserDashboardWorkspace({
         />
       </div>
 
-      <div className={`admin-shell${isMenuExpanded ? "" : " is-menu-collapsed"}`}>
-        <aside
-          className={`admin-menu panel workspace-card${isMenuExpanded ? "" : " is-collapsed"}`}
-          onClick={handleCollapsedMenuClick}
-          onMouseEnter={handleCollapsedMenuPreview}
-          onMouseLeave={handleCollapsedMenuExit}
-        >
+      <div className="admin-shell">
+        <aside className="admin-menu panel workspace-card">
           <div className="section-head compact-head">
             <div>
               <p className="eyebrow">Workspace menu</p>
               <h2 className="section-title">User navigation</h2>
             </div>
-            <button
-              aria-expanded={isMenuExpanded}
-              className="button-secondary small-button admin-menu-toggle"
-              type="button"
-              onClick={handleMenuToggle}
-            >
-              {isMenuCollapsed ? (isMenuHovered ? "Pin menu" : "Expand") : "Collapse"}
-            </button>
           </div>
-
-          {!isMenuExpanded ? (
-            <div className="admin-menu-collapsed-rail" aria-label="Collapsed user navigation">
-              <p className="admin-menu-collapsed-title">Menu</p>
-              <p className="muted-text admin-menu-collapsed-copy">Hover or click to expand.</p>
-            </div>
-          ) : (
           <div className="admin-menu-stack">
             <div className="admin-menu-group">
               {renderMenuItem("Home", "history")}
@@ -450,7 +403,6 @@ export function RestrictedUserDashboardWorkspace({
               { label: "Join", section: "join-groups" },
             ])}
           </div>
-          )}
         </aside>
 
         <div className="admin-main-column">

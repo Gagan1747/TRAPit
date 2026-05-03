@@ -7,6 +7,7 @@ import {
   createScheduledPoll,
   listPollQuestions,
   listScheduledPolls,
+  updateScheduledPoll,
 } from "../../../../lib/testing-store";
 
 type PollBody =
@@ -21,6 +22,18 @@ type PollBody =
       mode?: "schedule-poll";
       participantGroupIds?: string[];
       participantType?: PollParticipantType;
+      questionIds?: string[];
+      startsAt?: string;
+      title?: string;
+    }
+  | {
+      anonymous?: boolean;
+      endsAt?: string;
+      generateQrCode?: boolean;
+      mode?: "update-poll";
+      participantGroupIds?: string[];
+      participantType?: PollParticipantType;
+      pollId?: string;
       questionIds?: string[];
       startsAt?: string;
       title?: string;
@@ -98,6 +111,8 @@ export async function POST(request: Request) {
       const scheduledPolls = await createScheduledPoll({
         anonymous: Boolean(body.anonymous),
         createdBy: actor.sub,
+        creatorDisplayName: actor.displayName,
+        creatorIdentifier: actor.identifier,
         endsAt: body.endsAt,
         generateQrCode: Boolean(body.generateQrCode),
         participantGroupIds: body.participantGroupIds ?? [],
@@ -111,6 +126,52 @@ export async function POST(request: Request) {
     } catch (error) {
       return NextResponse.json(
         { error: error instanceof Error ? error.message : "Unable to schedule the poll." },
+        { status: 400 },
+      );
+    }
+  }
+
+  if (body.mode === "update-poll") {
+    if (!("pollId" in body) || !body.pollId) {
+      return NextResponse.json({ error: "Poll id is required." }, { status: 400 });
+    }
+
+    if (!("questionIds" in body) || !Array.isArray(body.questionIds) || !body.questionIds.length) {
+      return NextResponse.json({ error: "Select at least one poll question." }, { status: 400 });
+    }
+
+    if (!("startsAt" in body) || !body.startsAt) {
+      return NextResponse.json({ error: "Poll start time is required." }, { status: 400 });
+    }
+
+    if (!("endsAt" in body) || !body.endsAt) {
+      return NextResponse.json({ error: "Poll end time is required." }, { status: 400 });
+    }
+
+    if (!("title" in body) || !body.title?.trim()) {
+      return NextResponse.json({ error: "Poll topic is required." }, { status: 400 });
+    }
+
+    try {
+      const scheduledPolls = await updateScheduledPoll({
+        anonymous: Boolean(body.anonymous),
+        createdBy: actor.sub,
+        creatorDisplayName: actor.displayName,
+        creatorIdentifier: actor.identifier,
+        endsAt: body.endsAt,
+        generateQrCode: Boolean(body.generateQrCode),
+        participantGroupIds: body.participantGroupIds ?? [],
+        participantType: body.participantType ?? "registered",
+        pollId: body.pollId,
+        questionIds: body.questionIds,
+        startsAt: body.startsAt,
+        title: body.title,
+      });
+      const pollQuestions = await listPollQuestions(actor.sub);
+      return NextResponse.json({ pollQuestions, scheduledPolls });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Unable to update the poll." },
         { status: 400 },
       );
     }

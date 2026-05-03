@@ -12,6 +12,7 @@ async function getRegisteredActor() {
       displayName: null,
       identifier: null,
       isRegistered: false,
+      sub: null,
     };
   }
 
@@ -22,6 +23,7 @@ async function getRegisteredActor() {
       displayName: null,
       identifier: null,
       isRegistered: false,
+      sub: null,
     };
   }
 
@@ -29,7 +31,22 @@ async function getRegisteredActor() {
     displayName: getSessionDisplayName(session),
     identifier,
     isRegistered: true,
+    sub: session.sub,
   };
+}
+
+function maskPhoneNumber(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const digits = value.replace(/\D/g, "");
+
+  if (digits.length < 4) {
+    return null;
+  }
+
+  return `${"*".repeat(Math.max(0, digits.length - 4))}${digits.slice(-4)}`;
 }
 
 export async function GET(
@@ -39,10 +56,22 @@ export async function GET(
   const actor = await getRegisteredActor();
 
   try {
-    const payload = await getPollByShareCode(context.params.shareCode, actor.identifier);
+    const payload = await getPollByShareCode(context.params.shareCode, {
+      isRegistered: actor.isRegistered,
+      responseUserId: actor.identifier,
+      sub: actor.sub,
+    });
 
     return NextResponse.json({
-      actor,
+      actor: {
+        displayName: actor.displayName,
+        identifier: actor.identifier,
+        isRegistered: actor.isRegistered,
+      },
+      creator: {
+        displayName: payload.poll.creatorDisplayName ?? null,
+        maskedIdentifier: maskPhoneNumber(payload.poll.creatorIdentifier ?? null),
+      },
       ...payload,
     });
   } catch (error) {
