@@ -206,6 +206,11 @@ main {
   padding: 22px;
 }
 
+.dashboard-card.is-highlighted {
+  border: 1px solid rgba(180, 76, 47, 0.34);
+  box-shadow: 0 14px 30px rgba(96, 42, 25, 0.12);
+}
+
 .workspace-stack {
   display: grid;
   gap: 20px;

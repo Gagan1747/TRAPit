@@ -619,6 +619,7 @@ export function AdminQuestionWorkspace({
   const [categoryFeedback, setCategoryFeedback] = useState<string | null>(null);
   const [categoryManagement, setCategoryManagement] = useState<SuperAdminCategoryManagementResponse | null>(null);
   const [categoryManagementFeedback, setCategoryManagementFeedback] = useState<string | null>(null);
+  const [isManageUpgradesPanelOpen, setIsManageUpgradesPanelOpen] = useState(false);
   const [categorySearchQuery, setCategorySearchQuery] = useState("");
   const [categorySnapshot, setCategorySnapshot] = useState<UserCategorySnapshotResponse | null>(null);
   const [isUpgradePanelOpen, setIsUpgradePanelOpen] = useState(false);
@@ -940,6 +941,16 @@ export function AdminQuestionWorkspace({
     setIsUpgradePanelOpen(true);
   }
 
+  function closeManagementDrawers() {
+    setIsUpgradePanelOpen(false);
+    setIsManageUpgradesPanelOpen(false);
+  }
+
+  function handleMenuSectionSelection(section: AdminWorkspaceSection) {
+    closeManagementDrawers();
+    setOpenSection(section);
+  }
+
   function toggleReviewVisibility(testId: string) {
     setVisibleReviewTestIds((currentIds) =>
       currentIds.includes(testId)
@@ -1109,7 +1120,7 @@ export function AdminQuestionWorkspace({
             return;
           }
 
-          setOpenSection(section);
+          handleMenuSectionSelection(section);
         }}
       >
         {label}
@@ -1895,15 +1906,17 @@ export function AdminQuestionWorkspace({
   ];
   const filteredManagedUsers = categoryManagement?.managedUsers.filter((user) => {
     const query = categorySearchQuery.trim().toLowerCase();
+    const normalizedQueryCandidates = Array.from(getParticipantIdentifierCandidates(query));
 
     if (!query) {
       return true;
     }
 
-    return [user.identifier, user.displayName ?? "", user.userSub ?? ""]
+    const haystack = [user.identifier, user.displayName ?? "", user.userSub ?? ""]
       .join(" ")
-      .toLowerCase()
-      .includes(query);
+      .toLowerCase();
+
+    return haystack.includes(query) || normalizedQueryCandidates.some((candidate) => haystack.includes(candidate));
   }) ?? [];
   const pendingCategoryRequests = categoryManagement?.requests.filter((request) => request.status === "pending") ?? [];
   const userPendingCategoryRequest = categorySnapshot?.requests.find((request) => request.status === "pending") ?? null;
@@ -1912,9 +1925,11 @@ export function AdminQuestionWorkspace({
     ? findNextNormalUserCategory(currentUserCategory, (candidate) => candidate !== currentUserCategory)
     : null;
   const suggestedUpgradeCategory = upgradePrompt?.targetCategory ?? nextUpgradeableCategory;
-  const suggestedUpgradePlan = suggestedUpgradeCategory
-    ? categorySnapshot?.availableCategories.find((plan) => plan.category === suggestedUpgradeCategory) ?? null
-    : null;
+  const suggestedUpgradePlans = currentUserCategory && categorySnapshot
+    ? categorySnapshot.availableCategories.filter(
+        (plan) => orderedNormalUserCategories.indexOf(plan.category) > orderedNormalUserCategories.indexOf(currentUserCategory),
+      )
+    : [];
   const latestResolvedCategoryMessage = latestResolvedCategoryRequest
     ? latestResolvedCategoryRequest.status === "accepted"
       ? `Your upgrade request for ${normalUserCategoryDefinitions[latestResolvedCategoryRequest.requestedCategory].label} was approved${latestResolvedCategoryRequest.approvedDurationMonths ? ` for ${latestResolvedCategoryRequest.approvedDurationMonths === 12 ? "1 year" : "3 months"}` : ""}.`
@@ -1952,6 +1967,21 @@ export function AdminQuestionWorkspace({
       currentIds.filter((groupId) => availableGroupIds.has(groupId)),
     );
   }, [participantGroups]);
+
+  useEffect(() => {
+    if (!isSuperAdmin) {
+      return;
+    }
+
+    if (!filteredManagedUsers.length) {
+      setCategoryAssignmentIdentifier("");
+      return;
+    }
+
+    if (!filteredManagedUsers.some((user) => user.identifier === categoryAssignmentIdentifier)) {
+      setCategoryAssignmentIdentifier(filteredManagedUsers[0].identifier);
+    }
+  }, [categoryAssignmentIdentifier, filteredManagedUsers, isSuperAdmin]);
 
   function handleResolveGroupRequest(requestId: string, decision: "accept" | "reject") {
     void mutateWorkspace(async () => {
@@ -2074,6 +2104,11 @@ export function AdminQuestionWorkspace({
             {isUpgradePanelOpen ? "Hide upgrade" : "Upgrade"}
           </button>
         ) : null}
+        {isSuperAdmin ? (
+          <button className="button-secondary" type="button" onClick={() => setIsManageUpgradesPanelOpen((current) => !current)}>
+            {isManageUpgradesPanelOpen ? "Hide manage upgrades" : "Manage Upgrades"}
+          </button>
+        ) : null}
         <NotificationBell
           items={notificationItems}
           subtitle={notificationBaseline === null ? "Counts reflect the current workspace state." : "Counts are measured from your previous sign in."}
@@ -2139,38 +2174,50 @@ export function AdminQuestionWorkspace({
                 </article>
 
                 <article className="dashboard-card">
-                  <p className="dashboard-label">Next possible upgrade</p>
-                  {suggestedUpgradePlan ? (
-                    <>
-                      <p className="section-title">{suggestedUpgradePlan.label.replace(/ users$/i, " user")}</p>
-                      {upgradePrompt ? (
-                        <p className="muted-text">
-                          Feature selected: <strong>{upgradePrompt.featureLabel}</strong>. {upgradePrompt.message}
-                        </p>
-                      ) : (
-                        <p className="muted-text">This is the next category above your current plan.</p>
-                      )}
-                      <p className="muted-text">
-                        Pools: {suggestedUpgradePlan.definition.test.maxQuestionPools} | Questions per pool: {suggestedUpgradePlan.definition.test.maxQuestionsPerPool ?? "Unlimited"}
-                      </p>
-                      <p className="muted-text">
-                        Scheduled tests/month: {suggestedUpgradePlan.definition.test.maxScheduledTestsPerMonth} | Self tests/month: {suggestedUpgradePlan.definition.test.maxSelfTestsPerMonth}
-                      </p>
-                      <p className="muted-text">
-                        Polls: {suggestedUpgradePlan.definition.poll.schedule ? "Enabled" : "Not included"} | Groups: {suggestedUpgradePlan.definition.group.manage ? "Enabled" : "Not included"}
-                      </p>
-                      {userPendingCategoryRequest?.requestedCategory === suggestedUpgradePlan.category ? (
-                        <p className="muted-text">Upgrade request pending review.</p>
-                      ) : (
-                        <button
-                          className="button-secondary small-button"
-                          type="button"
-                          onClick={() => void handleRequestCategoryUpgrade(suggestedUpgradePlan.category)}
-                        >
-                          Send upgrade request
-                        </button>
-                      )}
-                    </>
+                  <p className="dashboard-label">Available upgrades</p>
+                  {upgradePrompt ? (
+                    <p className="muted-text">
+                      Feature selected: <strong>{upgradePrompt.featureLabel}</strong>. {upgradePrompt.message}
+                    </p>
+                  ) : (
+                    <p className="muted-text">Choose any higher category available from your current plan.</p>
+                  )}
+                  {suggestedUpgradePlans.length ? (
+                    <div className="dashboard-grid compact-grid">
+                      {suggestedUpgradePlans.map((plan) => {
+                        const isHighlighted = plan.category === suggestedUpgradeCategory;
+
+                        return (
+                          <article key={plan.category} className={`dashboard-card${isHighlighted ? " is-highlighted" : ""}`}>
+                            <p className="section-title">{plan.label.replace(/ users$/i, " user")}</p>
+                            {isHighlighted ? <p className="muted-text">Recommended for the selected feature.</p> : null}
+                            <p className="muted-text">
+                              Pools: {plan.definition.test.maxQuestionPools} | Questions per pool: {plan.definition.test.maxQuestionsPerPool ?? "Unlimited"}
+                            </p>
+                            <p className="muted-text">
+                              Scheduled tests/month: {plan.definition.test.maxScheduledTestsPerMonth} | Self tests/month: {plan.definition.test.maxSelfTestsPerMonth}
+                            </p>
+                            <p className="muted-text">
+                              Polls: {plan.definition.poll.schedule ? "Enabled" : "Not included"} | Open to all: {plan.definition.poll.shareOpenToAll ? "Enabled" : "Not included"}
+                            </p>
+                            <p className="muted-text">
+                              Groups: {plan.definition.group.manage ? "Enabled" : "Not included"}
+                            </p>
+                            {userPendingCategoryRequest?.requestedCategory === plan.category ? (
+                              <p className="muted-text">Upgrade request pending review.</p>
+                            ) : (
+                              <button
+                                className="button-secondary small-button"
+                                type="button"
+                                onClick={() => void handleRequestCategoryUpgrade(plan.category)}
+                              >
+                                Send upgrade request
+                              </button>
+                            )}
+                          </article>
+                        );
+                      })}
+                    </div>
                   ) : (
                     <p className="muted-text">You are already on the highest available category.</p>
                   )}
@@ -2186,7 +2233,7 @@ export function AdminQuestionWorkspace({
             </section>
           ) : null}
 
-          {isSuperAdmin && categoryManagement ? (
+          {isSuperAdmin && categoryManagement && isManageUpgradesPanelOpen ? (
             <section className="panel workspace-card">
               <div className="section-head compact-head">
                 <div>
@@ -2196,6 +2243,9 @@ export function AdminQuestionWorkspace({
                     Search by user, apply a plan directly, or clear the pending approval queue without leaving the dashboard.
                   </p>
                 </div>
+                <button className="button-secondary small-button" type="button" onClick={() => setIsManageUpgradesPanelOpen(false)}>
+                  Close
+                </button>
               </div>
 
               <div className="form-grid">
@@ -2239,18 +2289,20 @@ export function AdminQuestionWorkspace({
                     ))}
                   </select>
                 </div>
-                <div className="field compact-field">
-                  <label htmlFor="category-duration">Duration</label>
-                  <select
-                    className="select-field"
-                    id="category-duration"
-                    value={String(categoryAssignmentDurationMonths)}
-                    onChange={(event) => setCategoryAssignmentDurationMonths(event.target.value === "12" ? 12 : 3)}
-                  >
-                    <option value="3">3 months</option>
-                    <option value="12">1 year</option>
-                  </select>
-                </div>
+                {categoryAssignmentCategory !== "trapit-normal" ? (
+                  <div className="field compact-field">
+                    <label htmlFor="category-duration">Duration</label>
+                    <select
+                      className="select-field"
+                      id="category-duration"
+                      value={String(categoryAssignmentDurationMonths)}
+                      onChange={(event) => setCategoryAssignmentDurationMonths(event.target.value === "12" ? 12 : 3)}
+                    >
+                      <option value="3">3 months</option>
+                      <option value="12">1 year</option>
+                    </select>
+                  </div>
+                ) : null}
               </div>
 
               <div className="role-option role-option-create">
@@ -3350,6 +3402,18 @@ export function AdminQuestionWorkspace({
                     name="poll-participant-type"
                     type="radio"
                     onChange={() => {
+                      if (currentActorRole === "user" && currentUserCategory && !normalUserCategoryDefinitions[currentUserCategory].poll.shareOpenToAll) {
+                        openUpgradePanel({
+                          featureLabel: "Poll - Open to all",
+                          message: "Open-to-all polls are available only for TRAPit Pro Max users.",
+                          targetCategory: findNextNormalUserCategory(
+                            currentUserCategory,
+                            (candidate) => normalUserCategoryDefinitions[candidate].poll.shareOpenToAll,
+                          ),
+                        });
+                        return;
+                      }
+
                       setPollScheduleParticipantType("open");
                       setPollScheduleAnonymous(true);
                       setPollScheduleGenerateQrCode(true);
