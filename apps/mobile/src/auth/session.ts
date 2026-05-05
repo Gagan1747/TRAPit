@@ -23,6 +23,7 @@ function getRoleOptions() {
   return {
     adminGroup: process.env.EXPO_PUBLIC_COGNITO_ADMIN_GROUP ?? "admins",
     defaultRole: "user" as const,
+    defaultUserCategory: "trapit-normal" as const,
     userGroup: process.env.EXPO_PUBLIC_COGNITO_USER_GROUP ?? "users",
   };
 }

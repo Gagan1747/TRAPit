@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 
-import { getAdminActor } from "../../../../lib/admin-api";
+import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 import { listHistory, listLeaderboards, listStateSummary } from "../../../../lib/testing-store";
 
 export async function GET() {
-  const actor = await getAdminActor();
+  const actor = await getWorkspaceActor();
 
   if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   const [history, leaderboards, summary] = await Promise.all([

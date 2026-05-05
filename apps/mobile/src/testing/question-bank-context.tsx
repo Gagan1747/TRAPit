@@ -785,7 +785,7 @@ export function QuestionBankProvider({ children }: { children: React.ReactNode }
     }
 
     if (input.participantType === "registered" && !dedupe(input.participantGroupIds).length) {
-      throw new Error("Select at least one group for registered-only polls.");
+      throw new Error("Select at least one group when sharing a poll with groups.");
     }
 
     const timestamp = new Date().toISOString();

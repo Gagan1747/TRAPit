@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { getCognitoErrorMessage, signInWithCognito, verifyWebTokens } from "../../../../lib/cognito";
 import { createWebSession, getWebSession, recordWebSignIn } from "../../../../lib/session";
+import { resolveAssignedCategoryForSession } from "../../../../lib/user-category-store";
 
 export async function POST(request: Request) {
   try {
@@ -39,12 +40,18 @@ export async function POST(request: Request) {
     }
 
     await createWebSession(tokens);
-    const signInActivity = await recordWebSignIn(session);
+    const resolvedSession = {
+      ...session,
+      userCategory: session.role === "user"
+        ? await resolveAssignedCategoryForSession(session)
+        : null,
+    };
+    const signInActivity = await recordWebSignIn(resolvedSession);
 
     return NextResponse.json({
       previousSignInAt: signInActivity.previousSignInAt,
-      redirectTo: getDashboardPath(session.role),
-      session,
+      redirectTo: getDashboardPath(resolvedSession.role),
+      session: resolvedSession,
     });
   } catch (error) {
     return NextResponse.json(

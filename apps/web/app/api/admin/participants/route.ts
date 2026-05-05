@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { getAdminActor } from "../../../../lib/admin-api";
+import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 import { isWebAuthConfigured } from "../../../../lib/auth-config";
 import { listRegisteredDirectoryUsers } from "../../../../lib/cognito";
+import { assertCanCreateGroup, assertCanManageGroup } from "../../../../lib/user-category-limits";
 import {
   createGroup,
   createParticipant,
@@ -58,10 +59,10 @@ function isResolveRequestBody(
 }
 
 export async function GET() {
-  const actor = await getAdminActor();
+  const actor = await getWorkspaceActor();
 
   if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   let participantsPromise = listParticipants();
@@ -87,15 +88,19 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const actor = await getAdminActor();
+  const actor = await getWorkspaceActor();
 
   if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   const body = (await request.json()) as ParticipantBody;
 
   if (isCreateGroupBody(body)) {
+    if (actor.role === "user") {
+      assertCanCreateGroup(actor.userCategory);
+    }
+
     if (!body.name?.trim()) {
       return NextResponse.json({ error: "Group or class name is required." }, { status: 400 });
     }
@@ -115,6 +120,10 @@ export async function POST(request: Request) {
   }
 
   if (isUpdateGroupBody(body)) {
+    if (actor.role === "user") {
+      assertCanManageGroup(actor.userCategory);
+    }
+
     if (!body.groupId?.trim()) {
       return NextResponse.json({ error: "Group id is required." }, { status: 400 });
     }
@@ -145,6 +154,10 @@ export async function POST(request: Request) {
   }
 
   if (isResolveRequestBody(body)) {
+    if (actor.role === "user") {
+      assertCanManageGroup(actor.userCategory);
+    }
+
     if (!body.requestId?.trim() || !body.decision) {
       return NextResponse.json(
         { error: "Request id and decision are required." },
@@ -177,6 +190,10 @@ export async function POST(request: Request) {
 
   if (!("identifier" in body) || !body.identifier?.trim()) {
     return NextResponse.json({ error: "Participant identifier is required." }, { status: 400 });
+  }
+
+  if (actor.role !== "admin" && !actor.isSuperAdmin) {
+    return NextResponse.json({ error: "Participant creation is only available to admins." }, { status: 403 });
   }
 
   const participants = await createParticipant({

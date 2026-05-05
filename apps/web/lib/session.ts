@@ -1,12 +1,19 @@
 import "server-only";
 
-import { getDashboardPath, getSessionIdentifier, type AuthSession, type UserRole } from "@trapit/auth";
+import {
+  defaultNormalUserCategory,
+  getDashboardPath,
+  getSessionIdentifier,
+  type AuthSession,
+  type UserRole,
+} from "@trapit/auth";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { getWebAuthSetupMessage, isWebAuthConfigured } from "./auth-config";
 import { verifyWebTokens, type CognitoTokens } from "./cognito";
 import { getSignInActivity, recordSignInActivity } from "./sign-in-activity-store";
+import { resolveAssignedCategoryForSession } from "./user-category-store";
 
 const COOKIE_NAMES = {
   accessToken: "trapit-access-token",
@@ -115,7 +122,17 @@ export async function getPreviousWebSignIn(session: AuthSession) {
   return activity?.previousSignInAt ?? null;
 }
 
-export async function getWebSession(): Promise<AuthSession | null> {
+function getBearerToken(request: Request | null | undefined) {
+  const authorizationHeader = request?.headers.get("authorization")?.trim() ?? "";
+
+  if (!authorizationHeader.toLowerCase().startsWith("bearer ")) {
+    return null;
+  }
+
+  return authorizationHeader.slice(7).trim() || null;
+}
+
+export async function getWebSession(request?: Request): Promise<AuthSession | null> {
   if (!isWebAuthConfigured()) {
     return {
       displayIdentifier: null,
@@ -125,18 +142,26 @@ export async function getWebSession(): Promise<AuthSession | null> {
       phoneNumber: null,
       role: "user",
       sub: null,
+      userCategory: defaultNormalUserCategory,
     };
   }
 
-  const idToken = cookies().get(COOKIE_NAMES.idToken)?.value;
-  const accessToken = cookies().get(COOKIE_NAMES.accessToken)?.value;
+  const idToken = getBearerToken(request) ?? cookies().get(COOKIE_NAMES.idToken)?.value;
+  const accessToken = request?.headers.get("x-trapit-access-token")?.trim() || cookies().get(COOKIE_NAMES.accessToken)?.value;
 
   if (!idToken) {
     return null;
   }
 
   try {
-    return await verifyWebTokens({ accessToken, idToken });
+    const session = await verifyWebTokens({ accessToken, idToken });
+
+    return {
+      ...session,
+      userCategory: session.role === "user"
+        ? await resolveAssignedCategoryForSession(session)
+        : null,
+    };
   } catch {
     return null;
   }
@@ -154,6 +179,7 @@ export async function requireWebSession(role: UserRole | UserRole[]) {
       phoneNumber: null,
       role: allowedRoles[0],
       sub: null,
+      userCategory: allowedRoles[0] === "user" ? defaultNormalUserCategory : null,
     };
   }
 

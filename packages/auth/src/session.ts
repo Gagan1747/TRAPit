@@ -1,4 +1,9 @@
 import { USER_ROLES, type UserRole } from "./roles";
+import {
+  defaultNormalUserCategory,
+  resolveNormalUserCategory,
+  type NormalUserCategory,
+} from "./user-categories";
 
 export type RoleClaimValue = string | string[] | undefined;
 
@@ -12,12 +17,15 @@ export type TokenClaims = {
   sub?: string;
   "cognito:groups"?: RoleClaimValue;
   "custom:appRole"?: string;
+  "custom:appUserCategory"?: string;
   "custom:role"?: string;
+  "custom:userCategory"?: string;
 };
 
 export type RoleClaimOptions = {
   adminGroup?: string;
   defaultRole?: UserRole;
+  defaultUserCategory?: NormalUserCategory;
   userGroup?: string;
 };
 
@@ -29,6 +37,7 @@ export type AuthSession = {
   phoneNumber: string | null;
   role: UserRole;
   sub: string | null;
+  userCategory: NormalUserCategory | null;
 };
 
 export function getSessionDisplayName(
@@ -115,8 +124,15 @@ export function buildSessionFromClaims(
 
   const phoneNumber = claims.phone_number ?? null;
   const email = claims.email ?? null;
+  const defaultUserCategory = options.defaultUserCategory ?? defaultNormalUserCategory;
   const displayName =
     claims.name?.trim() || claims.preferred_username?.trim() || claims.given_name?.trim() || null;
+  const userCategory = role === "user"
+    ? resolveNormalUserCategory(
+        claims["custom:appUserCategory"] ?? claims["custom:userCategory"],
+        defaultUserCategory,
+      )
+    : null;
 
   return {
     displayIdentifier: phoneNumber ?? email ?? claims.sub ?? null,
@@ -126,5 +142,6 @@ export function buildSessionFromClaims(
     phoneNumber,
     role,
     sub: claims.sub ?? null,
+    userCategory,
   };
 }

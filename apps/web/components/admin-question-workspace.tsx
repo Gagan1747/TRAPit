@@ -1,6 +1,12 @@
 "use client";
 
 import {
+  findNextNormalUserCategory,
+  normalUserCategoryDefinitions,
+  orderedNormalUserCategories,
+  type NormalUserCategory,
+} from "@trapit/auth";
+import {
   createEmptyTestingWorkspaceState,
   formatElapsedTime,
   type GroupJoinRequest,
@@ -171,6 +177,73 @@ type AdminTestReviewResponse = {
   testTitle: string;
 };
 
+type UserCategoryUpgradeRequest = {
+  approvedDurationMonths: 3 | 12 | null;
+  currentCategory: NormalUserCategory;
+  id: string;
+  requestedAt: string;
+  requestedCategory: NormalUserCategory;
+  requesterDisplayName: string | null;
+  requesterIdentifier: string | null;
+  requesterSub: string | null;
+  resolvedAt: string | null;
+  reviewerDisplayName: string | null;
+  reviewerIdentifier: string | null;
+  status: "accepted" | "pending" | "rejected";
+};
+
+type UserCategoryPlan = {
+  category: NormalUserCategory;
+  definition: {
+    group: {
+      create: boolean;
+      join: boolean;
+      manage: boolean;
+    };
+    home: boolean;
+    label: string;
+    poll: {
+      addQuestion: boolean;
+      schedule: boolean;
+      shareOpenToAll: boolean;
+      shareWithGroups: boolean;
+    };
+    test: {
+      addQuestion: boolean;
+      maxQuestionPools: number;
+      maxQuestionsPerPool: number | null;
+      maxScheduledTestsPerMonth: number;
+      maxSelfTestsPerMonth: number;
+    };
+  };
+  isCurrent: boolean;
+  label: string;
+};
+
+type UserCategorySnapshotResponse = {
+  activeAssignment: {
+    expiresAt: string | null;
+    id: string;
+  } | null;
+  availableCategories: UserCategoryPlan[];
+  currentCategory: NormalUserCategory;
+  currentCategoryLabel: string;
+  requests: UserCategoryUpgradeRequest[];
+};
+
+type SuperAdminCategoryManagementResponse = {
+  managedUsers: Array<{
+    currentCategory: NormalUserCategory;
+    currentCategoryLabel: string;
+    displayName: string | null;
+    expiresAt: string | null;
+    identifier: string;
+    pendingRequest: UserCategoryUpgradeRequest | null;
+    userSub: string | null;
+  }>;
+  requests: UserCategoryUpgradeRequest[];
+};
+
 type AdminWorkspaceSection =
   | "author"
   | "create-groups"
@@ -252,6 +325,26 @@ async function readJson<T>(response: Response): Promise<T> {
   }
 
   return payload;
+}
+
+function isLimitPopupMessage(message: string) {
+  return message.startsWith("You have utilized all allowable limits of ");
+}
+
+function handleWorkspaceActionError(
+  error: unknown,
+  fallbackMessage: string,
+  setFeedback: (message: string | null) => void,
+) {
+  const message = error instanceof Error ? error.message : fallbackMessage;
+
+  if (typeof window !== "undefined" && isLimitPopupMessage(message)) {
+    window.alert(message);
+    setFeedback(null);
+    return;
+  }
+
+  setFeedback(message);
 }
 
 function normalizeParticipantIdentifier(value: string) {
@@ -420,11 +513,28 @@ function ParticipantSearchPicker({
 }
 
 type AdminQuestionWorkspaceProps = {
+  currentActorRole: "admin" | "user";
   currentAdminIdentifier: string | null;
+  currentUserCategory: NormalUserCategory | null;
+  isSuperAdmin: boolean;
   previousSignInAt: string | null;
 };
 
-export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInAt }: AdminQuestionWorkspaceProps) {
+export function AdminQuestionWorkspace({
+  currentActorRole,
+  currentAdminIdentifier,
+  currentUserCategory,
+  isSuperAdmin,
+  previousSignInAt,
+}: AdminQuestionWorkspaceProps) {
+  const [categoryAssignmentCategory, setCategoryAssignmentCategory] = useState<NormalUserCategory>(currentUserCategory ?? "trapit-normal");
+  const [categoryAssignmentDurationMonths, setCategoryAssignmentDurationMonths] = useState<3 | 12>(3);
+  const [categoryAssignmentIdentifier, setCategoryAssignmentIdentifier] = useState("");
+  const [categoryFeedback, setCategoryFeedback] = useState<string | null>(null);
+  const [categoryManagement, setCategoryManagement] = useState<SuperAdminCategoryManagementResponse | null>(null);
+  const [categoryManagementFeedback, setCategoryManagementFeedback] = useState<string | null>(null);
+  const [categorySearchQuery, setCategorySearchQuery] = useState("");
+  const [categorySnapshot, setCategorySnapshot] = useState<UserCategorySnapshotResponse | null>(null);
   const [editingGroupDraft, setEditingGroupDraft] = useState<EditableGroupDraft | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingQuestionDraft, setEditingQuestionDraft] = useState<EditableQuestionDraft | null>(null);
@@ -515,7 +625,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
     setIsLoading(true);
 
     try {
-      const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, userDashboardPayload, pollsPayload] =
+      const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, userDashboardPayload, pollsPayload, categorySnapshotPayload, categoryManagementPayload] =
         await Promise.all([
           readJson<QuestionApiResponse>(await fetch("/api/admin/questions")),
           readJson<PoolsResponse>(await fetch("/api/admin/pools")),
@@ -524,6 +634,12 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
           readJson<HistoryResponse>(await fetch("/api/admin/history")),
           readJson<UserDashboardResponse>(await fetch("/api/user/dashboard")),
           readJson<PollsResponse>(await fetch("/api/admin/polls")),
+          currentActorRole === "user"
+            ? readJson<UserCategorySnapshotResponse>(await fetch("/api/user/category"))
+            : Promise.resolve<UserCategorySnapshotResponse | null>(null),
+          isSuperAdmin
+            ? readJson<SuperAdminCategoryManagementResponse>(await fetch("/api/admin/user-categories"))
+            : Promise.resolve<SuperAdminCategoryManagementResponse | null>(null),
         ]);
 
       setQuestions(questionsPayload.questions);
@@ -541,6 +657,8 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
       setHistory(historyPayload.history);
       setLeaderboards(historyPayload.leaderboards);
       setSummary(historyPayload.summary);
+      setCategorySnapshot(categorySnapshotPayload);
+      setCategoryManagement(categoryManagementPayload);
 
       if (!schedulePoolId && poolsPayload.pools.length) {
         setSchedulePoolId(poolsPayload.pools[0].id);
@@ -555,6 +673,10 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
           ? currentPoolId
           : null,
       );
+
+      if (!categoryAssignmentIdentifier && categoryManagementPayload?.managedUsers.length) {
+        setCategoryAssignmentIdentifier(categoryManagementPayload.managedUsers[0].identifier);
+      }
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to load the admin workspace.");
     } finally {
@@ -1113,9 +1235,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
       setImportPreview(null);
       setImportText("");
     }).catch((error) => {
-      setImportFeedback(
-        error instanceof Error ? error.message : "Unable to import the previewed questions.",
-      );
+      handleWorkspaceActionError(error, "Unable to import the previewed questions.", setImportFeedback);
     });
   }
 
@@ -1159,7 +1279,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
       setPoolFeedback("Pool created.");
       setPoolName("");
     }).catch((error) => {
-      setPoolFeedback(error instanceof Error ? error.message : "Unable to create the pool.");
+      handleWorkspaceActionError(error, "Unable to create the pool.", setPoolFeedback);
     });
   }
 
@@ -1193,7 +1313,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
       setGroupName("");
       setSelectedGroupParticipantIds([]);
     }).catch((error) => {
-      setGroupFeedback(error instanceof Error ? error.message : "Unable to create the group.");
+      handleWorkspaceActionError(error, "Unable to create the group.", setGroupFeedback);
     });
   }
 
@@ -1232,7 +1352,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
       setPollFeedback(`Saved ${drafts.length} poll question${drafts.length === 1 ? "" : "s"}.`);
       setPollQuestionDrafts([createEmptyPollQuestionDraft()]);
     }).catch((error) => {
-      setPollFeedback(error instanceof Error ? error.message : "Unable to save the poll questions.");
+      handleWorkspaceActionError(error, "Unable to save the poll questions.", setPollFeedback);
     });
   }
 
@@ -1271,7 +1391,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
     }
 
     if (pollScheduleParticipantType === "registered" && !pollScheduleGroupIds.length) {
-      setPollFeedback("Select at least one group for registered-only polls.");
+      setPollFeedback("Select at least one group when sharing a poll with groups.");
       return;
     }
 
@@ -1309,7 +1429,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
       setPollFeedback(editingScheduledPollId ? "Poll updated." : "Poll scheduled.");
       resetPollScheduleForm();
     }).catch((error) => {
-      setPollFeedback(error instanceof Error ? error.message : "Unable to save the poll.");
+      handleWorkspaceActionError(error, "Unable to save the poll.", setPollFeedback);
     });
   }
 
@@ -1357,7 +1477,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
       setEditingGroupId(null);
       setEditingGroupDraft(null);
     }).catch((error) => {
-      setGroupFeedback(error instanceof Error ? error.message : "Unable to update the group.");
+      handleWorkspaceActionError(error, "Unable to update the group.", setGroupFeedback);
     });
   }
 
@@ -1414,7 +1534,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
       setScheduleFeedback(editingScheduledTestId ? "Test updated." : "Test scheduled.");
       resetScheduledTestForm();
     }).catch((error) => {
-      setScheduleFeedback(error instanceof Error ? error.message : "Unable to save the test.");
+      handleWorkspaceActionError(error, "Unable to save the test.", setScheduleFeedback);
     });
   }
 
@@ -1479,7 +1599,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
       setTestListFilter("both");
       setOpenSection("history");
     }).catch((error) => {
-      setSelfTestFeedback(error instanceof Error ? error.message : "Unable to save the self test.");
+      handleWorkspaceActionError(error, "Unable to save the self test.", setSelfTestFeedback);
     });
   }
 
@@ -1668,6 +1788,23 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
     { count: releasedPollResultsCount, label: "Poll results released since last sign in" },
     { count: pendingGroupRequestsCount, label: "Group requests pending" },
   ];
+  const filteredManagedUsers = categoryManagement?.managedUsers.filter((user) => {
+    const query = categorySearchQuery.trim().toLowerCase();
+
+    if (!query) {
+      return true;
+    }
+
+    return [user.identifier, user.displayName ?? "", user.userSub ?? ""]
+      .join(" ")
+      .toLowerCase()
+      .includes(query);
+  }) ?? [];
+  const pendingCategoryRequests = categoryManagement?.requests.filter((request) => request.status === "pending") ?? [];
+  const userPendingCategoryRequest = categorySnapshot?.requests.find((request) => request.status === "pending") ?? null;
+  const nextUpgradeableCategory = currentUserCategory
+    ? findNextNormalUserCategory(currentUserCategory, (candidate) => candidate !== currentUserCategory)
+    : null;
 
   useEffect(() => {
     const visibleQuestionIds = new Set(
@@ -1721,8 +1858,89 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
         decision === "accept" ? "Request accepted and participant added to the group." : "Request rejected.",
       );
     }).catch((error) => {
-      setGroupFeedback(error instanceof Error ? error.message : "Unable to update the request.");
+      handleWorkspaceActionError(error, "Unable to update the request.", setGroupFeedback);
     });
+  }
+
+  async function handleRequestCategoryUpgrade(requestedCategory: NormalUserCategory) {
+    try {
+      const payload = await readJson<UserCategorySnapshotResponse>(
+        await fetch("/api/user/category", {
+          body: JSON.stringify({ requestedCategory }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setCategorySnapshot(payload);
+      setCategoryFeedback("Upgrade request sent to the super admin for review.");
+    } catch (error) {
+      setCategoryFeedback(error instanceof Error ? error.message : "Unable to send the upgrade request.");
+    }
+  }
+
+  async function handleResolveCategoryRequest(requestId: string, decision: "accept" | "reject", durationMonths?: 3 | 12) {
+    try {
+      const payload = await readJson<SuperAdminCategoryManagementResponse>(
+        await fetch("/api/admin/user-categories", {
+          body: JSON.stringify({
+            decision,
+            durationMonths,
+            mode: "resolve-request",
+            requestId,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setCategoryManagement(payload);
+      setCategoryManagementFeedback(
+        decision === "accept"
+          ? `Request accepted for ${durationMonths === 12 ? "1 year" : "3 months"}.`
+          : "Request rejected.",
+      );
+    } catch (error) {
+      setCategoryManagementFeedback(
+        error instanceof Error ? error.message : "Unable to update the category request.",
+      );
+    }
+  }
+
+  async function handleAssignUserCategory() {
+    if (!categoryAssignmentIdentifier.trim()) {
+      setCategoryManagementFeedback("Select a user before changing the category.");
+      return;
+    }
+
+    try {
+      const payload = await readJson<SuperAdminCategoryManagementResponse>(
+        await fetch("/api/admin/user-categories", {
+          body: JSON.stringify({
+            category: categoryAssignmentCategory,
+            durationMonths: categoryAssignmentCategory === "trapit-normal" ? null : categoryAssignmentDurationMonths,
+            mode: "assign-category",
+            userIdentifier: categoryAssignmentIdentifier,
+            userSub: categoryManagement?.managedUsers.find((user) => user.identifier === categoryAssignmentIdentifier)?.userSub ?? null,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setCategoryManagement(payload);
+      setCategoryManagementFeedback("User category updated.");
+    } catch (error) {
+      setCategoryManagementFeedback(
+        error instanceof Error ? error.message : "Unable to update the user category.",
+      );
+    }
   }
 
   return (
@@ -1766,6 +1984,172 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
         </aside>
 
         <div className="admin-main-column">
+          {currentActorRole === "user" && categorySnapshot ? (
+            <section className="panel workspace-card">
+              <div className="section-head compact-head">
+                <div>
+                  <p className="eyebrow">Membership</p>
+                  <h2 className="section-title">Choose your TRAPit plan</h2>
+                  <p className="muted-text">
+                    Compare plan limits, check your current access window, and send the next upgrade request from this workspace.
+                  </p>
+                </div>
+              </div>
+              <div className="dashboard-grid compact-grid">
+                {categorySnapshot.availableCategories.map((plan) => {
+                  const definition = normalUserCategoryDefinitions[plan.category];
+                  const category = plan.category;
+                  const isCurrentCategory = categorySnapshot.currentCategory === category;
+                  const isRequested = userPendingCategoryRequest?.requestedCategory === category;
+                  const canRequest = currentUserCategory
+                    ? orderedNormalUserCategories.indexOf(category) > orderedNormalUserCategories.indexOf(currentUserCategory)
+                    : false;
+
+                  return (
+                    <article key={category} className="dashboard-card">
+                      <p className="dashboard-label">{plan.label}</p>
+                      <p className="muted-text">
+                        Pools: {definition.test.maxQuestionPools} | Questions per pool: {definition.test.maxQuestionsPerPool ?? "Unlimited"}
+                      </p>
+                      <p className="muted-text">
+                        Scheduled tests/month: {definition.test.maxScheduledTestsPerMonth} | Self tests/month: {definition.test.maxSelfTestsPerMonth}
+                      </p>
+                      <p className="muted-text">
+                        Polls: {definition.poll.schedule ? "Enabled" : "Not included"} | Groups: {definition.group.create ? "Enabled" : "Not included"}
+                      </p>
+                      {isCurrentCategory ? <p className="muted-text">Current plan across web and mobile</p> : null}
+                      {isRequested ? <p className="muted-text">Upgrade request pending review</p> : null}
+                      {!isCurrentCategory && canRequest && !isRequested ? (
+                        <button
+                          className="button-secondary small-button"
+                          type="button"
+                          onClick={() => void handleRequestCategoryUpgrade(category)}
+                        >
+                          Send upgrade request
+                        </button>
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </div>
+              <p className="muted-text">
+                {nextUpgradeableCategory
+                  ? `Next upgrade available: ${normalUserCategoryDefinitions[nextUpgradeableCategory].label}.`
+                  : "You are already on the highest available plan."}
+              </p>
+              {categorySnapshot.activeAssignment ? (
+                <p className="muted-text">
+                  Active assignment ends on {formatShortDate(categorySnapshot.activeAssignment.expiresAt ?? new Date().toISOString())}.
+                </p>
+              ) : null}
+              {categoryFeedback ? <p className="muted-text">{categoryFeedback}</p> : null}
+            </section>
+          ) : null}
+
+          {isSuperAdmin && categoryManagement ? (
+            <section className="panel workspace-card">
+              <div className="section-head compact-head">
+                <div>
+                  <p className="eyebrow">Super admin</p>
+                  <h2 className="section-title">Review category approvals</h2>
+                  <p className="muted-text">
+                    Search by user, apply a plan directly, or clear the pending approval queue without leaving the dashboard.
+                  </p>
+                </div>
+              </div>
+
+              <div className="form-grid">
+                <div className="field compact-field">
+                  <label htmlFor="category-user-search">Find user</label>
+                  <input
+                    id="category-user-search"
+                    placeholder="Phone, name, or user id"
+                    value={categorySearchQuery}
+                    onChange={(event) => setCategorySearchQuery(event.target.value)}
+                  />
+                </div>
+                <div className="field compact-field">
+                  <label htmlFor="category-user-select">User</label>
+                  <select
+                    className="select-field"
+                    id="category-user-select"
+                    value={categoryAssignmentIdentifier}
+                    onChange={(event) => setCategoryAssignmentIdentifier(event.target.value)}
+                  >
+                    <option value="">Select a user</option>
+                    {filteredManagedUsers.map((user) => (
+                      <option key={user.identifier} value={user.identifier}>
+                        {user.displayName ? `${user.displayName} - ` : ""}{user.identifier}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field compact-field">
+                  <label htmlFor="category-select">Category</label>
+                  <select
+                    className="select-field"
+                    id="category-select"
+                    value={categoryAssignmentCategory}
+                    onChange={(event) => setCategoryAssignmentCategory(event.target.value as NormalUserCategory)}
+                  >
+                    {orderedNormalUserCategories.map((category) => (
+                      <option key={category} value={category}>
+                        {normalUserCategoryDefinitions[category].label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field compact-field">
+                  <label htmlFor="category-duration">Duration</label>
+                  <select
+                    className="select-field"
+                    id="category-duration"
+                    value={String(categoryAssignmentDurationMonths)}
+                    onChange={(event) => setCategoryAssignmentDurationMonths(event.target.value === "12" ? 12 : 3)}
+                  >
+                    <option value="3">3 months</option>
+                    <option value="12">1 year</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="role-option role-option-create">
+                <button className="button-primary" type="button" onClick={() => void handleAssignUserCategory()}>
+                  Apply category
+                </button>
+              </div>
+
+              <div className="data-list compact-list">
+                {pendingCategoryRequests.length === 0 ? (
+                  <p className="muted-text">No pending upgrade requests.</p>
+                ) : (
+                  pendingCategoryRequests.map((request) => (
+                    <article key={request.id} className="data-card">
+                      <div>
+                        <strong>{request.requesterDisplayName ?? request.requesterIdentifier ?? "Unknown user"}</strong>
+                        <p className="muted-text">
+                          Requested {normalUserCategoryDefinitions[request.requestedCategory].label} from {normalUserCategoryDefinitions[request.currentCategory].label}
+                        </p>
+                      </div>
+                      <div className="role-option role-option-create">
+                        <button className="button-secondary small-button" type="button" onClick={() => void handleResolveCategoryRequest(request.id, "accept", 3)}>
+                          Approve 3 months
+                        </button>
+                        <button className="button-secondary small-button" type="button" onClick={() => void handleResolveCategoryRequest(request.id, "accept", 12)}>
+                          Approve 1 year
+                        </button>
+                        <button className="button-secondary small-button" type="button" onClick={() => void handleResolveCategoryRequest(request.id, "reject")}>
+                          Reject
+                        </button>
+                      </div>
+                    </article>
+                  ))
+                )}
+              </div>
+
+              {categoryManagementFeedback ? <p className="muted-text">{categoryManagementFeedback}</p> : null}
+            </section>
+          ) : null}
 
       <CollapsibleWorkspaceSection
         eyebrow=""
@@ -2818,7 +3202,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
                       setPollScheduleGenerateQrCode(false);
                     }}
                   />
-                  <span>Registered only</span>
+                  <span>Share with groups</span>
                 </label>
                 <label className="role-option">
                   <input
@@ -2908,7 +3292,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
                   <p className="muted-text">Starts: {formatShortDateTime(poll.startsAt)}</p>
                   <p className="muted-text">Ends: {formatShortDateTime(poll.endsAt)}</p>
                   <p className="muted-text">Questions: {poll.questionIds.length}</p>
-                  <p className="muted-text">Participant type: {poll.participantType === "registered" ? "Registered only" : "Open to all"}</p>
+                  <p className="muted-text">Participant type: {poll.participantType === "registered" ? "Shared with groups" : "Open to all"}</p>
                   <p className="muted-text">Anonymity: {poll.anonymous ? "Anonymous" : "Named"}</p>
                   {poll.participantType === "registered" ? (
                     <p className="muted-text">
@@ -3257,7 +3641,7 @@ export function AdminQuestionWorkspace({ currentAdminIdentifier, previousSignInA
                     <p className="muted-text">Starts: {formatShortDateTime(resolvedPoll.startsAt)}</p>
                     <p className="muted-text">Ends: {formatShortDateTime(resolvedPoll.endsAt)}</p>
                     <p className="muted-text">Questions: {resolvedPoll.questionIds.length}</p>
-                    <p className="muted-text">Participant type: {resolvedPoll.participantType === "registered" ? "Registered only" : "Open to all"}</p>
+                    <p className="muted-text">Participant type: {resolvedPoll.participantType === "registered" ? "Shared with groups" : "Open to all"}</p>
                     <p className="muted-text">Anonymity: {resolvedPoll.anonymous ? "Anonymous" : "Named"}</p>
                     {resolvedPoll.participantType === "registered" ? (
                       <p className="muted-text">

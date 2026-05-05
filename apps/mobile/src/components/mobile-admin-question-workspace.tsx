@@ -774,7 +774,7 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
                 <Text style={styles.metaText}>Starts: {formatShortDateTime(resolvedPoll.startsAt)}</Text>
                 <Text style={styles.metaText}>Ends: {formatShortDateTime(resolvedPoll.endsAt)}</Text>
                 <Text style={styles.metaText}>Questions: {resolvedPoll.questionIds.length}</Text>
-                <Text style={styles.metaText}>Participant type: {resolvedPoll.participantType === "registered" ? "Registered only" : "Open to all"}</Text>
+                <Text style={styles.metaText}>Participant type: {resolvedPoll.participantType === "registered" ? "Shared with groups" : "Open to all"}</Text>
                 <Text style={styles.metaText}>Anonymity: {resolvedPoll.anonymous ? "Anonymous" : "Named"}</Text>
                 {resolvedPoll.shareCode ? <Text style={styles.metaText}>Access code: {resolvedPoll.shareCode}</Text> : null}
                 <Text style={styles.metaText}>Poll response summaries will appear here when participation is recorded.</Text>
@@ -967,7 +967,7 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
         <Text style={styles.label}>Select poll questions</Text>
         <View style={styles.chipWrap}>{visiblePollQuestions.map((question) => <Pressable key={question.id} style={[styles.selectionCard, pollScheduleQuestionIds.includes(question.id) && styles.selectionCardActive]} onPress={() => setPollScheduleQuestionIds((currentIds) => toggleArrayValue(currentIds, question.id))}><Text style={[styles.selectionTitle, pollScheduleQuestionIds.includes(question.id) && styles.selectionTitleActive]} numberOfLines={2}>{question.topic ? `${question.topic}: ${question.prompt}` : question.prompt}</Text></Pressable>)}</View>
         <View style={styles.toggleRow}>
-          <Pressable style={[styles.pill, pollScheduleParticipantType === "registered" && styles.pillActive]} onPress={() => setPollScheduleParticipantType("registered")}><Text style={[styles.pillText, pollScheduleParticipantType === "registered" && styles.pillTextActive]}>Registered only</Text></Pressable>
+          <Pressable style={[styles.pill, pollScheduleParticipantType === "registered" && styles.pillActive]} onPress={() => setPollScheduleParticipantType("registered")}><Text style={[styles.pillText, pollScheduleParticipantType === "registered" && styles.pillTextActive]}>Share with groups</Text></Pressable>
           <Pressable style={[styles.pill, pollScheduleParticipantType === "open" && styles.pillActive]} onPress={() => setPollScheduleParticipantType("open")}><Text style={[styles.pillText, pollScheduleParticipantType === "open" && styles.pillTextActive]}>Open to all</Text></Pressable>
         </View>
         {pollScheduleParticipantType === "registered" ? <View style={styles.chipWrap}>{visibleGroups.map((group) => <Pressable key={group.id} style={[styles.selectionCard, pollScheduleGroupIds.includes(group.id) && styles.selectionCardActive]} onPress={() => setPollScheduleGroupIds((currentIds) => toggleArrayValue(currentIds, group.id))}><Text style={[styles.selectionTitle, pollScheduleGroupIds.includes(group.id) && styles.selectionTitleActive]}>{group.name}</Text></Pressable>)}</View> : null}

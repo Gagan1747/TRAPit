@@ -5,12 +5,14 @@ import { LocalDateTimeText } from "../../components/local-date-time-text";
 import { SignOutButton } from "../../components/sign-out-button";
 import { isWebAuthConfigured } from "../../lib/auth-config";
 import { getPreviousWebSignIn, requireWebSession } from "../../lib/session";
+import { isSuperAdminIdentifier } from "../../lib/workspace-actor";
 
 export default async function AdminPage() {
   const session = await requireWebSession("admin");
   const authConfigured = isWebAuthConfigured();
   const sessionIdentifier = getSessionIdentifier(session);
   const displayName = getSessionDisplayName(session) ?? "Admin";
+  const isSuperAdmin = isSuperAdminIdentifier(session.phoneNumber ?? sessionIdentifier);
   const previousSignInAt = authConfigured ? await getPreviousWebSignIn(session) : null;
 
   return (
@@ -32,7 +34,13 @@ export default async function AdminPage() {
             {authConfigured ? <SignOutButton /> : null}
           </div>
         </div>
-        <AdminQuestionWorkspace currentAdminIdentifier={sessionIdentifier} previousSignInAt={previousSignInAt} />
+        <AdminQuestionWorkspace
+          currentActorRole="admin"
+          currentAdminIdentifier={sessionIdentifier}
+          currentUserCategory={null}
+          isSuperAdmin={isSuperAdmin}
+          previousSignInAt={previousSignInAt}
+        />
       </section>
     </main>
   );

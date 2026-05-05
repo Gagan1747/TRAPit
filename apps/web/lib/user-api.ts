@@ -1,11 +1,18 @@
 import "server-only";
 
-import { getSessionDisplayName, getSessionIdentifier, type UserRole } from "@trapit/auth";
+import {
+  defaultNormalUserCategory,
+  getSessionDisplayName,
+  getSessionIdentifier,
+  type NormalUserCategory,
+  type UserRole,
+} from "@trapit/auth";
 
 import { isWebAuthConfigured } from "./auth-config";
 import { getWebSession } from "./session";
 
 export type UserActor = {
+  category: NormalUserCategory;
   displayName: string | null;
   identifier: string;
   role: UserRole;
@@ -22,6 +29,7 @@ export async function getUserActor(request: Request): Promise<UserActor | null> 
     }
 
     return {
+      category: defaultNormalUserCategory,
       displayName: null,
       identifier: fallbackIdentifier,
       role: "user",
@@ -36,6 +44,7 @@ export async function getUserActor(request: Request): Promise<UserActor | null> 
   }
 
   return {
+    category: session.userCategory ?? defaultNormalUserCategory,
     displayName: getSessionDisplayName(session),
     identifier: getSessionIdentifier(session) ?? "",
     role: session.role,

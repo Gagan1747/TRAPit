@@ -1,21 +1,22 @@
 import { NextResponse } from "next/server";
 import { validateQuestionDraft, type QuestionDraft } from "@trapit/testing";
 
-import { getAdminActor } from "../../../../../lib/admin-api";
-import { deleteQuestion, updateQuestion } from "../../../../../lib/testing-store";
+import { getWorkspaceActor } from "../../../../../lib/workspace-actor";
+import { assertCanAddQuestionsToPools } from "../../../../../lib/user-category-limits";
+import { deleteQuestion, listPoolsForActor, listQuestions, updateQuestion } from "../../../../../lib/testing-store";
 
 export async function DELETE(
   _request: Request,
   context: { params: { questionId: string } },
 ) {
-  const actor = await getAdminActor();
+  const workspaceActor = await getWorkspaceActor();
 
-  if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+  if (!workspaceActor) {
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   try {
-    const questions = await deleteQuestion(context.params.questionId, actor.sub);
+    const questions = await deleteQuestion(context.params.questionId, workspaceActor.sub);
     return NextResponse.json({ questions });
   } catch (error) {
     return NextResponse.json(
@@ -29,10 +30,10 @@ export async function PATCH(
   request: Request,
   context: { params: { questionId: string } },
 ) {
-  const actor = await getAdminActor();
+  const actor = await getWorkspaceActor();
 
   if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   const body = (await request.json()) as {
@@ -60,6 +61,22 @@ export async function PATCH(
       { error: "Questions must stay assigned to at least one pool." },
       { status: 400 },
     );
+  }
+
+  if (actor.role === "user" && body.poolIds) {
+    const [questions, pools] = await Promise.all([
+      listQuestions(actor.sub),
+      listPoolsForActor(actor.sub),
+    ]);
+    const editedQuestion = questions.find((question) => question.id === context.params.questionId);
+    const nextCounts = body.poolIds.map((poolId) => {
+      const pool = pools.find((entry) => entry.id === poolId);
+      const alreadyIncluded = editedQuestion?.poolIds.includes(poolId) ?? false;
+
+      return (pool?.questionIds.length ?? 0) + (alreadyIncluded ? 0 : 1);
+    });
+
+    assertCanAddQuestionsToPools(actor.userCategory, nextCounts);
   }
 
   try {

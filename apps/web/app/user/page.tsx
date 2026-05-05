@@ -1,17 +1,20 @@
-import { getSessionDisplayName, getSessionIdentifier } from "@trapit/auth";
+import { getSessionDisplayName, getSessionIdentifier, normalUserCategoryLabels } from "@trapit/auth";
 
+import { AdminQuestionWorkspace } from "../../components/admin-question-workspace";
 import { LocalDateTimeText } from "../../components/local-date-time-text";
-import { RestrictedUserDashboardWorkspace } from "../../components/restricted-user-dashboard-workspace";
 import { SignOutButton } from "../../components/sign-out-button";
 import { UserTestWorkspace } from "../../components/user-test-workspace";
 import { isWebAuthConfigured } from "../../lib/auth-config";
 import { getPreviousWebSignIn, requireWebSession } from "../../lib/session";
+import { isSuperAdminIdentifier } from "../../lib/workspace-actor";
 
 export default async function UserPage() {
   const session = await requireWebSession(["user", "admin"]);
   const authConfigured = isWebAuthConfigured();
   const sessionIdentifier = getSessionIdentifier(session);
   const displayName = getSessionDisplayName(session) ?? "User";
+  const categoryLabel = session.userCategory ? normalUserCategoryLabels[session.userCategory] : null;
+  const isSuperAdmin = isSuperAdminIdentifier(session.phoneNumber ?? sessionIdentifier);
   const previousSignInAt = authConfigured ? await getPreviousWebSignIn(session) : null;
 
   return (
@@ -25,6 +28,7 @@ export default async function UserPage() {
                 ? `Signed in with ${sessionIdentifier ?? "user"}`
                 : "Auth setup pending. User area is open for feature work."}
             </p>
+            {categoryLabel ? <p className="hero-text">Category: {categoryLabel}</p> : null}
             <p className="hero-text">
               Last signed in: <LocalDateTimeText fallback="First recorded sign in" value={previousSignInAt} />
             </p>
@@ -32,9 +36,11 @@ export default async function UserPage() {
           {authConfigured ? <SignOutButton /> : null}
         </div>
         {session.role === "user" ? (
-          <RestrictedUserDashboardWorkspace
-            authConfigured={authConfigured}
-            defaultParticipantIdentifier={sessionIdentifier}
+          <AdminQuestionWorkspace
+            currentActorRole="user"
+            currentAdminIdentifier={sessionIdentifier}
+            currentUserCategory={session.userCategory}
+            isSuperAdmin={isSuperAdmin}
             previousSignInAt={previousSignInAt}
           />
         ) : (

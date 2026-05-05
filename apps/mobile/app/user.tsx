@@ -1,9 +1,10 @@
-import { getMobileDashboardPath, getSessionIdentifier } from "@trapit/auth";
+import { getMobileDashboardPath, getSessionIdentifier, normalUserCategoryLabels } from "@trapit/auth";
 import { Redirect, type Href } from "expo-router";
 import { SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { isMobileAuthConfigured } from "../src/auth/auth-config";
 import { useAuth } from "../src/auth/auth-context";
+import { MobileCategoryMembershipPanel } from "../src/components/mobile-category-panels";
 import { MobileRestrictedUserDashboardWorkspace } from "../src/components/mobile-restricted-user-dashboard-workspace";
 import { MobileUserTestWorkspace } from "../src/components/mobile-user-test-workspace";
 
@@ -26,6 +27,7 @@ export default function UserScreen() {
   }
 
   const currentIdentifier = session ? getSessionIdentifier(session) : null;
+  const categoryLabel = session?.userCategory ? normalUserCategoryLabels[session.userCategory] : null;
   const showRestrictedDashboard = !session || session.role === "user";
 
   return (
@@ -35,17 +37,19 @@ export default function UserScreen() {
           <Text style={styles.eyebrow}>User workspace</Text>
           <Text style={styles.title}>User dashboard</Text>
           <Text style={styles.copy}>
-            This is the landing screen for normal users after sign-up or sign-in.
+            Review your plan, request an upgrade, and access the parts of TRAPit that are already live for your account.
           </Text>
           <Text style={styles.copy}>
             {authConfigured ? `Signed in as ${session ? getSessionIdentifier(session) ?? "user" : "user"}` : "Auth setup pending. User space is open for feature work."}
           </Text>
+          {categoryLabel ? <Text style={styles.copy}>Category: {categoryLabel}</Text> : null}
           {authConfigured ? (
             <Text style={styles.signOut} onPress={() => void signOut()}>
               Sign out
             </Text>
           ) : null}
         </View>
+        {session && session.role === "user" ? <MobileCategoryMembershipPanel session={session} /> : null}
         {showRestrictedDashboard ? (
           <MobileRestrictedUserDashboardWorkspace currentUserIdentifier={currentIdentifier} />
         ) : (

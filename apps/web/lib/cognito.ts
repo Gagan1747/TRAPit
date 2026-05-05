@@ -176,6 +176,25 @@ function getAccessTokenVerifier() {
   });
 }
 
+async function verifyWithClientIds(
+  token: string,
+  createVerifier: (clientId: string) => ReturnType<typeof CognitoJwtVerifier.create>,
+) {
+  const config = getConfig();
+  const clientIds = [config.webClientId, config.mobileClientId].filter(Boolean) as string[];
+  let lastError: unknown = null;
+
+  for (const clientId of clientIds) {
+    try {
+      return (await createVerifier(clientId).verify(token)) as TokenClaims;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Unable to verify the Cognito token.");
+}
+
 export async function signUpWithCognito(
   phoneNumber: string,
   password: string,
@@ -295,9 +314,21 @@ export async function verifyWebTokens(tokens: {
   idToken: string;
 }): Promise<AuthSession> {
   const config = getConfig();
-  const idClaims = (await getVerifier().verify(tokens.idToken)) as TokenClaims;
+  const idClaims = await verifyWithClientIds(tokens.idToken, (clientId) =>
+    CognitoJwtVerifier.create({
+      clientId,
+      tokenUse: "id",
+      userPoolId: config.userPoolId,
+    }),
+  );
   const accessClaims = tokens.accessToken
-    ? ((await getAccessTokenVerifier().verify(tokens.accessToken)) as TokenClaims)
+    ? await verifyWithClientIds(tokens.accessToken, (clientId) =>
+        CognitoJwtVerifier.create({
+          clientId,
+          tokenUse: "access",
+          userPoolId: config.userPoolId,
+        }),
+      )
     : null;
   const mergedClaims = {
     ...idClaims,

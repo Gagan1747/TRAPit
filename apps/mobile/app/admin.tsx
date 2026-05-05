@@ -5,6 +5,7 @@ import { SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 import { isMobileAuthConfigured } from "../src/auth/auth-config";
 import { useAuth } from "../src/auth/auth-context";
 import { MobileAdminQuestionWorkspace } from "../src/components/mobile-admin-question-workspace";
+import { MobileCategoryApprovalPanel } from "../src/components/mobile-category-panels";
 
 export default function AdminScreen() {
   const { isLoading, session, signOut } = useAuth();
@@ -31,7 +32,7 @@ export default function AdminScreen() {
           <Text style={styles.eyebrow}>Admin workspace</Text>
           <Text style={styles.title}>Admin dashboard</Text>
           <Text style={styles.copy}>
-            Use this screen for privileged controls once Cognito group checks are enforced.
+            Run the workspace, and if you are the super admin, clear upgrade approvals from the same mobile dashboard.
           </Text>
           <Text style={styles.copy}>
             {authConfigured ? `Signed in as ${session ? getSessionIdentifier(session) ?? "admin" : "admin"}` : "Auth setup pending. Admin space is open for feature work."}
@@ -42,6 +43,7 @@ export default function AdminScreen() {
             </Text>
           ) : null}
         </View>
+        {session ? <MobileCategoryApprovalPanel session={session} /> : null}
         <MobileAdminQuestionWorkspace currentAdminIdentifier={session ? getSessionIdentifier(session) : null} />
       </ScrollView>
     </SafeAreaView>

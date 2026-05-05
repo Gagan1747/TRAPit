@@ -241,22 +241,21 @@ export function RestrictedUserDashboardWorkspace({
     return (
       <div className="admin-menu-group" key={group}>
         <button
-          aria-expanded={isLocked ? false : isOpen}
-          className={`admin-menu-group-toggle${isOpen || isActive ? " is-active" : ""}${isLocked ? " is-disabled" : ""}`}
+          aria-expanded={isOpen}
+          className={`admin-menu-group-toggle${isOpen || isActive ? " is-active" : ""}`}
           type="button"
           onClick={() => {
-            if (isLocked) {
-              openLockedFeatureModal(label);
-              return;
-            }
-
             setOpenMenuGroup((currentGroup) => (currentGroup === group ? null : group));
           }}
         >
           <span>{label}</span>
           <span className="admin-menu-group-toggle-symbol" aria-hidden="true">{isOpen ? "▲" : "▼"}</span>
         </button>
-        {!isLocked && isOpen ? <div className="admin-menu-substack">{items.map((item) => renderMenuItem(item.label, item.section))}</div> : null}
+        {isOpen ? (
+          <div className="admin-menu-substack">
+            {items.map((item) => renderMenuItem(item.label, isLocked ? undefined : item.section))}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -574,7 +573,7 @@ export function RestrictedUserDashboardWorkspace({
                       <p className="muted-text">Starts: {formatShortDateTime(poll.startsAt)}</p>
                       <p className="muted-text">Ends: {formatShortDateTime(poll.endsAt)}</p>
                       <p className="muted-text">Questions: {poll.questionIds.length}</p>
-                      <p className="muted-text">Participant type: {poll.participantType === "registered" ? "Registered only" : "Open to all"}</p>
+                      <p className="muted-text">Participant type: {poll.participantType === "registered" ? "Shared with groups" : "Open to all"}</p>
                       <p className="muted-text">Anonymity: {poll.anonymous ? "Anonymous" : "Named"}</p>
                       {poll.shareCode ? <p className="muted-text">Access code: {poll.shareCode}</p> : null}
                       {poll.shareCode ? (

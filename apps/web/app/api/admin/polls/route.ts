@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { type PollParticipantType, type PollQuestionDraft } from "@trapit/testing";
 
-import { getAdminActor } from "../../../../lib/admin-api";
+import { getWorkspaceActor } from "../../../../lib/workspace-actor";
+import { assertCanCreatePollQuestions, assertCanSchedulePoll } from "../../../../lib/user-category-limits";
 import {
   createPollQuestions,
   createScheduledPoll,
@@ -40,10 +41,10 @@ type PollBody =
     };
 
 export async function GET() {
-  const actor = await getAdminActor();
+  const actor = await getWorkspaceActor();
 
   if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   try {
@@ -62,10 +63,10 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const actor = await getAdminActor();
+  const actor = await getWorkspaceActor();
 
   if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   const body = (await request.json()) as PollBody;
@@ -76,6 +77,10 @@ export async function POST(request: Request) {
         { error: "Add at least one poll question before saving." },
         { status: 400 },
       );
+    }
+
+    if (actor.role === "user") {
+      assertCanCreatePollQuestions(actor.userCategory);
     }
 
     try {
@@ -105,6 +110,10 @@ export async function POST(request: Request) {
 
     if (!("title" in body) || !body.title?.trim()) {
       return NextResponse.json({ error: "Poll topic is required." }, { status: 400 });
+    }
+
+    if (actor.role === "user") {
+      assertCanSchedulePoll(actor.userCategory, body.participantType ?? "registered");
     }
 
     try {
@@ -150,6 +159,10 @@ export async function POST(request: Request) {
 
     if (!("title" in body) || !body.title?.trim()) {
       return NextResponse.json({ error: "Poll topic is required." }, { status: 400 });
+    }
+
+    if (actor.role === "user") {
+      assertCanSchedulePoll(actor.userCategory, body.participantType ?? "registered");
     }
 
     try {

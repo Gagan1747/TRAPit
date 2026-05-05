@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { validateQuestionDraft, type QuestionDraft } from "@trapit/testing";
 
-import { getAdminActor } from "../../../../lib/admin-api";
+import { getWorkspaceActor } from "../../../../lib/workspace-actor";
+import { assertCanAddQuestionsToPools } from "../../../../lib/user-category-limits";
 import {
   createQuestion,
   deleteQuestions,
   importQuestions,
   listQuestions,
+  listPoolsForActor,
 } from "../../../../lib/testing-store";
 
 type CreateQuestionBody = {
@@ -24,17 +26,17 @@ function hasPoolSelection(poolIds?: string[]) {
   return Array.isArray(poolIds) && poolIds.some((poolId) => poolId.trim());
 }
 
-async function requireAdmin() {
-  const actor = await getAdminActor();
+async function requireWorkspaceActor() {
+  const actor = await getWorkspaceActor();
 
   return actor;
 }
 
 export async function GET() {
-  const actor = await requireAdmin();
+  const actor = await requireWorkspaceActor();
 
   if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   const questions = await listQuestions(actor.sub);
@@ -43,10 +45,10 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const actor = await requireAdmin();
+  const actor = await requireWorkspaceActor();
 
   if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   const body = (await request.json()) as CreateQuestionBody;
@@ -67,6 +69,16 @@ export async function POST(request: Request) {
         { error: "Select at least one pool before importing questions." },
         { status: 400 },
       );
+    }
+
+    if (actor.role === "user") {
+      const pools = await listPoolsForActor(actor.sub);
+      const nextCounts = (body.poolIds ?? []).map((poolId) => {
+        const pool = pools.find((entry) => entry.id === poolId);
+        return (pool?.questionIds.length ?? 0) + drafts.length;
+      });
+
+      assertCanAddQuestionsToPools(actor.userCategory, nextCounts);
     }
 
     const questions = await importQuestions(drafts, actor.sub, body.poolIds ?? []);
@@ -90,16 +102,26 @@ export async function POST(request: Request) {
     );
   }
 
+  if (actor.role === "user") {
+    const pools = await listPoolsForActor(actor.sub);
+    const nextCounts = (body.poolIds ?? []).map((poolId) => {
+      const pool = pools.find((entry) => entry.id === poolId);
+      return (pool?.questionIds.length ?? 0) + 1;
+    });
+
+    assertCanAddQuestionsToPools(actor.userCategory, nextCounts);
+  }
+
   const questions = await createQuestion(body.draft, actor.sub, "manual", body.poolIds ?? []);
 
   return NextResponse.json({ questions });
 }
 
 export async function DELETE(request: Request) {
-  const actor = await requireAdmin();
+  const actor = await requireWorkspaceActor();
 
   if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   let body: DeleteQuestionsBody = {};

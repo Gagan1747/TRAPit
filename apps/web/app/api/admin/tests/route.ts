@@ -1,13 +1,37 @@
 import { NextResponse } from "next/server";
 
-import { getAdminActor } from "../../../../lib/admin-api";
+import { getWorkspaceActor } from "../../../../lib/workspace-actor";
+import { assertCanScheduleSelfTest, assertCanScheduleTest } from "../../../../lib/user-category-limits";
 import { createScheduledTest, listScheduledTests, updateScheduledTest } from "../../../../lib/testing-store";
 
+function normalizeIdentifier(value: string | null | undefined) {
+  return value?.trim().toLowerCase().replace(/[\s()-]/g, "") ?? "";
+}
+
+function isSelfTestForActor(
+  actorIdentifier: string | null,
+  participantGroupIds: string[],
+  participantIds: string[],
+) {
+  if (!actorIdentifier || participantGroupIds.length) {
+    return false;
+  }
+
+  return participantIds.length === 1 && normalizeIdentifier(participantIds[0]) === normalizeIdentifier(actorIdentifier);
+}
+
+function isCurrentMonth(value: string) {
+  const date = new Date(value);
+  const now = new Date();
+
+  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth();
+}
+
 export async function GET() {
-  const actor = await getAdminActor();
+  const actor = await getWorkspaceActor();
 
   if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   const scheduledTests = await listScheduledTests(actor.sub);
@@ -15,10 +39,10 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const actor = await getAdminActor();
+  const actor = await getWorkspaceActor();
 
   if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   const body = (await request.json()) as {
@@ -42,6 +66,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Duration must be at least 1 minute." }, { status: 400 });
   }
 
+  if (actor.role === "user") {
+    const scheduledTests = await listScheduledTests(actor.sub);
+    const thisMonthTests = scheduledTests.filter((test) => isCurrentMonth(test.createdAt));
+    const isSelfTest = isSelfTestForActor(actor.identifier, body.participantGroupIds ?? [], body.participantIds ?? []);
+
+    if (isSelfTest) {
+      assertCanScheduleSelfTest(
+        actor.userCategory,
+        thisMonthTests.filter((test) => isSelfTestForActor(actor.identifier, test.participantGroupIds, test.participantIds)).length,
+      );
+    } else {
+      assertCanScheduleTest(
+        actor.userCategory,
+        thisMonthTests.filter((test) => !isSelfTestForActor(actor.identifier, test.participantGroupIds, test.participantIds)).length,
+      );
+    }
+  }
+
   try {
     const scheduledTests = await createScheduledTest({
       createdBy: actor.sub,
@@ -63,10 +105,10 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const actor = await getAdminActor();
+  const actor = await getWorkspaceActor();
 
   if (!actor) {
-    return NextResponse.json({ error: "Admin access is required." }, { status: 403 });
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
   const body = (await request.json()) as {
@@ -89,6 +131,26 @@ export async function PATCH(request: Request) {
 
   if (!body.durationMinutes || body.durationMinutes < 1) {
     return NextResponse.json({ error: "Duration must be at least 1 minute." }, { status: 400 });
+  }
+
+  if (actor.role === "user") {
+    const scheduledTests = await listScheduledTests(actor.sub);
+    const thisMonthTests = scheduledTests
+      .filter((test) => test.id !== body.testId)
+      .filter((test) => isCurrentMonth(test.createdAt));
+    const isSelfTest = isSelfTestForActor(actor.identifier, body.participantGroupIds ?? [], body.participantIds ?? []);
+
+    if (isSelfTest) {
+      assertCanScheduleSelfTest(
+        actor.userCategory,
+        thisMonthTests.filter((test) => isSelfTestForActor(actor.identifier, test.participantGroupIds, test.participantIds)).length,
+      );
+    } else {
+      assertCanScheduleTest(
+        actor.userCategory,
+        thisMonthTests.filter((test) => !isSelfTestForActor(actor.identifier, test.participantGroupIds, test.participantIds)).length,
+      );
+    }
   }
 
   try {
