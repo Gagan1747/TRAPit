@@ -462,6 +462,13 @@ function participantIdentifiersMatch(left: string, right: string) {
   );
 }
 
+function getManagedUserOptionLabel(user: {
+  displayName: string | null;
+  identifier: string;
+}) {
+  return user.displayName ? `${user.displayName} - ${user.identifier}` : user.identifier;
+}
+
 function formatParticipantName(
   identifier: string,
   participants: ParticipantProfile[],
@@ -764,7 +771,11 @@ export function AdminQuestionWorkspace({
       );
 
       if (!categoryAssignmentIdentifier && categoryManagementPayload?.managedUsers.length) {
-        setCategoryAssignmentIdentifier(categoryManagementPayload.managedUsers[0].identifier);
+        const initialUser = categoryManagementPayload.managedUsers[0];
+
+        setCategoryAssignmentIdentifier(initialUser.identifier);
+        setCategoryAssignmentCategory(initialUser.currentCategory);
+        setCategorySearchQuery(getManagedUserOptionLabel(initialUser));
       }
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to load the admin workspace.");
@@ -939,6 +950,18 @@ export function AdminQuestionWorkspace({
   function openUpgradePanel(prompt?: UpgradePrompt | null) {
     setUpgradePrompt(prompt ?? null);
     setIsUpgradePanelOpen(true);
+  }
+
+  function selectManagedUser(identifier: string) {
+    const user = categoryManagement?.managedUsers.find((entry) => entry.identifier === identifier) ?? null;
+
+    if (!user) {
+      return;
+    }
+
+    setCategoryAssignmentIdentifier(user.identifier);
+    setCategoryAssignmentCategory(user.currentCategory);
+    setCategorySearchQuery(getManagedUserOptionLabel(user));
   }
 
   function closeManagementDrawers() {
@@ -1921,6 +1944,7 @@ export function AdminQuestionWorkspace({
   const pendingCategoryRequests = categoryManagement?.requests.filter((request) => request.status === "pending") ?? [];
   const userPendingCategoryRequest = categorySnapshot?.requests.find((request) => request.status === "pending") ?? null;
   const latestResolvedCategoryRequest = categorySnapshot?.requests.find((request) => request.status !== "pending") ?? null;
+  const selectedManagedUser = categoryManagement?.managedUsers.find((user) => user.identifier === categoryAssignmentIdentifier) ?? null;
   const nextUpgradeableCategory = currentUserCategory
     ? findNextNormalUserCategory(currentUserCategory, (candidate) => candidate !== currentUserCategory)
     : null;
@@ -1979,7 +2003,7 @@ export function AdminQuestionWorkspace({
     }
 
     if (!filteredManagedUsers.some((user) => user.identifier === categoryAssignmentIdentifier)) {
-      setCategoryAssignmentIdentifier(filteredManagedUsers[0].identifier);
+      selectManagedUser(filteredManagedUsers[0].identifier);
     }
   }, [categoryAssignmentIdentifier, filteredManagedUsers, isSuperAdmin]);
 
@@ -2250,29 +2274,38 @@ export function AdminQuestionWorkspace({
 
               <div className="form-grid">
                 <div className="field compact-field">
-                  <label htmlFor="category-user-search">Find user</label>
+                  <label htmlFor="category-user-search">User</label>
                   <input
                     id="category-user-search"
-                    placeholder="Phone, name, or user id"
+                    list="category-user-options"
+                    placeholder="Search or select by phone, name, or user id"
                     value={categorySearchQuery}
-                    onChange={(event) => setCategorySearchQuery(event.target.value)}
+                    onChange={(event) => {
+                      const nextValue = event.target.value;
+
+                      setCategorySearchQuery(nextValue);
+
+                      const matchedUser = categoryManagement?.managedUsers.find((user) => {
+                        const optionLabel = getManagedUserOptionLabel(user).toLowerCase();
+                        const normalizedValue = nextValue.trim().toLowerCase();
+
+                        return optionLabel === normalizedValue || user.identifier.toLowerCase() === normalizedValue;
+                      });
+
+                      if (matchedUser) {
+                        setCategoryAssignmentIdentifier(matchedUser.identifier);
+                        setCategoryAssignmentCategory(matchedUser.currentCategory);
+                      }
+                    }}
                   />
-                </div>
-                <div className="field compact-field">
-                  <label htmlFor="category-user-select">User</label>
-                  <select
-                    className="select-field"
-                    id="category-user-select"
-                    value={categoryAssignmentIdentifier}
-                    onChange={(event) => setCategoryAssignmentIdentifier(event.target.value)}
-                  >
-                    <option value="">Select a user</option>
+                  <datalist id="category-user-options">
                     {filteredManagedUsers.map((user) => (
-                      <option key={user.identifier} value={user.identifier}>
-                        {user.displayName ? `${user.displayName} - ` : ""}{user.identifier}
-                      </option>
+                      <option key={user.identifier} value={getManagedUserOptionLabel(user)} />
                     ))}
-                  </select>
+                  </datalist>
+                  {selectedManagedUser ? (
+                    <p className="muted-text">Selected user: {selectedManagedUser.identifier}</p>
+                  ) : null}
                 </div>
                 <div className="field compact-field">
                   <label htmlFor="category-select">Category</label>
@@ -2288,6 +2321,9 @@ export function AdminQuestionWorkspace({
                       </option>
                     ))}
                   </select>
+                  {selectedManagedUser ? (
+                    <p className="muted-text">Current category: {selectedManagedUser.currentCategoryLabel.replace(/ users$/i, " user")}</p>
+                  ) : null}
                 </div>
                 {categoryAssignmentCategory !== "trapit-normal" ? (
                   <div className="field compact-field">
