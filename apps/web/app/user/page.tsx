@@ -13,7 +13,7 @@ export default async function UserPage() {
   const authConfigured = isWebAuthConfigured();
   const sessionIdentifier = getSessionIdentifier(session);
   const displayName = getSessionDisplayName(session) ?? "User";
-  const categoryLabel = session.userCategory ? normalUserCategoryLabels[session.userCategory] : null;
+  const categoryLabel = session.userCategory ? normalUserCategoryLabels[session.userCategory].replace(/ users$/i, " user") : null;
   const isSuperAdmin = isSuperAdminIdentifier(session.phoneNumber ?? sessionIdentifier);
   const previousSignInAt = authConfigured ? await getPreviousWebSignIn(session) : null;
 
@@ -25,10 +25,9 @@ export default async function UserPage() {
             <h1 className="hero-title">{displayName} dashboard</h1>
             <p className="hero-text">
               {authConfigured
-                ? `Signed in with ${sessionIdentifier ?? "user"}`
+                ? `Signed in with ${sessionIdentifier ?? "user"}${categoryLabel ? ` as ${categoryLabel}` : ""}`
                 : "Auth setup pending. User area is open for feature work."}
             </p>
-            {categoryLabel ? <p className="hero-text">Category: {categoryLabel}</p> : null}
             <p className="hero-text">
               Last signed in: <LocalDateTimeText fallback="First recorded sign in" value={previousSignInAt} />
             </p>

@@ -59,7 +59,40 @@ async function buildManagementResponse() {
       .map((assignment) => [assignment.userIdentifier?.trim().toLowerCase() ?? "", assignment]),
   );
 
-  const managedUsers = directoryUsers
+  const knownUsers = new Map<string, { identifier: string; label: string | null }>();
+
+  for (const user of directoryUsers) {
+    knownUsers.set(user.identifier.trim().toLowerCase(), {
+      identifier: user.identifier,
+      label: user.label,
+    });
+  }
+
+  for (const request of managementState.requests) {
+    if (!request.requesterIdentifier?.trim()) {
+      continue;
+    }
+
+    knownUsers.set(request.requesterIdentifier.trim().toLowerCase(), {
+      identifier: request.requesterIdentifier,
+      label: request.requesterDisplayName,
+    });
+  }
+
+  for (const assignment of managementState.activeAssignments) {
+    if (!assignment.userIdentifier?.trim()) {
+      continue;
+    }
+
+    const normalizedIdentifier = assignment.userIdentifier.trim().toLowerCase();
+
+    knownUsers.set(normalizedIdentifier, {
+      identifier: assignment.userIdentifier,
+      label: knownUsers.get(normalizedIdentifier)?.label ?? null,
+    });
+  }
+
+  const managedUsers = Array.from(knownUsers.values())
     .map((user) => {
       const normalizedIdentifier = user.identifier.trim().toLowerCase();
       const activeAssignment = activeAssignmentsByIdentifier.get(normalizedIdentifier) ?? null;
@@ -69,7 +102,7 @@ async function buildManagementResponse() {
       return {
         currentCategory,
         currentCategoryLabel: normalUserCategoryLabels[currentCategory],
-        displayName: user.label,
+        displayName: pendingRequest?.requesterDisplayName ?? user.label,
         expiresAt: activeAssignment?.expiresAt ?? null,
         identifier: user.identifier,
         pendingRequest,

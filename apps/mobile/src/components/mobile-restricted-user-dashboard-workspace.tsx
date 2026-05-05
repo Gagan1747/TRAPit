@@ -1,3 +1,4 @@
+import { findNextNormalUserCategory, normalUserCategoryDefinitions, type NormalUserCategory } from "@trapit/auth";
 import { formatElapsedTime, type ScheduledPoll, type ScheduledTest } from "@trapit/testing";
 import { useMemo, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
@@ -19,6 +20,12 @@ type RestrictedMenuGroup = "groups" | "poll" | "test";
 
 type MobileRestrictedUserDashboardWorkspaceProps = {
   currentUserIdentifier: string | null;
+  currentUserCategory: NormalUserCategory | null;
+};
+
+type LockedFeaturePrompt = {
+  featureLabel: string;
+  targetCategory: NormalUserCategory | null;
 };
 
 const statusPriority: Record<ScheduledTest["status"], number> = {
@@ -27,13 +34,14 @@ const statusPriority: Record<ScheduledTest["status"], number> = {
   completed: 2,
 };
 
-export function MobileRestrictedUserDashboardWorkspace({ currentUserIdentifier }: MobileRestrictedUserDashboardWorkspaceProps) {
+export function MobileRestrictedUserDashboardWorkspace({ currentUserCategory, currentUserIdentifier }: MobileRestrictedUserDashboardWorkspaceProps) {
   const { getAvailablePollsForParticipant, getAvailableTestsForParticipant, getUserHistory, groupJoinRequests, requestGroupJoin, searchGroupsByAdminIdentifier } = useQuestionBank();
   const [groupSearchFeedback, setGroupSearchFeedback] = useState<string | null>(null);
   const [groupSearchPhoneNumber, setGroupSearchPhoneNumber] = useState("");
   const [groupSearchResultIds, setGroupSearchResultIds] = useState<string[]>([]);
   const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
   const [lockedFeatureOpen, setLockedFeatureOpen] = useState(false);
+  const [lockedFeaturePrompt, setLockedFeaturePrompt] = useState<LockedFeaturePrompt | null>(null);
   const [openMenuGroup, setOpenMenuGroup] = useState<RestrictedMenuGroup | null>(null);
   const [openSection, setOpenSection] = useState<UserDashboardSection | null>("history");
   const [resultsFilter, setResultsFilter] = useState<ResultsFilter>("both");
@@ -65,7 +73,35 @@ export function MobileRestrictedUserDashboardWorkspace({ currentUserIdentifier }
     setOpenSection((currentSection) => (currentSection === section ? null : section));
   }
 
-  function handleLockedFeature() {
+  function handleLockedFeature(featureLabel: string) {
+    const fallbackCategory = currentUserCategory ?? "trapit-normal";
+    const targetCategory = findNextNormalUserCategory(fallbackCategory, (candidate) => {
+      const definition = normalUserCategoryDefinitions[candidate];
+
+      if (featureLabel === "Add Questions" || featureLabel === "Question Pools") {
+        return definition.test.addQuestion;
+      }
+
+      if (featureLabel === "Schedule") {
+        return definition.test.maxScheduledTestsPerMonth > 0 || definition.poll.schedule;
+      }
+
+      if (featureLabel === "Self Test") {
+        return definition.test.maxSelfTestsPerMonth > 0;
+      }
+
+      if (featureLabel === "Create") {
+        return definition.group.create;
+      }
+
+      if (featureLabel === "Manage") {
+        return definition.group.manage;
+      }
+
+      return false;
+    });
+
+    setLockedFeaturePrompt({ featureLabel, targetCategory });
     setLockedFeatureOpen(true);
   }
 
@@ -106,7 +142,7 @@ export function MobileRestrictedUserDashboardWorkspace({ currentUserIdentifier }
       <Pressable
         key={`${label}-${section ?? "disabled"}`}
         style={[styles.menuItem, isDisabled && styles.menuItemDisabled, isActive && styles.menuItemActive]}
-        onPress={section ? () => setOpenSection(section) : handleLockedFeature}
+        onPress={section ? () => setOpenSection(section) : () => handleLockedFeature(label)}
       >
         <Text style={[styles.menuItemText, isDisabled && styles.menuItemTextDisabled, isActive && styles.menuItemTextActive]}>{label}</Text>
       </Pressable>
@@ -256,8 +292,10 @@ export function MobileRestrictedUserDashboardWorkspace({ currentUserIdentifier }
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.eyebrow}>Locked feature</Text>
-            <Text style={styles.summaryTitle}>TRAPit Pro</Text>
-            <Text style={styles.metaText}>Get TRAPit Pro to access this feature</Text>
+            <Text style={styles.summaryTitle}>{lockedFeaturePrompt?.featureLabel ?? "Upgrade needed"}</Text>
+            <Text style={styles.metaText}>
+              Upgrade to {lockedFeaturePrompt?.targetCategory ? normalUserCategoryDefinitions[lockedFeaturePrompt.targetCategory].label.replace(/ users$/i, " user") : "a higher TRAPit plan"} to access this feature.
+            </Text>
             <Pressable style={styles.primaryButton} onPress={() => setLockedFeatureOpen(false)}><Text style={styles.primaryButtonText}>Close</Text></Pressable>
           </View>
         </View>

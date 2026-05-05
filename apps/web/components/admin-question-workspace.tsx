@@ -244,6 +244,12 @@ type SuperAdminCategoryManagementResponse = {
   requests: UserCategoryUpgradeRequest[];
 };
 
+type UpgradePrompt = {
+  featureLabel: string;
+  message: string;
+  targetCategory: NormalUserCategory | null;
+};
+
 type AdminWorkspaceSection =
   | "author"
   | "create-groups"
@@ -345,6 +351,86 @@ function handleWorkspaceActionError(
   }
 
   setFeedback(message);
+}
+
+function getSectionUpgradePrompt(
+  section: AdminWorkspaceSection,
+  currentCategory: NormalUserCategory,
+): UpgradePrompt | null {
+  const currentDefinition = normalUserCategoryDefinitions[currentCategory];
+
+  const requirement = (() => {
+    switch (section) {
+      case "author":
+        return {
+          featureLabel: "Add test questions",
+          isIncluded: currentDefinition.test.addQuestion,
+          matcher: (candidate: NormalUserCategory) => normalUserCategoryDefinitions[candidate].test.addQuestion,
+          message: "Add test questions from this workspace.",
+        };
+      case "question-bank":
+        return {
+          featureLabel: "Question pools",
+          isIncluded: currentDefinition.test.maxQuestionPools > 0,
+          matcher: (candidate: NormalUserCategory) => normalUserCategoryDefinitions[candidate].test.maxQuestionPools > 0,
+          message: "Create and manage shared question pools.",
+        };
+      case "schedule":
+        return {
+          featureLabel: "Scheduled tests",
+          isIncluded: currentDefinition.test.maxScheduledTestsPerMonth > 0,
+          matcher: (candidate: NormalUserCategory) => normalUserCategoryDefinitions[candidate].test.maxScheduledTestsPerMonth > 0,
+          message: "Schedule live tests for your participants.",
+        };
+      case "self-test":
+        return {
+          featureLabel: "Self tests",
+          isIncluded: currentDefinition.test.maxSelfTestsPerMonth > 0,
+          matcher: (candidate: NormalUserCategory) => normalUserCategoryDefinitions[candidate].test.maxSelfTestsPerMonth > 0,
+          message: "Run self-paced test sessions from your own question pools.",
+        };
+      case "poll-questions":
+        return {
+          featureLabel: "Poll questions",
+          isIncluded: currentDefinition.poll.addQuestion,
+          matcher: (candidate: NormalUserCategory) => normalUserCategoryDefinitions[candidate].poll.addQuestion,
+          message: "Create poll question sets in your workspace.",
+        };
+      case "poll-schedule":
+        return {
+          featureLabel: "Poll scheduling",
+          isIncluded: currentDefinition.poll.schedule,
+          matcher: (candidate: NormalUserCategory) => normalUserCategoryDefinitions[candidate].poll.schedule,
+          message: "Schedule polls and distribute them to your audience.",
+        };
+      case "create-groups":
+        return {
+          featureLabel: "Create groups",
+          isIncluded: currentDefinition.group.create,
+          matcher: (candidate: NormalUserCategory) => normalUserCategoryDefinitions[candidate].group.create,
+          message: "Create groups for tests and polls.",
+        };
+      case "manage-groups":
+        return {
+          featureLabel: "Manage groups",
+          isIncluded: currentDefinition.group.manage,
+          matcher: (candidate: NormalUserCategory) => normalUserCategoryDefinitions[candidate].group.manage,
+          message: "Approve requests and manage your groups.",
+        };
+      default:
+        return null;
+    }
+  })();
+
+  if (!requirement || requirement.isIncluded) {
+    return null;
+  }
+
+  return {
+    featureLabel: requirement.featureLabel,
+    message: requirement.message,
+    targetCategory: findNextNormalUserCategory(currentCategory, requirement.matcher),
+  };
 }
 
 function normalizeParticipantIdentifier(value: string) {
@@ -535,6 +621,8 @@ export function AdminQuestionWorkspace({
   const [categoryManagementFeedback, setCategoryManagementFeedback] = useState<string | null>(null);
   const [categorySearchQuery, setCategorySearchQuery] = useState("");
   const [categorySnapshot, setCategorySnapshot] = useState<UserCategorySnapshotResponse | null>(null);
+  const [isUpgradePanelOpen, setIsUpgradePanelOpen] = useState(false);
+  const [upgradePrompt, setUpgradePrompt] = useState<UpgradePrompt | null>(null);
   const [editingGroupDraft, setEditingGroupDraft] = useState<EditableGroupDraft | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingQuestionDraft, setEditingQuestionDraft] = useState<EditableQuestionDraft | null>(null);
@@ -847,6 +935,11 @@ export function AdminQuestionWorkspace({
     );
   }
 
+  function openUpgradePanel(prompt?: UpgradePrompt | null) {
+    setUpgradePrompt(prompt ?? null);
+    setIsUpgradePanelOpen(true);
+  }
+
   function toggleReviewVisibility(testId: string) {
     setVisibleReviewTestIds((currentIds) =>
       currentIds.includes(testId)
@@ -1000,12 +1093,24 @@ export function AdminQuestionWorkspace({
   }
 
   function renderMenuItem(label: string, section: AdminWorkspaceSection) {
+    const lockedPrompt =
+      currentActorRole === "user" && currentUserCategory
+        ? getSectionUpgradePrompt(section, currentUserCategory)
+        : null;
+
     return (
       <button
         key={section}
         className={`admin-menu-item${openSection === section ? " is-active" : ""}`}
         type="button"
-        onClick={() => setOpenSection(section)}
+        onClick={() => {
+          if (lockedPrompt) {
+            openUpgradePanel(lockedPrompt);
+            return;
+          }
+
+          setOpenSection(section);
+        }}
       >
         {label}
       </button>
@@ -1802,8 +1907,18 @@ export function AdminQuestionWorkspace({
   }) ?? [];
   const pendingCategoryRequests = categoryManagement?.requests.filter((request) => request.status === "pending") ?? [];
   const userPendingCategoryRequest = categorySnapshot?.requests.find((request) => request.status === "pending") ?? null;
+  const latestResolvedCategoryRequest = categorySnapshot?.requests.find((request) => request.status !== "pending") ?? null;
   const nextUpgradeableCategory = currentUserCategory
     ? findNextNormalUserCategory(currentUserCategory, (candidate) => candidate !== currentUserCategory)
+    : null;
+  const suggestedUpgradeCategory = upgradePrompt?.targetCategory ?? nextUpgradeableCategory;
+  const suggestedUpgradePlan = suggestedUpgradeCategory
+    ? categorySnapshot?.availableCategories.find((plan) => plan.category === suggestedUpgradeCategory) ?? null
+    : null;
+  const latestResolvedCategoryMessage = latestResolvedCategoryRequest
+    ? latestResolvedCategoryRequest.status === "accepted"
+      ? `Your upgrade request for ${normalUserCategoryDefinitions[latestResolvedCategoryRequest.requestedCategory].label} was approved${latestResolvedCategoryRequest.approvedDurationMonths ? ` for ${latestResolvedCategoryRequest.approvedDurationMonths === 12 ? "1 year" : "3 months"}` : ""}.`
+      : `Your upgrade request for ${normalUserCategoryDefinitions[latestResolvedCategoryRequest.requestedCategory].label} was rejected.`
     : null;
 
   useEffect(() => {
@@ -1876,6 +1991,14 @@ export function AdminQuestionWorkspace({
 
       setCategorySnapshot(payload);
       setCategoryFeedback("Upgrade request sent to the super admin for review.");
+      setUpgradePrompt((currentPrompt) =>
+        currentPrompt
+          ? {
+              ...currentPrompt,
+              targetCategory: requestedCategory,
+            }
+          : currentPrompt,
+      );
     } catch (error) {
       setCategoryFeedback(error instanceof Error ? error.message : "Unable to send the upgrade request.");
     }
@@ -1946,6 +2069,11 @@ export function AdminQuestionWorkspace({
   return (
     <div className="workspace-stack">
       <div className="workspace-toolbar">
+        {currentActorRole === "user" ? (
+          <button className="button-secondary" type="button" onClick={() => openUpgradePanel()}>
+            {isUpgradePanelOpen ? "Hide upgrade" : "Upgrade"}
+          </button>
+        ) : null}
         <NotificationBell
           items={notificationItems}
           subtitle={notificationBaseline === null ? "Counts reflect the current workspace state." : "Counts are measured from your previous sign in."}
@@ -1984,59 +2112,71 @@ export function AdminQuestionWorkspace({
         </aside>
 
         <div className="admin-main-column">
-          {currentActorRole === "user" && categorySnapshot ? (
+          {currentActorRole === "user" && categorySnapshot && isUpgradePanelOpen ? (
             <section className="panel workspace-card">
               <div className="section-head compact-head">
                 <div>
                   <p className="eyebrow">Membership</p>
-                  <h2 className="section-title">Choose your TRAPit plan</h2>
+                  <h2 className="section-title">Upgrade membership</h2>
                   <p className="muted-text">
-                    Compare plan limits, check your current access window, and send the next upgrade request from this workspace.
+                    Review the next available upgrade, see what it unlocks, and send your request from this workspace.
                   </p>
                 </div>
+                <button className="button-secondary small-button" type="button" onClick={() => setIsUpgradePanelOpen(false)}>
+                  Close
+                </button>
               </div>
               <div className="dashboard-grid compact-grid">
-                {categorySnapshot.availableCategories.map((plan) => {
-                  const definition = normalUserCategoryDefinitions[plan.category];
-                  const category = plan.category;
-                  const isCurrentCategory = categorySnapshot.currentCategory === category;
-                  const isRequested = userPendingCategoryRequest?.requestedCategory === category;
-                  const canRequest = currentUserCategory
-                    ? orderedNormalUserCategories.indexOf(category) > orderedNormalUserCategories.indexOf(currentUserCategory)
-                    : false;
+                <article className="dashboard-card">
+                  <p className="dashboard-label">Current category</p>
+                  <p className="section-title">{categorySnapshot.currentCategoryLabel.replace(/ users$/i, " user")}</p>
+                  <p className="muted-text">Signed-in access follows this category across your normal-user workspace.</p>
+                  {categorySnapshot.activeAssignment?.expiresAt ? (
+                    <p className="muted-text">Current upgrade ends on {formatShortDate(categorySnapshot.activeAssignment.expiresAt)}.</p>
+                  ) : (
+                    <p className="muted-text">Base access remains active until a new category is approved.</p>
+                  )}
+                </article>
 
-                  return (
-                    <article key={category} className="dashboard-card">
-                      <p className="dashboard-label">{plan.label}</p>
+                <article className="dashboard-card">
+                  <p className="dashboard-label">Next possible upgrade</p>
+                  {suggestedUpgradePlan ? (
+                    <>
+                      <p className="section-title">{suggestedUpgradePlan.label.replace(/ users$/i, " user")}</p>
+                      {upgradePrompt ? (
+                        <p className="muted-text">
+                          Feature selected: <strong>{upgradePrompt.featureLabel}</strong>. {upgradePrompt.message}
+                        </p>
+                      ) : (
+                        <p className="muted-text">This is the next category above your current plan.</p>
+                      )}
                       <p className="muted-text">
-                        Pools: {definition.test.maxQuestionPools} | Questions per pool: {definition.test.maxQuestionsPerPool ?? "Unlimited"}
+                        Pools: {suggestedUpgradePlan.definition.test.maxQuestionPools} | Questions per pool: {suggestedUpgradePlan.definition.test.maxQuestionsPerPool ?? "Unlimited"}
                       </p>
                       <p className="muted-text">
-                        Scheduled tests/month: {definition.test.maxScheduledTestsPerMonth} | Self tests/month: {definition.test.maxSelfTestsPerMonth}
+                        Scheduled tests/month: {suggestedUpgradePlan.definition.test.maxScheduledTestsPerMonth} | Self tests/month: {suggestedUpgradePlan.definition.test.maxSelfTestsPerMonth}
                       </p>
                       <p className="muted-text">
-                        Polls: {definition.poll.schedule ? "Enabled" : "Not included"} | Groups: {definition.group.create ? "Enabled" : "Not included"}
+                        Polls: {suggestedUpgradePlan.definition.poll.schedule ? "Enabled" : "Not included"} | Groups: {suggestedUpgradePlan.definition.group.manage ? "Enabled" : "Not included"}
                       </p>
-                      {isCurrentCategory ? <p className="muted-text">Current plan across web and mobile</p> : null}
-                      {isRequested ? <p className="muted-text">Upgrade request pending review</p> : null}
-                      {!isCurrentCategory && canRequest && !isRequested ? (
+                      {userPendingCategoryRequest?.requestedCategory === suggestedUpgradePlan.category ? (
+                        <p className="muted-text">Upgrade request pending review.</p>
+                      ) : (
                         <button
                           className="button-secondary small-button"
                           type="button"
-                          onClick={() => void handleRequestCategoryUpgrade(category)}
+                          onClick={() => void handleRequestCategoryUpgrade(suggestedUpgradePlan.category)}
                         >
                           Send upgrade request
                         </button>
-                      ) : null}
-                    </article>
-                  );
-                })}
+                      )}
+                    </>
+                  ) : (
+                    <p className="muted-text">You are already on the highest available category.</p>
+                  )}
+                </article>
               </div>
-              <p className="muted-text">
-                {nextUpgradeableCategory
-                  ? `Next upgrade available: ${normalUserCategoryDefinitions[nextUpgradeableCategory].label}.`
-                  : "You are already on the highest available plan."}
-              </p>
+              {latestResolvedCategoryMessage ? <p className="muted-text">{latestResolvedCategoryMessage}</p> : null}
               {categorySnapshot.activeAssignment ? (
                 <p className="muted-text">
                   Active assignment ends on {formatShortDate(categorySnapshot.activeAssignment.expiresAt ?? new Date().toISOString())}.

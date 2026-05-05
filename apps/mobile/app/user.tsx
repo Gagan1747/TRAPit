@@ -27,7 +27,7 @@ export default function UserScreen() {
   }
 
   const currentIdentifier = session ? getSessionIdentifier(session) : null;
-  const categoryLabel = session?.userCategory ? normalUserCategoryLabels[session.userCategory] : null;
+  const categoryLabel = session?.userCategory ? normalUserCategoryLabels[session.userCategory].replace(/ users$/i, " user") : null;
   const showRestrictedDashboard = !session || session.role === "user";
 
   return (
@@ -40,9 +40,10 @@ export default function UserScreen() {
             Review your plan, request an upgrade, and access the parts of TRAPit that are already live for your account.
           </Text>
           <Text style={styles.copy}>
-            {authConfigured ? `Signed in as ${session ? getSessionIdentifier(session) ?? "user" : "user"}` : "Auth setup pending. User space is open for feature work."}
+            {authConfigured
+              ? `Signed in with ${session ? getSessionIdentifier(session) ?? "user" : "user"}${categoryLabel ? ` as ${categoryLabel}` : ""}`
+              : "Auth setup pending. User space is open for feature work."}
           </Text>
-          {categoryLabel ? <Text style={styles.copy}>Category: {categoryLabel}</Text> : null}
           {authConfigured ? (
             <Text style={styles.signOut} onPress={() => void signOut()}>
               Sign out
@@ -51,7 +52,7 @@ export default function UserScreen() {
         </View>
         {session && session.role === "user" ? <MobileCategoryMembershipPanel session={session} /> : null}
         {showRestrictedDashboard ? (
-          <MobileRestrictedUserDashboardWorkspace currentUserIdentifier={currentIdentifier} />
+          <MobileRestrictedUserDashboardWorkspace currentUserCategory={session?.userCategory ?? null} currentUserIdentifier={currentIdentifier} />
         ) : (
           <MobileUserTestWorkspace currentParticipantIdentifier={currentIdentifier} />
         )}

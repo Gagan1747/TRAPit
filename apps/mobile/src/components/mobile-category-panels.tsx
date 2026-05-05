@@ -129,6 +129,7 @@ export function MobileCategoryMembershipPanel({ session }: { session: MobileAuth
   }, [session]);
 
   const pendingRequest = snapshot?.requests.find((request) => request.status === "pending") ?? null;
+  const latestResolvedRequest = snapshot?.requests.find((request) => request.status !== "pending") ?? null;
 
   async function handleRequestUpgrade(category: NormalUserCategory) {
     try {
@@ -168,7 +169,11 @@ export function MobileCategoryMembershipPanel({ session }: { session: MobileAuth
             <Text style={styles.bannerCopy}>
               {pendingRequest
                 ? `Upgrade request pending for ${normalUserCategoryDefinitions[pendingRequest.requestedCategory].label}.`
-                : "Your current plan is active across mobile and web."}
+                : latestResolvedRequest
+                  ? latestResolvedRequest.status === "accepted"
+                    ? `Your request for ${normalUserCategoryDefinitions[latestResolvedRequest.requestedCategory].label} was approved.`
+                    : `Your request for ${normalUserCategoryDefinitions[latestResolvedRequest.requestedCategory].label} was rejected.`
+                  : "Your current plan is active across mobile and web."}
             </Text>
             {snapshot.activeAssignment?.expiresAt ? (
               <Text style={styles.bannerMeta}>Active access ends on {formatShortDate(snapshot.activeAssignment.expiresAt)}.</Text>
