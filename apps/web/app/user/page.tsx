@@ -9,6 +9,11 @@ import { getPreviousWebSignIn, requireWebSession } from "../../lib/session";
 import { isSuperAdminIdentifier } from "../../lib/workspace-actor";
 
 export default async function UserPage() {
+export default async function UserPage({
+  searchParams,
+}: {
+  searchParams?: { view?: string };
+}) {
   const session = await requireWebSession(["user", "admin"]);
   const authConfigured = isWebAuthConfigured();
   const sessionIdentifier = getSessionIdentifier(session);
@@ -16,6 +21,7 @@ export default async function UserPage() {
   const categoryLabel = session.userCategory ? normalUserCategoryLabels[session.userCategory].replace(/ users$/i, " user") : null;
   const isSuperAdmin = isSuperAdminIdentifier(session.phoneNumber ?? sessionIdentifier);
   const previousSignInAt = authConfigured ? await getPreviousWebSignIn(session) : null;
+  const openTestsView = searchParams?.view === "tests";
 
   return (
     <main className="page-shell">
@@ -34,7 +40,7 @@ export default async function UserPage() {
           </div>
           {authConfigured ? <SignOutButton /> : null}
         </div>
-        {session.role === "user" ? (
+        {session.role === "user" && !openTestsView ? (
           <AdminQuestionWorkspace
             currentActorRole="user"
             currentAdminIdentifier={sessionIdentifier}

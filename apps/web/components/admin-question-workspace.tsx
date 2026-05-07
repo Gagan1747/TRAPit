@@ -2392,7 +2392,7 @@ export function AdminQuestionWorkspace({
                   >
                     Notifications
                   </button>
-                  {currentActorRole !== "user" ? (
+                  {!isSuperAdmin ? (
                     <button
                       className="workspace-overflow-action"
                       type="button"
@@ -4272,8 +4272,12 @@ export function AdminQuestionWorkspace({
                         ) : null}
 
                         <div className="inline-actions">
-                          <a className="button-secondary small-button" href="/user">
-                            Open test workspace
+                          <a className="button-secondary small-button" href="/user?view=tests">
+                            {participantTest.status === "live"
+                              ? "Take test"
+                              : participantHistoryEntry || participantTest.status === "completed"
+                                ? "Review questions"
+                                : "Open test workspace"}
                           </a>
                         </div>
                       </div>
