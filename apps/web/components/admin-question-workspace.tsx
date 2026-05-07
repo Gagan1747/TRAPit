@@ -7,9 +7,11 @@ import {
   type NormalUserCategory,
 } from "@trapit/auth";
 import {
+  createPresentedQuestions,
   createEmptyTestingWorkspaceState,
   formatElapsedTime,
   type GroupJoinRequest,
+  type ObjectiveQuestion,
   type PollBulkImportPreview,
   type PersistentPollQuestion,
   type PollParticipantType,
@@ -23,6 +25,7 @@ import {
   type ScheduledTest,
   type TestLeaderboard,
   type TestHistoryEntry,
+  type TestResult,
   type WorkspaceBranding,
 } from "@trapit/testing";
 import { useEffect, useRef, useState } from "react";
@@ -129,11 +132,13 @@ type GroupSearchResponse = {
 type UserDashboardResponse = {
   availablePolls: ScheduledPoll[];
   availableTests: Array<{
+    branding?: WorkspaceBranding | null;
     durationMinutes: number;
     hasAttempt: boolean;
     id: string;
     poolId: string;
     questionCount: number;
+    questions: ObjectiveQuestion[];
     startsAt: string;
     status: ScheduledTest["status"];
     title: string;
@@ -186,6 +191,25 @@ type AdminTestReviewResponse = {
   submittedCount: number;
   testId: string;
   testTitle: string;
+};
+
+type UserTestReviewResponse = {
+  review: Array<{
+    correctOptionIndex: number;
+    options: string[];
+    prompt: string;
+    questionId: string;
+    selectedOptionIndex?: number;
+  }>;
+  submittedAt: string | null;
+  testId: string;
+  testTitle: string;
+};
+
+type AttemptResponse = {
+  attempt: {
+    result: TestResult;
+  };
 };
 
 type UserCategoryUpgradeRequest = {
@@ -344,6 +368,12 @@ type UnifiedAdminPollListItem = {
   startsAt: string;
   status: ScheduledPoll["status"];
   title: string;
+};
+
+type ShuffledQuestion = {
+  displayOptions: string[];
+  originalOptionIndexes: number[];
+  question: ObjectiveQuestion;
 };
 
 type EditableQuestionDraft = {
@@ -719,8 +749,18 @@ export function AdminQuestionWorkspace({
   const [openSection, setOpenSection] = useState<AdminWorkspaceSection | null>("history");
   const [outgoingGroupJoinRequests, setOutgoingGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
   const [participantPolls, setParticipantPolls] = useState<ScheduledPoll[]>([]);
+  const [activeParticipantName, setActiveParticipantName] = useState("");
+  const [activeParticipantTestId, setActiveParticipantTestId] = useState<string | null>(null);
+  const [currentParticipantQuestionIndex, setCurrentParticipantQuestionIndex] = useState(0);
   const [participantTestHistory, setParticipantTestHistory] = useState<TestHistoryEntry[]>([]);
   const [participantTests, setParticipantTests] = useState<UserDashboardResponse["availableTests"]>([]);
+  const [participantAnswers, setParticipantAnswers] = useState<Record<string, number | undefined>>({});
+  const [participantNamesByTest, setParticipantNamesByTest] = useState<Record<string, string>>({});
+  const [participantRemainingMs, setParticipantRemainingMs] = useState<number | null>(null);
+  const [participantResult, setParticipantResult] = useState<TestResult | null>(null);
+  const [participantReviewByTestId, setParticipantReviewByTestId] = useState<Record<string, UserTestReviewResponse>>({});
+  const [participantReviewLoadingByTestId, setParticipantReviewLoadingByTestId] = useState<Record<string, boolean>>({});
+  const [participantStartedAt, setParticipantStartedAt] = useState<string | null>(null);
   const [participantGroups, setParticipantGroups] = useState<ParticipantGroup[]>([]);
   const [participants, setParticipants] = useState<ParticipantProfile[]>([]);
   const [pollFeedback, setPollFeedback] = useState<string | null>(null);
@@ -783,8 +823,11 @@ export function AdminQuestionWorkspace({
   });
   const [testListFilter, setTestListFilter] = useState<AdminTestListFilter>("both");
   const [toolbarMenuView, setToolbarMenuView] = useState<"branding" | "menu" | "notifications">("menu");
+  const [visibleParticipantReviewTestIds, setVisibleParticipantReviewTestIds] = useState<string[]>([]);
   const [visibleReviewTestIds, setVisibleReviewTestIds] = useState<string[]>([]);
   const [workspaceBranding, setWorkspaceBranding] = useState<WorkspaceBranding | null>(null);
+  const participantAnswersRef = useRef<Record<string, number | undefined>>({});
+  const participantIsSubmittingRef = useRef(false);
   const toolbarMenuRef = useRef<HTMLDivElement | null>(null);
 
   async function loadWorkspace() {
@@ -875,6 +918,10 @@ export function AdminQuestionWorkspace({
   }, []);
 
   useEffect(() => {
+    participantAnswersRef.current = participantAnswers;
+  }, [participantAnswers]);
+
+  useEffect(() => {
     if (!authorPoolId) {
       setIsOcrImportOpen(false);
     }
@@ -908,6 +955,34 @@ export function AdminQuestionWorkspace({
       isMounted = false;
     };
   }, [scheduledPolls]);
+
+  useEffect(() => {
+    const activeParticipantTest = participantTests.find((test) => test.id === activeParticipantTestId) ?? null;
+
+    if (!activeParticipantTest || !participantStartedAt) {
+      setParticipantRemainingMs(null);
+      return;
+    }
+
+    const deadlineMs =
+      new Date(activeParticipantTest.startsAt).getTime() + activeParticipantTest.durationMinutes * 60 * 1000;
+
+    const tick = () => {
+      const nextRemainingMs = Math.max(0, deadlineMs - Date.now());
+      setParticipantRemainingMs(nextRemainingMs);
+
+      if (nextRemainingMs === 0 && !participantIsSubmittingRef.current) {
+        void submitParticipantTest({ dueToTimer: true });
+      }
+    };
+
+    tick();
+    const intervalId = window.setInterval(tick, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [activeParticipantTestId, participantStartedAt, participantTests]);
 
   function getPollAccessUrl(shareCode: string) {
     if (!shareCode.trim()) {
@@ -1119,6 +1194,171 @@ export function AdminQuestionWorkspace({
         [testId]: false,
       }));
     }
+  }
+
+  function toggleParticipantReviewVisibility(testId: string) {
+    setVisibleParticipantReviewTestIds((currentIds) =>
+      currentIds.includes(testId)
+        ? currentIds.filter((currentId) => currentId !== testId)
+        : [...currentIds, testId],
+    );
+  }
+
+  async function handleLoadParticipantReview(testId: string) {
+    if (participantReviewByTestId[testId]) {
+      toggleParticipantReviewVisibility(testId);
+      return;
+    }
+
+    setParticipantReviewLoadingByTestId((currentState) => ({
+      ...currentState,
+      [testId]: true,
+    }));
+
+    try {
+      const payload = await readJson<UserTestReviewResponse>(
+        await fetch(`/api/user/tests/${testId}/review`),
+      );
+
+      setParticipantReviewByTestId((currentReviews) => ({
+        ...currentReviews,
+        [testId]: payload,
+      }));
+      setVisibleParticipantReviewTestIds((currentIds) => [...new Set([...currentIds, testId])]);
+      setFeedback(null);
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to load the test review.");
+    } finally {
+      setParticipantReviewLoadingByTestId((currentState) => ({
+        ...currentState,
+        [testId]: false,
+      }));
+    }
+  }
+
+  function startParticipantTest(testId: string) {
+    const participantName = participantNamesByTest[testId]?.trim() ?? "";
+
+    if (!participantName) {
+      setFeedback("Enter your name before starting the test.");
+      return;
+    }
+
+    setActiveParticipantTestId(testId);
+    setActiveParticipantName(participantName);
+    setParticipantAnswers({});
+    participantAnswersRef.current = {};
+    setCurrentParticipantQuestionIndex(0);
+    setParticipantResult(null);
+    setParticipantStartedAt(new Date().toISOString());
+    setParticipantRemainingMs(null);
+    setFeedback(null);
+    setResultsMode("tests");
+    setTestListFilter("participant");
+    setOpenSection("history");
+  }
+
+  function cancelActiveParticipantTest() {
+    setActiveParticipantTestId(null);
+    setActiveParticipantName("");
+    setParticipantAnswers({});
+    participantAnswersRef.current = {};
+    setCurrentParticipantQuestionIndex(0);
+    setParticipantStartedAt(null);
+    setParticipantRemainingMs(null);
+    setFeedback(null);
+  }
+
+  async function submitParticipantTest(options?: { dueToTimer?: boolean }) {
+    const activeParticipantTest = participantTests.find((test) => test.id === activeParticipantTestId) ?? null;
+
+    if (!activeParticipantTest || !participantStartedAt || participantIsSubmittingRef.current) {
+      return;
+    }
+
+    setIsMutating(true);
+    participantIsSubmittingRef.current = true;
+
+    try {
+      const payload = await readJson<AttemptResponse>(
+        await fetch(`/api/user/tests/${activeParticipantTest.id}/attempt`, {
+          body: JSON.stringify({
+            answers: participantAnswersRef.current,
+            completedAt: options?.dueToTimer
+              ? new Date(
+                  new Date(activeParticipantTest.startsAt).getTime() + activeParticipantTest.durationMinutes * 60 * 1000,
+                ).toISOString()
+              : new Date().toISOString(),
+            participantName: activeParticipantName,
+            startedAt: participantStartedAt,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setParticipantResult(payload.attempt.result);
+      setActiveParticipantTestId(null);
+      setCurrentParticipantQuestionIndex(0);
+      setActiveParticipantName("");
+      setParticipantStartedAt(null);
+      setParticipantRemainingMs(null);
+      setParticipantAnswers({});
+      participantAnswersRef.current = {};
+      setFeedback(options?.dueToTimer ? "Time is up. Your test was submitted automatically." : null);
+      await loadWorkspace();
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to submit this test.");
+    } finally {
+      setIsMutating(false);
+      participantIsSubmittingRef.current = false;
+    }
+  }
+
+  function handleSelectParticipantAnswer(questionId: string, originalOptionIndex: number) {
+    const nextAnswers = {
+      ...participantAnswersRef.current,
+      [questionId]: originalOptionIndex,
+    };
+
+    participantAnswersRef.current = nextAnswers;
+    setParticipantAnswers(nextAnswers);
+    setFeedback(null);
+
+    const activeParticipantTest = participantTests.find((test) => test.id === activeParticipantTestId) ?? null;
+
+    if (!activeParticipantTest) {
+      return;
+    }
+
+    if (currentParticipantQuestionIndex >= activeParticipantTest.questions.length - 1) {
+      setCurrentParticipantQuestionIndex(activeParticipantTest.questions.length);
+      return;
+    }
+
+    setCurrentParticipantQuestionIndex((currentIndex) => currentIndex + 1);
+  }
+
+  function formatCountdown(value: number | null) {
+    if (value === null) {
+      return "--:--";
+    }
+
+    const totalSeconds = Math.max(0, Math.ceil(value / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  }
+
+  function formatParticipantAnswerLabel(optionIndex: number | undefined, options: string[]) {
+    if (typeof optionIndex !== "number" || optionIndex < 0 || optionIndex >= options.length) {
+      return "Not answered";
+    }
+
+    return `Option ${optionIndex + 1}: ${options[optionIndex]}`;
   }
 
   async function handleSearchGroups() {
@@ -2057,6 +2297,29 @@ export function AdminQuestionWorkspace({
 
       return rightTime - leftTime;
     });
+  const activeParticipantTest = participantTests.find((test) => test.id === activeParticipantTestId) ?? null;
+  const shuffledParticipantQuestions = activeParticipantTest
+    ? createPresentedQuestions(
+        activeParticipantTest.questions,
+        `${activeParticipantTest.id}:${currentAdminIdentifier || "participant"}`,
+      ).map(
+        (presentedQuestion) =>
+          ({
+            displayOptions: presentedQuestion.displayOptions,
+            originalOptionIndexes: presentedQuestion.originalOptionIndexes,
+            question: presentedQuestion.question,
+          }) satisfies ShuffledQuestion,
+      )
+    : [];
+  const activeParticipantQuestion =
+    activeParticipantTest && currentParticipantQuestionIndex < shuffledParticipantQuestions.length
+      ? shuffledParticipantQuestions[currentParticipantQuestionIndex]
+      : null;
+  const groupMenuItems: Array<{ label: string; section: AdminWorkspaceSection }> = [
+    { label: "Create", section: "create-groups" },
+    { label: "Manage", section: "manage-groups" },
+    ...(activeParticipantTestId ? [] : [{ label: "Join", section: "join-groups" }]),
+  ];
   const sortedScheduledPolls = [...scheduledPolls].sort((leftPoll, rightPoll) => {
     const priorityDifference =
       adminTestStatusPriority[leftPoll.status] - adminTestStatusPriority[rightPoll.status];
@@ -2505,11 +2768,7 @@ export function AdminQuestionWorkspace({
               { label: "Add Questions", section: "poll-questions" },
               { label: "Schedule", section: "poll-schedule" },
             ])}
-            {renderMenuGroup("Groups", "groups", [
-              { label: "Create", section: "create-groups" },
-              { label: "Manage", section: "manage-groups" },
-              { label: "Join", section: "join-groups" },
-            ])}
+            {renderMenuGroup("Groups", "groups", groupMenuItems)}
           </div>
         </aside>
 
@@ -4007,6 +4266,88 @@ export function AdminQuestionWorkspace({
         onToggle={() => toggleSection("history")}
       >
         <div className="form-stack">
+          {activeParticipantTest ? (
+            <div className="question-list">
+              <article className="question-card runner-summary-card">
+                {activeParticipantTest.branding?.imageDataUrl || activeParticipantTest.branding?.instituteName ? (
+                  <div className="assessment-branding">
+                    {activeParticipantTest.branding.imageDataUrl ? (
+                      <img alt="Institute branding" className="assessment-branding-image" src={activeParticipantTest.branding.imageDataUrl} />
+                    ) : null}
+                    {activeParticipantTest.branding.instituteName ? (
+                      <div>
+                        <p className="eyebrow">Institute</p>
+                        <strong>{activeParticipantTest.branding.instituteName}</strong>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div className="question-head">
+                  <strong>{activeParticipantTest.title}</strong>
+                  <span className="status-chip success">{activeParticipantTest.durationMinutes} min</span>
+                </div>
+                <div className="runner-meta-row">
+                  <span className="status-chip success">
+                    Question {Math.min(currentParticipantQuestionIndex + 1, activeParticipantTest.questions.length)} of {activeParticipantTest.questions.length}
+                  </span>
+                  <span className={`status-chip runner-countdown${participantRemainingMs !== null && participantRemainingMs <= 60_000 ? " warning" : " success"}`}>
+                    Time left {formatCountdown(participantRemainingMs)}
+                  </span>
+                </div>
+                <p className="muted-text">Each answer moves you straight to the next question.</p>
+              </article>
+
+              {activeParticipantQuestion ? (
+                <article className="question-card" key={activeParticipantQuestion.question.id}>
+                  <div className="question-head">
+                    <strong>Question {currentParticipantQuestionIndex + 1}</strong>
+                    <span className="muted-text">{activeParticipantTest.questionCount - currentParticipantQuestionIndex - 1} remaining</span>
+                  </div>
+                  <p>{activeParticipantQuestion.question.prompt}</p>
+                  <div className="answer-grid">
+                    {activeParticipantQuestion.displayOptions.map((option, optionIndex) => (
+                      <label className="role-option" key={`${activeParticipantQuestion.question.id}-${optionIndex}`}>
+                        <input
+                          checked={participantAnswers[activeParticipantQuestion.question.id] === activeParticipantQuestion.originalOptionIndexes[optionIndex]}
+                          name={activeParticipantQuestion.question.id}
+                          type="radio"
+                          onChange={() =>
+                            handleSelectParticipantAnswer(
+                              activeParticipantQuestion.question.id,
+                              activeParticipantQuestion.originalOptionIndexes[optionIndex],
+                            )
+                          }
+                        />
+                        {option}
+                      </label>
+                    ))}
+                  </div>
+                </article>
+              ) : (
+                <article className="question-card">
+                  <div className="question-head">
+                    <strong>Ready to submit</strong>
+                    <span className="status-chip success">{Object.keys(participantAnswers).length}/{activeParticipantTest.questionCount} answered</span>
+                  </div>
+                  <p className="muted-text">
+                    You have answered all questions. Submit now to see your score and ranking.
+                  </p>
+                  <div className="inline-actions">
+                    <button className="button" disabled={isMutating} type="button" onClick={() => void submitParticipantTest()}>
+                      Submit test
+                    </button>
+                  </div>
+                </article>
+              )}
+
+              <div className="inline-actions">
+                <button className="button-secondary" disabled={isMutating} type="button" onClick={cancelActiveParticipantTest}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           <div aria-label="Results mode" className="segmented-control" role="group">
             <button
               aria-pressed={resultsMode === "tests"}
@@ -4053,7 +4394,27 @@ export function AdminQuestionWorkspace({
             </button>
           </div>
 
-          {resultsMode === "tests" ? (
+          {participantResult ? (
+            <section className="result-panel">
+              <h3>Latest result</h3>
+              <p className="muted-text">
+                Correct answers: <strong>{participantResult.correctCount}</strong> out of {participantResult.totalCount}
+              </p>
+              <p className="muted-text">
+                Attempted: <strong>{participantResult.attemptedCount}</strong>
+              </p>
+              <p className="muted-text">
+                Time taken: <strong>{formatElapsedTime(participantResult.elapsedMs)}</strong>
+              </p>
+              {typeof participantResult.rank === "number" ? (
+                <p className="muted-text">
+                  Rank: <strong>{participantResult.rank}</strong>
+                </p>
+              ) : null}
+            </section>
+          ) : null}
+
+          {!activeParticipantTest && resultsMode === "tests" ? (
             filteredMergedTests.length ? (
               <div className="question-list">
                 {filteredMergedTests.map((test) => {
@@ -4285,15 +4646,77 @@ export function AdminQuestionWorkspace({
                           </p>
                         ) : null}
 
-                        <div className="inline-actions">
-                          <a className="button-secondary small-button" href="/user?view=tests">
-                            {participantTest.status === "live"
-                              ? "Take test"
-                              : participantHistoryEntry || participantTest.status === "completed"
-                                ? "Review questions"
-                                : "Open test workspace"}
-                          </a>
-                        </div>
+                        {participantHistoryEntry || participantTest.status === "completed" ? (
+                          <div className="inline-actions">
+                            <button
+                              className="button-secondary small-button"
+                              disabled={participantReviewLoadingByTestId[participantTest.id]}
+                              type="button"
+                              onClick={() => void handleLoadParticipantReview(participantTest.id)}
+                            >
+                              {participantReviewLoadingByTestId[participantTest.id]
+                                ? "Loading..."
+                                : visibleParticipantReviewTestIds.includes(participantTest.id)
+                                  ? "Hide review"
+                                  : "Review questions"}
+                            </button>
+                          </div>
+                        ) : participantTest.status === "live" ? (
+                          <>
+                            <div className="field">
+                              <label htmlFor={`participant-name-${participantTest.id}`}>Your name for this test</label>
+                              <input
+                                id={`participant-name-${participantTest.id}`}
+                                placeholder="Enter your name before starting"
+                                value={participantNamesByTest[participantTest.id] ?? ""}
+                                onChange={(event) =>
+                                  setParticipantNamesByTest((current) => ({
+                                    ...current,
+                                    [participantTest.id]: event.target.value,
+                                  }))
+                                }
+                              />
+                            </div>
+                            <div className="inline-actions">
+                              <button
+                                className="button"
+                                disabled={participantTest.hasAttempt || !(participantNamesByTest[participantTest.id] ?? "").trim()}
+                                type="button"
+                                onClick={() => startParticipantTest(participantTest.id)}
+                              >
+                                {participantTest.hasAttempt ? "Already submitted" : "Take test"}
+                              </button>
+                            </div>
+                          </>
+                        ) : null}
+
+                        {visibleParticipantReviewTestIds.includes(participantTest.id) && participantReviewByTestId[participantTest.id] ? (
+                          <div className="review-list">
+                            {participantReviewByTestId[participantTest.id].review.map((question, reviewIndex) => (
+                              <article className="question-card nested-card" key={`${participantTest.id}-participant-review-${question.questionId}`}>
+                                <div className="question-head">
+                                  <strong>Question {reviewIndex + 1}</strong>
+                                  <span className="status-chip success">
+                                    Correct option {question.correctOptionIndex + 1}
+                                  </span>
+                                </div>
+                                <p>{question.prompt}</p>
+                                <ol className="question-options compact-question-options">
+                                  {question.options.map((option, optionIndex) => (
+                                    <li key={`${question.questionId}-${optionIndex}`}>
+                                      {option}
+                                      {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
+                                      {optionIndex === question.selectedOptionIndex ? " (your answer)" : ""}
+                                    </li>
+                                  ))}
+                                </ol>
+                                <p className="muted-text">
+                                  Your response: {formatParticipantAnswerLabel(question.selectedOptionIndex, question.options)}
+                                </p>
+                              </article>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                     </div>
@@ -4306,7 +4729,7 @@ export function AdminQuestionWorkspace({
                 <p className="muted-text">No tests match this view yet.</p>
               </div>
             )
-          ) : filteredMergedPolls.length ? (
+          ) : !activeParticipantTest && filteredMergedPolls.length ? (
             <div className="question-list">
               {filteredMergedPolls.map((poll) => {
                 const resolvedPoll = poll.scheduledPoll ?? poll.participantPoll;
@@ -4404,6 +4827,7 @@ export function AdminQuestionWorkspace({
         </div>
       </CollapsibleWorkspaceSection>
 
+      {!activeParticipantTestId ? (
       <CollapsibleWorkspaceSection
         eyebrow=""
         isOpen={openSection === "join-groups"}
@@ -4525,6 +4949,7 @@ export function AdminQuestionWorkspace({
           ) : null}
         </div>
       </CollapsibleWorkspaceSection>
+      ) : null}
 
         </div>
       </div>
