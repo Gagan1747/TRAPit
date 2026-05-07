@@ -8,7 +8,6 @@ import { isWebAuthConfigured } from "../../lib/auth-config";
 import { getPreviousWebSignIn, requireWebSession } from "../../lib/session";
 import { isSuperAdminIdentifier } from "../../lib/workspace-actor";
 
-export default async function UserPage() {
 export default async function UserPage({
   searchParams,
 }: {
