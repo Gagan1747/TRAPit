@@ -244,11 +244,6 @@ export function AuthForm({ mode }: AuthFormProps) {
           </a>
         </div>
         <h2>{mode === "sign-up" ? signUpSubMode === "confirm" ? "Confirm account" : "Create account" : "Welcome back"}</h2>
-        {mode === "sign-up" ? (
-          <p className="muted-text">
-            Public sign-up is enabled for normal users. Admins should be provisioned separately.
-          </p>
-        ) : null}
         {!authConfigured ? <p className="muted-text">{getPublicWebAuthSetupMessage()}</p> : null}
       </div>
 

@@ -8,6 +8,7 @@ import {
   type ParticipantGroup,
   type TestHistoryEntry,
   type TestResult,
+  type WorkspaceBranding,
 } from "@trapit/testing";
 import { useEffect, useRef, useState } from "react";
 
@@ -15,6 +16,7 @@ import { formatShortDateTime } from "../lib/date-format";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 
 type AvailableTest = {
+  branding?: WorkspaceBranding | null;
   durationMinutes: number;
   hasAttempt: boolean;
   id: string;
@@ -326,6 +328,36 @@ export function UserTestWorkspace({
     }
   }
 
+  async function handleResolveGroupInvite(requestId: string, decision: "accept" | "reject") {
+    try {
+      const payload = await readJson<{ groupJoinRequests: GroupJoinRequest[] }>(
+        await fetch("/api/user/groups", {
+          body: JSON.stringify({
+            decision,
+            mode: "resolve-request",
+            requestId,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setGroupJoinRequests(payload.groupJoinRequests);
+      await loadDashboard(identifierRef.current);
+      setGroupSearchFeedback(
+        decision === "accept"
+          ? "Group invitation accepted. You can now use this group."
+          : "Group invitation rejected.",
+      );
+    } catch (error) {
+      setGroupSearchFeedback(
+        error instanceof Error ? error.message : "Unable to update the group invitation.",
+      );
+    }
+  }
+
   async function submitTest(options?: { dueToTimer?: boolean }) {
     if (!activeTest || !startedAt || isSubmittingRef.current) {
       return;
@@ -536,12 +568,44 @@ export function UserTestWorkspace({
                 <div className="request-list">
                   {groupJoinRequests.map((request) => (
                     <article className="request-card" key={request.id}>
-                      <strong>{request.adminGroupName}</strong>
-                      <p className="muted-text">Requested as {request.requesterLabel}</p>
-                      <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
-                      <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
-                        {request.status}
-                      </span>
+                      <div>
+                        <strong>{request.adminGroupName}</strong>
+                        {request.requestType === "admin-invite" ? (
+                          <>
+                            <p className="muted-text">Invited by {request.adminLabel}</p>
+                            <p className="muted-text">Contact: {request.adminIdentifier}</p>
+                            <p className="muted-text">Invitation sent {formatShortDateTime(request.requestedAt)}</p>
+                          </>
+                        ) : (
+                          <>
+                            <p className="muted-text">Requested as {request.requesterLabel}</p>
+                            <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
+                          </>
+                        )}
+                      </div>
+                      <div className="inline-actions">
+                        <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
+                          {request.status}
+                        </span>
+                        {request.status === "pending" && request.requestType === "admin-invite" ? (
+                          <>
+                            <button
+                              className="button-secondary small-button"
+                              type="button"
+                              onClick={() => void handleResolveGroupInvite(request.id, "accept")}
+                            >
+                              Accept
+                            </button>
+                            <button
+                              className="button-secondary small-button"
+                              type="button"
+                              onClick={() => void handleResolveGroupInvite(request.id, "reject")}
+                            >
+                              Reject
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
                     </article>
                   ))}
                 </div>
@@ -585,6 +649,19 @@ export function UserTestWorkspace({
         {activeTest ? (
           <div className="question-list">
             <article className="question-card runner-summary-card">
+              {activeTest.branding?.imageDataUrl || activeTest.branding?.instituteName ? (
+                <div className="assessment-branding">
+                  {activeTest.branding.imageDataUrl ? (
+                    <img alt="Institute branding" className="assessment-branding-image" src={activeTest.branding.imageDataUrl} />
+                  ) : null}
+                  {activeTest.branding.instituteName ? (
+                    <div>
+                      <p className="eyebrow">Institute</p>
+                      <strong>{activeTest.branding.instituteName}</strong>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="question-head">
                 <strong>{activeTest.title}</strong>
                 <span className="status-chip success">{activeTest.durationMinutes} min</span>

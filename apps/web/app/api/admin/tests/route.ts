@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { type WorkspaceBranding } from "@trapit/testing";
 
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 import { assertCanScheduleSelfTest, assertCanScheduleTest } from "../../../../lib/user-category-limits";
@@ -46,12 +47,14 @@ export async function POST(request: Request) {
   }
 
   const body = (await request.json()) as {
+    branding?: WorkspaceBranding | null;
     durationMinutes?: number;
     participantGroupIds?: string[];
     participantIds?: string[];
     poolId?: string;
     questionCount?: number;
     startsAt?: string;
+    title?: string;
   };
 
   if (!body.poolId || !body.startsAt) {
@@ -86,6 +89,7 @@ export async function POST(request: Request) {
 
   try {
     const scheduledTests = await createScheduledTest({
+      branding: body.branding ?? null,
       createdBy: actor.sub,
       durationMinutes: body.durationMinutes,
       participantGroupIds: body.participantGroupIds ?? [],
@@ -93,6 +97,7 @@ export async function POST(request: Request) {
       poolId: body.poolId,
       questionCount: body.questionCount,
       startsAt: body.startsAt,
+      title: body.title,
     });
 
     return NextResponse.json({ scheduledTests });
@@ -112,6 +117,7 @@ export async function PATCH(request: Request) {
   }
 
   const body = (await request.json()) as {
+    branding?: WorkspaceBranding | null;
     durationMinutes?: number;
     participantGroupIds?: string[];
     participantIds?: string[];
@@ -119,6 +125,7 @@ export async function PATCH(request: Request) {
     questionCount?: number;
     startsAt?: string;
     testId?: string;
+    title?: string;
   };
 
   if (!body.testId || !body.poolId || !body.startsAt) {
@@ -155,6 +162,7 @@ export async function PATCH(request: Request) {
 
   try {
     const scheduledTests = await updateScheduledTest({
+      branding: body.branding ?? null,
       createdBy: actor.sub,
       durationMinutes: body.durationMinutes,
       participantGroupIds: body.participantGroupIds ?? [],
@@ -163,6 +171,7 @@ export async function PATCH(request: Request) {
       questionCount: body.questionCount,
       startsAt: body.startsAt,
       testId: body.testId,
+      title: body.title,
     });
 
     return NextResponse.json({ scheduledTests });

@@ -12,9 +12,11 @@ import {
   createPersistentQuestion,
   getIncorrectCount,
   getScheduledTestEndTime,
+  normalizeWorkspaceBranding,
   normalizeDraft,
   normalizePollQuestionDraft,
   previewQuestionImport,
+  previewPollQuestionImport,
   resolveScheduledTestStatus,
   selectQuestionIdsForScheduledTest,
   scoreObjectiveTest,
@@ -24,6 +26,7 @@ import {
   type GroupJoinRequest,
   type ObjectiveQuestion,
   type PollAttempt,
+  type PollBulkImportPreview,
   type PersistentPollQuestion,
   type PollParticipantType,
   type PollQuestionDraft,
@@ -36,6 +39,7 @@ import {
   type ScheduledTest,
   type TestAttempt,
   type TestingWorkspaceState,
+  type WorkspaceBranding,
   validatePollQuestionDraft,
 } from "@trapit/testing";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -102,6 +106,7 @@ async function withPollStoreFallback<T>(
 }
 
 export type AvailableUserTest = {
+  branding?: WorkspaceBranding | null;
   createdAt: string;
   durationMinutes: number;
   hasAttempt: boolean;
@@ -162,7 +167,9 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
     attempts: parsed.attempts ?? [],
     groupJoinRequests: (parsed.groupJoinRequests ?? []).map((request) => ({
       ...request,
+      adminLabel: request.adminLabel?.trim() || request.adminIdentifier?.trim() || "Unknown admin",
       adminGroupName: request.adminGroupName?.trim() ?? "Unnamed group",
+      requestType: request.requestType ?? "user-request",
       resolvedAt: request.resolvedAt ?? null,
       status: request.status ?? "pending",
     })),
@@ -197,6 +204,7 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
 
       return {
         ...poll,
+        branding: normalizeWorkspaceBranding(poll.branding),
         creatorDisplayName: poll.creatorDisplayName?.trim() || null,
         creatorIdentifier: poll.creatorIdentifier?.trim() || null,
         endsAt,
@@ -204,8 +212,25 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
         title: poll.title?.trim() || `${(poll.questionIds ?? []).length} question poll`,
       };
     }),
-    scheduledTests: parsed.scheduledTests ?? [],
+    scheduledTests: (parsed.scheduledTests ?? []).map((test) => ({
+      ...test,
+      branding: normalizeWorkspaceBranding(test.branding),
+      title: test.title?.trim() || "Scheduled test",
+    })),
+    workspaceBranding: normalizeWorkspaceBranding(parsed.workspaceBranding),
   };
+}
+
+export async function getWorkspaceBranding() {
+  const state = await readStore();
+  return state.workspaceBranding;
+}
+
+export async function updateWorkspaceBranding(branding: WorkspaceBranding | null) {
+  const state = await readStore();
+  state.workspaceBranding = normalizeWorkspaceBranding(branding);
+  await writeStore(state);
+  return state.workspaceBranding;
 }
 
 function isOwnedByActor(ownerId: string | null | undefined, actorId: string | null) {
@@ -244,6 +269,62 @@ function ensureParticipantProfile(
 
   state.participants = [participant, ...state.participants];
   return participant;
+}
+
+function createAdminInviteRequests(
+  state: TestingWorkspaceState,
+  input: {
+    adminIdentifier: string;
+    adminLabel: string | null | undefined;
+    group: ParticipantGroup;
+    participantIds: string[];
+  },
+) {
+  const participantMap = getParticipantMap(state);
+  const requests = input.participantIds.flatMap((participantId) => {
+    const participant = participantMap.get(participantId);
+
+    if (!participant) {
+      return [];
+    }
+
+    const normalizedParticipantIdentifier = normalizeParticipantIdentifier(participant.identifier);
+    const isExistingMember = input.group.participantIds.some((groupParticipantId) => {
+      const groupParticipant = participantMap.get(groupParticipantId);
+
+      return groupParticipant
+        ? identifiersMatch(groupParticipant.identifier, normalizedParticipantIdentifier)
+        : false;
+    });
+
+    if (isExistingMember) {
+      return [];
+    }
+
+    const hasPendingInvite = state.groupJoinRequests.some(
+      (request) =>
+        request.adminGroupId === input.group.id
+        && request.requestType === "admin-invite"
+        && identifiersMatch(request.requesterId, normalizedParticipantIdentifier)
+        && request.status === "pending",
+    );
+
+    if (hasPendingInvite) {
+      return [];
+    }
+
+    return [createStoredGroupJoinRequest({
+      adminGroupId: input.group.id,
+      adminIdentifier: input.adminIdentifier,
+      adminGroupName: input.group.name,
+      adminLabel: input.adminLabel?.trim() || input.adminIdentifier,
+      requestType: "admin-invite",
+      requesterId: normalizedParticipantIdentifier,
+      requesterLabel: participant.label?.trim() || participant.identifier,
+    })];
+  });
+
+  return requests;
 }
 
 function getCompletedScheduledTest(state: TestingWorkspaceState, testId: string) {
@@ -739,6 +820,10 @@ export async function previewImport(text: string): Promise<BulkImportPreview> {
   return previewQuestionImport(text);
 }
 
+export async function previewPollImport(text: string): Promise<PollBulkImportPreview> {
+  return previewPollQuestionImport(text);
+}
+
 export async function listPollQuestions(actorId: string | null = null) {
   if (isDynamoDbPollStoreEnabled()) {
     return withPollStoreFallback(
@@ -823,6 +908,7 @@ export async function listScheduledPolls(actorId: string | null = null) {
 
 export async function createScheduledPoll(input: {
   anonymous: boolean;
+  branding?: WorkspaceBranding | null;
   createdBy: string | null;
   creatorDisplayName?: string | null;
   creatorIdentifier?: string | null;
@@ -881,6 +967,7 @@ export async function createScheduledPoll(input: {
           : null;
         const scheduledPoll: ScheduledPoll = {
           anonymous,
+          branding: normalizeWorkspaceBranding(input.branding),
           createdAt: timestamp,
           createdBy: input.createdBy,
           creatorDisplayName: input.creatorDisplayName?.trim() || null,
@@ -948,6 +1035,7 @@ export async function createScheduledPoll(input: {
     : null;
   const scheduledPoll: ScheduledPoll = {
     anonymous,
+    branding: normalizeWorkspaceBranding(input.branding),
     createdAt: timestamp,
     createdBy: input.createdBy,
     creatorDisplayName: input.creatorDisplayName?.trim() || null,
@@ -972,6 +1060,7 @@ export async function createScheduledPoll(input: {
 
 export async function updateScheduledPoll(input: {
   anonymous: boolean;
+  branding?: WorkspaceBranding | null;
   createdBy: string | null;
   creatorDisplayName?: string | null;
   creatorIdentifier?: string | null;
@@ -1032,6 +1121,7 @@ export async function updateScheduledPoll(input: {
             ? {
                 ...poll,
                 anonymous,
+                branding: normalizeWorkspaceBranding(input.branding) ?? poll.branding ?? null,
                 creatorDisplayName: input.creatorDisplayName?.trim() || poll.creatorDisplayName || null,
                 creatorIdentifier: input.creatorIdentifier?.trim() || poll.creatorIdentifier || null,
                 endsAt: input.endsAt,
@@ -1101,6 +1191,7 @@ export async function updateScheduledPoll(input: {
       ? {
           ...poll,
           anonymous,
+          branding: normalizeWorkspaceBranding(input.branding) ?? poll.branding ?? null,
           creatorDisplayName: input.creatorDisplayName?.trim() || poll.creatorDisplayName || null,
           creatorIdentifier: input.creatorIdentifier?.trim() || poll.creatorIdentifier || null,
           endsAt: input.endsAt,
@@ -1255,16 +1346,29 @@ export async function searchParticipantGroupsByOwner(ownerIdentifier: string) {
 export async function createGroup(input: {
   description?: string;
   name: string;
+  ownerLabel?: string | null;
   ownerIdentifier: string | null;
   participantIds: string[];
 }) {
   const state = await readStore();
+  const shouldCreateInvites = Boolean(input.ownerIdentifier);
   const group = createParticipantGroup({
     description: input.description,
     name: input.name,
     ownerIdentifier: input.ownerIdentifier,
-    participantIds: input.participantIds,
+    participantIds: shouldCreateInvites ? [] : input.participantIds,
   });
+
+  if (shouldCreateInvites && input.ownerIdentifier) {
+    const inviteRequests = createAdminInviteRequests(state, {
+      adminIdentifier: input.ownerIdentifier,
+      adminLabel: input.ownerLabel,
+      group,
+      participantIds: input.participantIds,
+    });
+
+    state.groupJoinRequests = [...inviteRequests, ...state.groupJoinRequests];
+  }
 
   state.participantGroups = [group, ...state.participantGroups];
   await writeStore(state);
@@ -1275,6 +1379,7 @@ export async function createGroup(input: {
 export async function updateGroup(input: {
   groupId: string;
   name: string;
+  ownerLabel?: string | null;
   ownerIdentifier: string | null;
   participantIds: string[];
 }) {
@@ -1294,6 +1399,25 @@ export async function updateGroup(input: {
   }
 
   const timestamp = new Date().toISOString();
+  const shouldCreateInvites = Boolean(existingGroup.ownerIdentifier ?? input.ownerIdentifier);
+  const nextParticipantIds = shouldCreateInvites
+    ? existingGroup.participantIds.filter((participantId) => input.participantIds.includes(participantId))
+    : dedupe(input.participantIds);
+
+  if (shouldCreateInvites && (existingGroup.ownerIdentifier ?? input.ownerIdentifier)) {
+    const inviteRequests = createAdminInviteRequests(state, {
+      adminIdentifier: existingGroup.ownerIdentifier ?? input.ownerIdentifier ?? "",
+      adminLabel: input.ownerLabel,
+      group: {
+        ...existingGroup,
+        name: input.name.trim(),
+        participantIds: nextParticipantIds,
+      },
+      participantIds: input.participantIds.filter((participantId) => !existingGroup.participantIds.includes(participantId)),
+    });
+
+    state.groupJoinRequests = [...inviteRequests, ...state.groupJoinRequests];
+  }
 
   state.participantGroups = state.participantGroups.map((group) =>
     group.id === input.groupId
@@ -1301,7 +1425,7 @@ export async function updateGroup(input: {
           ...group,
           name: input.name.trim(),
           ownerIdentifier: group.ownerIdentifier ?? input.ownerIdentifier,
-          participantIds: dedupe(input.participantIds),
+          participantIds: nextParticipantIds,
           updatedAt: timestamp,
         }
       : group,
@@ -1332,6 +1456,7 @@ export async function listGroupJoinRequestsForUser(requesterId: string) {
 
 export async function createGroupJoinRequest(input: {
   adminGroupId: string;
+  adminLabel?: string | null;
   requesterId: string;
   requesterLabel: string;
 }) {
@@ -1373,6 +1498,7 @@ export async function createGroupJoinRequest(input: {
     adminGroupId: group.id,
     adminIdentifier: group.ownerIdentifier,
     adminGroupName: group.name,
+    adminLabel: input.adminLabel?.trim() || group.ownerIdentifier,
     requesterId: normalizedRequesterId,
     requesterLabel: input.requesterLabel.trim() || normalizedRequesterId,
   });
@@ -1398,6 +1524,79 @@ export async function resolveGroupJoinRequest(input: {
 
   if (!identifiersMatch(request.adminIdentifier, normalizedAdminIdentifier)) {
     throw new Error("You can only manage requests for your own groups.");
+  }
+
+  if (request.requestType !== "user-request") {
+    throw new Error("Admin-issued invitations must be reviewed by the invited user.");
+  }
+
+  if (request.status !== "pending") {
+    throw new Error("This request has already been processed.");
+  }
+
+  const timestamp = new Date().toISOString();
+
+  if (input.decision === "accept") {
+    const group = state.participantGroups.find((entry) => entry.id === request.adminGroupId);
+
+    if (!group) {
+      throw new Error("The selected group could not be found.");
+    }
+
+    const participant = ensureParticipantProfile(state, {
+      identifier: request.requesterId,
+      label: request.requesterLabel,
+    });
+
+    state.participantGroups = state.participantGroups.map((entry) =>
+      entry.id === group.id
+        ? {
+            ...entry,
+            participantIds: dedupe([...entry.participantIds, participant.id]),
+            updatedAt: timestamp,
+          }
+        : entry,
+    );
+  }
+
+  state.groupJoinRequests = state.groupJoinRequests.map((entry) =>
+    entry.id === request.id
+      ? {
+          ...entry,
+          resolvedAt: timestamp,
+          status: input.decision === "accept" ? "accepted" : "rejected",
+        }
+      : entry,
+  );
+
+  await writeStore(state);
+
+  return {
+    groupJoinRequests: state.groupJoinRequests,
+    participantGroups: state.participantGroups,
+    participants: state.participants,
+  };
+}
+
+export async function resolveGroupInvitationForUser(input: {
+  decision: "accept" | "reject";
+  requestId: string;
+  userIdentifier: string;
+}) {
+  const state = await readStore();
+  const normalizedUserIdentifier = normalizeParticipantIdentifier(input.userIdentifier);
+  const request = state.groupJoinRequests.find((entry) => entry.id === input.requestId);
+
+  if (!request) {
+    throw new Error("Request not found.");
+  }
+
+  if (request.requestType !== "admin-invite") {
+    throw new Error("Only admin-issued invitations can be reviewed here.");
+  }
+
+  if (!identifiersMatch(request.requesterId, normalizedUserIdentifier)) {
+    throw new Error("You can only manage your own group invitations.");
   }
 
   if (request.status !== "pending") {
@@ -1454,6 +1653,7 @@ export async function listScheduledTests(actorId: string | null = null) {
 }
 
 export async function createScheduledTest(input: {
+  branding?: WorkspaceBranding | null;
   createdBy: string | null;
   durationMinutes: number;
   participantGroupIds: string[];
@@ -1461,6 +1661,7 @@ export async function createScheduledTest(input: {
   poolId: string;
   questionCount: number;
   startsAt: string;
+  title?: string | null;
 }) {
   const state = await readStore();
   const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy);
@@ -1484,7 +1685,9 @@ export async function createScheduledTest(input: {
   }
 
   const timestamp = new Date().toISOString();
+  const title = input.title?.trim() || `${pool.name} test`;
   const scheduledTest: ScheduledTest = {
+    branding: normalizeWorkspaceBranding(input.branding),
     createdAt: timestamp,
     createdBy: input.createdBy,
     durationMinutes: input.durationMinutes,
@@ -1501,7 +1704,7 @@ export async function createScheduledTest(input: {
     resolvedParticipantIdentifiers,
     startsAt: input.startsAt,
     status: new Date(input.startsAt).getTime() > Date.now() ? "scheduled" : "live",
-    title: `${pool.name} test`,
+    title,
     updatedAt: timestamp,
   };
 
@@ -1512,6 +1715,7 @@ export async function createScheduledTest(input: {
 }
 
 export async function updateScheduledTest(input: {
+  branding?: WorkspaceBranding | null;
   createdBy: string | null;
   durationMinutes: number;
   participantGroupIds: string[];
@@ -1520,6 +1724,7 @@ export async function updateScheduledTest(input: {
   questionCount: number;
   startsAt: string;
   testId: string;
+  title?: string | null;
 }) {
   const state = await readStore();
   const existingTest = ensureActorOwnsScheduledTest(state, input.testId, input.createdBy);
@@ -1548,11 +1753,13 @@ export async function updateScheduledTest(input: {
   }
 
   const timestamp = new Date().toISOString();
+  const title = input.title?.trim() || `${pool.name} test`;
 
   state.scheduledTests = state.scheduledTests.map((scheduledTest) =>
     scheduledTest.id === input.testId
       ? {
           ...scheduledTest,
+          branding: normalizeWorkspaceBranding(input.branding) ?? scheduledTest.branding ?? null,
           durationMinutes: input.durationMinutes,
           participantGroupIds: dedupe(input.participantGroupIds),
           participantIds: dedupe(input.participantIds),
@@ -1566,7 +1773,7 @@ export async function updateScheduledTest(input: {
           resolvedParticipantIdentifiers,
           startsAt: input.startsAt,
           status: new Date(input.startsAt).getTime() > Date.now() ? "scheduled" : "live",
-          title: `${pool.name} test`,
+          title,
           updatedAt: timestamp,
         }
       : scheduledTest,
@@ -1685,6 +1892,7 @@ export async function listAvailableTestsForParticipant(
 
   return scheduledTests
     .map((scheduledTest) => ({
+    branding: scheduledTest.branding ?? null,
     createdAt: scheduledTest.createdAt,
     durationMinutes: scheduledTest.durationMinutes,
     hasAttempt: state.attempts.some(

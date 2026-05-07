@@ -213,6 +213,19 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
         {payload ? (
           <div className="form-stack">
             <div className="question-card">
+              {payload.poll.branding?.imageDataUrl || payload.poll.branding?.instituteName ? (
+                <div className="assessment-branding">
+                  {payload.poll.branding.imageDataUrl ? (
+                    <img alt="Institute branding" className="assessment-branding-image" src={payload.poll.branding.imageDataUrl} />
+                  ) : null}
+                  {payload.poll.branding.instituteName ? (
+                    <div>
+                      <p className="eyebrow">Institute</p>
+                      <strong>{payload.poll.branding.instituteName}</strong>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="question-head">
                 <strong>{payload.poll.title}</strong>
                 <span className={`status-chip ${payload.poll.status === "live" ? "success" : "warning"}`}>

@@ -108,6 +108,7 @@ export async function POST(request: Request) {
     const participantGroups = await createGroup({
       description: body.description,
       name: body.name,
+      ownerLabel: actor.displayName,
       ownerIdentifier: actor.identifier,
       participantIds: body.participantIds ?? [],
     });
@@ -136,6 +137,7 @@ export async function POST(request: Request) {
       const participantGroups = await updateGroup({
         groupId: body.groupId,
         name: body.name,
+        ownerLabel: actor.displayName,
         ownerIdentifier: actor.identifier,
         participantIds: body.participantIds ?? [],
       });

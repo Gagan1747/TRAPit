@@ -60,8 +60,14 @@ export type PersistentPollQuestion = PollQuestionDraft & {
 
 export type PollParticipantType = "open" | "registered";
 
+export type WorkspaceBranding = {
+  imageDataUrl: string | null;
+  instituteName: string;
+};
+
 export type ScheduledPoll = {
   anonymous: boolean;
+  branding?: WorkspaceBranding | null;
   createdAt: string;
   createdBy: string | null;
   creatorDisplayName?: string | null;
@@ -108,21 +114,26 @@ export type ParticipantGroup = {
 
 export type GroupJoinRequestStatus = "pending" | "accepted" | "rejected";
 
+export type GroupJoinRequestType = "admin-invite" | "user-request";
+
 export type GroupJoinRequest = {
   adminGroupId: string;
   adminIdentifier: string;
   adminGroupName: string;
+  adminLabel: string;
   id: string;
   requestedAt: string;
   requesterId: string;
   requesterLabel: string;
   resolvedAt: string | null;
   status: GroupJoinRequestStatus;
+  requestType: GroupJoinRequestType;
 };
 
 export type ScheduledTestStatus = "scheduled" | "live" | "completed";
 
 export type ScheduledTest = {
+  branding?: WorkspaceBranding | null;
   createdAt: string;
   createdBy: string | null;
   durationMinutes: number;
@@ -198,6 +209,7 @@ export type TestingWorkspaceState = {
   questions: PersistentQuestion[];
   scheduledPolls: ScheduledPoll[];
   scheduledTests: ScheduledTest[];
+  workspaceBranding: WorkspaceBranding | null;
 };
 
 export type ImportIssue = {
@@ -220,6 +232,21 @@ export type ImportCandidate = {
 
 export type BulkImportPreview = {
   candidates: ImportCandidate[];
+  invalidCount: number;
+  totalCount: number;
+  validCount: number;
+};
+
+export type PollImportCandidate = {
+  draft: PollQuestionDraft;
+  id: string;
+  issues: ImportIssue[];
+  rawText: string;
+  valid: boolean;
+};
+
+export type PollBulkImportPreview = {
+  candidates: PollImportCandidate[];
   invalidCount: number;
   totalCount: number;
   validCount: number;
@@ -473,6 +500,26 @@ export function createPersistentPollQuestion(
   };
 }
 
+export function normalizeWorkspaceBranding(
+  branding: WorkspaceBranding | null | undefined,
+): WorkspaceBranding | null {
+  if (!branding) {
+    return null;
+  }
+
+  const instituteName = branding.instituteName?.trim() ?? "";
+  const imageDataUrl = branding.imageDataUrl?.trim() ?? null;
+
+  if (!instituteName && !imageDataUrl) {
+    return null;
+  }
+
+  return {
+    imageDataUrl,
+    instituteName,
+  };
+}
+
 export function resolveScheduledPollStatus(
   poll: Pick<ScheduledPoll, "endsAt" | "startsAt">,
 ): ScheduledPoll["status"] {
@@ -529,6 +576,8 @@ export function createGroupJoinRequest(input: {
   adminGroupId: string;
   adminIdentifier: string;
   adminGroupName: string;
+  adminLabel: string;
+  requestType?: GroupJoinRequestType;
   requesterId: string;
   requesterLabel: string;
 }): GroupJoinRequest {
@@ -536,8 +585,10 @@ export function createGroupJoinRequest(input: {
     adminGroupId: input.adminGroupId,
     adminIdentifier: input.adminIdentifier.trim(),
     adminGroupName: input.adminGroupName.trim(),
+    adminLabel: input.adminLabel.trim(),
     id: createEntityId("group-request"),
     requestedAt: new Date().toISOString(),
+    requestType: input.requestType ?? "user-request",
     requesterId: input.requesterId.trim(),
     requesterLabel: input.requesterLabel.trim(),
     resolvedAt: null,
@@ -745,6 +796,7 @@ export function createEmptyTestingWorkspaceState(): TestingWorkspaceState {
     questions: [],
     scheduledPolls: [],
     scheduledTests: [],
+    workspaceBranding: null,
   };
 }
 
@@ -876,6 +928,66 @@ function parseQuestionBlock(block: string, index: number): ImportCandidate {
   };
 }
 
+function parsePollQuestionBlock(block: string, index: number): PollImportCandidate {
+  const lines = block
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const promptLine = lines.find((line) => /^question\s*:/i.test(line))
+    ?? lines.find((line) => !/^option\s*[a-z0-9]+\s*:/i.test(line) && !/^topic\s*:/i.test(line))
+    ?? "";
+  const topicLine = lines.find((line) => /^topic\s*:/i.test(line)) ?? "";
+  const optionLines = lines.filter((line) => /^option\s*[a-z0-9]+\s*:/i.test(line));
+  const prompt = promptLine.replace(/^question\s*:/i, "").trim();
+  const topic = topicLine.replace(/^topic\s*:/i, "").trim();
+  const draft: PollQuestionDraft = {
+    options: optionLines
+      .map((line) => line.replace(/^option\s*[a-z0-9]+\s*:/i, "").trim())
+      .filter(Boolean),
+    prompt,
+    topic,
+  };
+  const issues: ImportIssue[] = [];
+
+  if (!prompt) {
+    issues.push({
+      code: "prompt",
+      message: "Question text is missing.",
+    });
+  }
+
+  if (optionLines.length < 2) {
+    issues.push({
+      code: "options",
+      message: "At least 2 option lines are required.",
+    });
+  }
+
+  if (!lines.length) {
+    issues.push({
+      code: "format",
+      message: "This block is empty.",
+    });
+  }
+
+  const validationError = validatePollQuestionDraft(draft);
+
+  if (validationError) {
+    issues.push({
+      code: "validation",
+      message: validationError,
+    });
+  }
+
+  return {
+    draft: lines.length ? draft : { options: [], prompt: "", topic: "" },
+    id: `poll-import-${index + 1}`,
+    issues,
+    rawText: block,
+    valid: issues.length === 0,
+  };
+}
+
 export function previewQuestionImport(text: string): BulkImportPreview {
   const blocks = text
     .replace(/\r\n/g, "\n")
@@ -883,6 +995,22 @@ export function previewQuestionImport(text: string): BulkImportPreview {
     .map((block) => block.trim())
     .filter(Boolean);
   const candidates = blocks.map((block, index) => parseQuestionBlock(block, index));
+
+  return {
+    candidates,
+    invalidCount: candidates.filter((candidate) => !candidate.valid).length,
+    totalCount: candidates.length,
+    validCount: candidates.filter((candidate) => candidate.valid).length,
+  };
+}
+
+export function previewPollQuestionImport(text: string): PollBulkImportPreview {
+  const blocks = text
+    .replace(/\r\n/g, "\n")
+    .split(/\n\s*\n+/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  const candidates = blocks.map((block, index) => parsePollQuestionBlock(block, index));
 
   return {
     candidates,

@@ -10,9 +10,9 @@ import {
   createEmptyTestingWorkspaceState,
   formatElapsedTime,
   type GroupJoinRequest,
+  type PollBulkImportPreview,
   type PersistentPollQuestion,
   type PollParticipantType,
-  type PollQuestionDraft,
   type ScheduledPoll,
   validateQuestionDraft,
   type BulkImportPreview,
@@ -23,13 +23,14 @@ import {
   type ScheduledTest,
   type TestLeaderboard,
   type TestHistoryEntry,
+  type WorkspaceBranding,
 } from "@trapit/testing";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
-import { NotificationBell, type NotificationBellItem } from "./notification-bell";
+import { type NotificationBellItem } from "./notification-bell";
 
 const AI_OCR_EXAMPLE = `Question: 5+3?
 Option A: 10
@@ -46,6 +47,20 @@ const AI_OCR_PROMPT = `convert the image/text to questions in the following form
 
 Example:
 ${AI_OCR_EXAMPLE}`;
+
+const POLL_OCR_EXAMPLE = `Question: Which topic should we revise next?
+Option A: Algebra
+Option B: Geometry
+Option C: Mensuration
+Option D: Statistics`;
+
+const POLL_OCR_PROMPT = `convert the image/text to poll questions in the following format
+-add colon after question and each option
+-question and each option should be on separate lines
+-separate each poll question block with one blank line
+
+Example:
+${POLL_OCR_EXAMPLE}`;
 
 function createEmptyOptions(count: number) {
   return Array.from({ length: count }, () => "");
@@ -70,14 +85,6 @@ function toDateTimeInputValue(value: string) {
   const timezoneOffsetMs = date.getTimezoneOffset() * 60 * 1000;
 
   return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
-}
-
-function createEmptyPollQuestionDraft(): PollQuestionDraft {
-  return {
-    options: ["", ""],
-    prompt: "",
-    topic: "",
-  };
 }
 
 type QuestionApiResponse = {
@@ -161,6 +168,10 @@ type HistoryResponse = {
 type PollsResponse = {
   pollQuestions: PersistentPollQuestion[];
   scheduledPolls: ScheduledPoll[];
+};
+
+type BrandingResponse = {
+  branding: WorkspaceBranding | null;
 };
 
 type AdminTestReviewResponse = {
@@ -249,6 +260,45 @@ type UpgradePrompt = {
   message: string;
   targetCategory: NormalUserCategory | null;
 };
+
+function createEmptyBranding(): WorkspaceBranding {
+  return {
+    imageDataUrl: null,
+    instituteName: "",
+  };
+}
+
+function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBranding | null {
+  const instituteName = branding?.instituteName.trim() ?? "";
+  const imageDataUrl = branding?.imageDataUrl?.trim() ?? null;
+
+  if (!instituteName && !imageDataUrl) {
+    return null;
+  }
+
+  return {
+    imageDataUrl,
+    instituteName,
+  };
+}
+
+async function fileToDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+        return;
+      }
+
+      reject(new Error("Unable to read the selected image."));
+    };
+
+    reader.onerror = () => reject(new Error("Unable to read the selected image."));
+    reader.readAsDataURL(file);
+  });
+}
 
 type AdminWorkspaceSection =
   | "author"
@@ -499,15 +549,21 @@ function formatResultParticipantName(
 }
 
 function matchesParticipantSearch(participant: ParticipantProfile, query: string) {
-  const normalizedQuery = query.trim().toLowerCase();
+  const normalizedQuery = normalizeParticipantIdentifier(query);
 
   if (!normalizedQuery) {
     return true;
   }
 
-  return [participant.label, participant.identifier]
-    .filter(Boolean)
-    .some((value) => value.toLowerCase().includes(normalizedQuery));
+  const queryDigits = normalizedQuery.replace(/\D/g, "");
+
+  if (queryDigits && queryDigits.length < 10) {
+    return false;
+  }
+
+  return Array.from(getParticipantIdentifierCandidates(participant.identifier)).some((candidate) =>
+    candidate === normalizedQuery,
+  );
 }
 
 function getParticipantSecondaryText(participant: ParticipantProfile) {
@@ -575,7 +631,11 @@ function ParticipantSearchPicker({
             ))}
           </div>
         ) : hasSearchQuery ? (
-          <p className="muted-text">No matching participants found.</p>
+          <p className="muted-text">
+            {searchQuery.trim().replace(/\D/g, "").length > 0 && searchQuery.trim().replace(/\D/g, "").length < 10
+              ? "Enter the complete phone number to reveal the participant name."
+              : "No participant was found for that exact phone number."}
+          </p>
         ) : null
       ) : (
         <p className="muted-text">Add participants first, then include them in a group.</p>
@@ -643,12 +703,18 @@ export function AdminQuestionWorkspace({
   const [groupSearchResults, setGroupSearchResults] = useState<ParticipantGroup[]>([]);
   const [groupName, setGroupName] = useState("");
   const [history, setHistory] = useState<TestHistoryEntry[]>([]);
+  const [brandingFeedback, setBrandingFeedback] = useState<string | null>(null);
+  const [brandingImageDataUrl, setBrandingImageDataUrl] = useState<string | null>(null);
+  const [brandingInstituteName, setBrandingInstituteName] = useState("");
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const [importPreview, setImportPreview] = useState<BulkImportPreview | null>(null);
   const [importText, setImportText] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isMutating, setIsMutating] = useState(false);
+  const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
+  const [isPollImporting, setIsPollImporting] = useState(false);
+  const [isPollOcrImportOpen, setIsPollOcrImportOpen] = useState(true);
   const [isSearchingGroups, setIsSearchingGroups] = useState(false);
   const [isSendingGroupRequest, setIsSendingGroupRequest] = useState<string | null>(null);
   const [leaderboards, setLeaderboards] = useState<TestLeaderboard[]>([]);
@@ -660,10 +726,10 @@ export function AdminQuestionWorkspace({
   const [participantGroups, setParticipantGroups] = useState<ParticipantGroup[]>([]);
   const [participants, setParticipants] = useState<ParticipantProfile[]>([]);
   const [pollFeedback, setPollFeedback] = useState<string | null>(null);
+  const [pollImportFeedback, setPollImportFeedback] = useState<string | null>(null);
+  const [pollImportPreview, setPollImportPreview] = useState<PollBulkImportPreview | null>(null);
+  const [pollImportText, setPollImportText] = useState("");
   const [pollQrCodes, setPollQrCodes] = useState<Record<string, string>>({});
-  const [pollQuestionDrafts, setPollQuestionDrafts] = useState<PollQuestionDraft[]>([
-    createEmptyPollQuestionDraft(),
-  ]);
   const [pollQuestions, setPollQuestions] = useState<PersistentPollQuestion[]>([]);
   const [editingScheduledPollId, setEditingScheduledPollId] = useState<string | null>(null);
   const [pollScheduleAnonymous, setPollScheduleAnonymous] = useState(false);
@@ -674,6 +740,7 @@ export function AdminQuestionWorkspace({
   const [pollScheduleStartNow, setPollScheduleStartNow] = useState(true);
   const [pollScheduleStartsAtInput, setPollScheduleStartsAtInput] = useState(createDefaultScheduleTime());
   const [pollScheduleEndsAtInput, setPollScheduleEndsAtInput] = useState(createDefaultPollEndTime());
+  const [pollScheduleTitle, setPollScheduleTitle] = useState("");
   const [scheduledPolls, setScheduledPolls] = useState<ScheduledPoll[]>([]);
   const [poolFeedback, setPoolFeedback] = useState<string | null>(null);
   const [poolName, setPoolName] = useState("");
@@ -698,6 +765,7 @@ export function AdminQuestionWorkspace({
   const [scheduleQuestionCount, setScheduleQuestionCount] = useState("1");
   const [scheduleStartMode, setScheduleStartMode] = useState<"later" | "now">("now");
   const [scheduleStartsAtInput, setScheduleStartsAtInput] = useState(createDefaultScheduleTime());
+  const [scheduleTitle, setScheduleTitle] = useState("");
   const [scheduledTests, setScheduledTests] = useState<ScheduledTest[]>([]);
   const [selectedGroupParticipantIds, setSelectedGroupParticipantIds] = useState<string[]>([]);
   const [selfTestDurationMinutes, setSelfTestDurationMinutes] = useState("30");
@@ -706,6 +774,7 @@ export function AdminQuestionWorkspace({
   const [selfTestQuestionCount, setSelfTestQuestionCount] = useState("1");
   const [selfTestStartMode, setSelfTestStartMode] = useState<"later" | "now">("now");
   const [selfTestStartsAtInput, setSelfTestStartsAtInput] = useState(createDefaultScheduleTime());
+  const [selfTestTitle, setSelfTestTitle] = useState("");
   const [summary, setSummary] = useState<HistoryResponse["summary"]>({
     attempts: 0,
     groups: 0,
@@ -715,13 +784,16 @@ export function AdminQuestionWorkspace({
     scheduledTests: 0,
   });
   const [testListFilter, setTestListFilter] = useState<AdminTestListFilter>("both");
+  const [toolbarMenuView, setToolbarMenuView] = useState<"branding" | "menu" | "notifications">("menu");
   const [visibleReviewTestIds, setVisibleReviewTestIds] = useState<string[]>([]);
+  const [workspaceBranding, setWorkspaceBranding] = useState<WorkspaceBranding | null>(null);
+  const toolbarMenuRef = useRef<HTMLDivElement | null>(null);
 
   async function loadWorkspace() {
     setIsLoading(true);
 
     try {
-      const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, userDashboardPayload, pollsPayload, categorySnapshotPayload, categoryManagementPayload] =
+      const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, userDashboardPayload, pollsPayload, brandingPayload, categorySnapshotPayload, categoryManagementPayload] =
         await Promise.all([
           readJson<QuestionApiResponse>(await fetch("/api/admin/questions")),
           readJson<PoolsResponse>(await fetch("/api/admin/pools")),
@@ -730,6 +802,7 @@ export function AdminQuestionWorkspace({
           readJson<HistoryResponse>(await fetch("/api/admin/history")),
           readJson<UserDashboardResponse>(await fetch("/api/user/dashboard")),
           readJson<PollsResponse>(await fetch("/api/admin/polls")),
+          readJson<BrandingResponse>(await fetch("/api/admin/branding")),
           currentActorRole === "user"
             ? readJson<UserCategorySnapshotResponse>(await fetch("/api/user/category"))
             : Promise.resolve<UserCategorySnapshotResponse | null>(null),
@@ -750,6 +823,9 @@ export function AdminQuestionWorkspace({
       setPollQuestions(pollsPayload.pollQuestions);
       setScheduledPolls(pollsPayload.scheduledPolls);
       setScheduledTests(testsPayload.scheduledTests);
+      setWorkspaceBranding(brandingPayload.branding);
+      setBrandingInstituteName(brandingPayload.branding?.instituteName ?? "");
+      setBrandingImageDataUrl(brandingPayload.branding?.imageDataUrl ?? null);
       setHistory(historyPayload.history);
       setLeaderboards(historyPayload.leaderboards);
       setSummary(historyPayload.summary);
@@ -786,6 +862,18 @@ export function AdminQuestionWorkspace({
 
   useEffect(() => {
     void loadWorkspace();
+  }, []);
+
+  useEffect(() => {
+    function handlePointerDown(event: MouseEvent) {
+      if (!toolbarMenuRef.current?.contains(event.target as Node)) {
+        setIsOverflowMenuOpen(false);
+        setToolbarMenuView("menu");
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
   }, []);
 
   useEffect(() => {
@@ -845,6 +933,7 @@ export function AdminQuestionWorkspace({
     setPollScheduleStartNow(true);
     setPollScheduleStartsAtInput(createDefaultScheduleTime());
     setPollScheduleEndsAtInput(createDefaultPollEndTime());
+    setPollScheduleTitle("");
   }
 
   function resetScheduledTestForm() {
@@ -854,6 +943,7 @@ export function AdminQuestionWorkspace({
     setScheduleQuestionCount("1");
     setScheduleStartMode("now");
     setScheduleStartsAtInput(createDefaultScheduleTime());
+    setScheduleTitle("");
   }
 
   function resetSelfTestForm() {
@@ -862,6 +952,7 @@ export function AdminQuestionWorkspace({
     setSelfTestQuestionCount("1");
     setSelfTestStartMode("now");
     setSelfTestStartsAtInput(createDefaultScheduleTime());
+    setSelfTestTitle("");
   }
 
   function handleStartEditingPoll(poll: ScheduledPoll) {
@@ -874,6 +965,7 @@ export function AdminQuestionWorkspace({
     setPollScheduleStartNow(false);
     setPollScheduleStartsAtInput(toDateTimeInputValue(poll.startsAt));
     setPollScheduleEndsAtInput(toDateTimeInputValue(poll.endsAt));
+    setPollScheduleTitle(poll.title);
     setPollFeedback(null);
     setOpenSection("poll-schedule");
   }
@@ -886,6 +978,7 @@ export function AdminQuestionWorkspace({
     setScheduleParticipantGroupIds([...test.participantGroupIds]);
     setScheduleStartMode("later");
     setScheduleStartsAtInput(toDateTimeInputValue(test.startsAt));
+    setScheduleTitle(test.title);
     setScheduleFeedback(null);
     setOpenSection("schedule");
   }
@@ -897,6 +990,7 @@ export function AdminQuestionWorkspace({
     setSelfTestDurationMinutes(String(test.durationMinutes));
     setSelfTestStartMode("later");
     setSelfTestStartsAtInput(toDateTimeInputValue(test.startsAt));
+    setSelfTestTitle(test.title);
     setSelfTestFeedback(null);
     setOpenSection("self-test");
   }
@@ -1082,6 +1176,36 @@ export function AdminQuestionWorkspace({
       );
     } finally {
       setIsSendingGroupRequest(null);
+    }
+  }
+
+  async function handleResolveOwnGroupInvite(requestId: string, decision: "accept" | "reject") {
+    try {
+      const payload = await readJson<{ groupJoinRequests: GroupJoinRequest[] }>(
+        await fetch("/api/user/groups", {
+          body: JSON.stringify({
+            decision,
+            mode: "resolve-request",
+            requestId,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setOutgoingGroupJoinRequests(payload.groupJoinRequests);
+      await loadWorkspace();
+      setGroupSearchFeedback(
+        decision === "accept"
+          ? "Group invitation accepted. You now have access to the group."
+          : "Group invitation rejected.",
+      );
+    } catch (error) {
+      setGroupSearchFeedback(
+        error instanceof Error ? error.message : "Unable to update the group invitation.",
+      );
     }
   }
 
@@ -1448,7 +1572,7 @@ export function AdminQuestionWorkspace({
         }),
       );
 
-      setGroupFeedback("Group or class created.");
+      setGroupFeedback("Group or class created. Selected users will receive addition requests.");
       setGroupName("");
       setSelectedGroupParticipantIds([]);
     }).catch((error) => {
@@ -1456,23 +1580,88 @@ export function AdminQuestionWorkspace({
     });
   }
 
-  function updatePollQuestionDraft(index: number, updater: (draft: PollQuestionDraft) => PollQuestionDraft) {
-    setPollQuestionDrafts((currentDrafts) =>
-      currentDrafts.map((draft, draftIndex) =>
-        draftIndex === index ? updater(draft) : draft,
-      ),
+  async function handleBrandingFileSelection(file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    try {
+      const imageDataUrl = await fileToDataUrl(file);
+      setBrandingImageDataUrl(imageDataUrl);
+      setBrandingFeedback(null);
+    } catch (error) {
+      setBrandingFeedback(error instanceof Error ? error.message : "Unable to read the selected image.");
+    }
+  }
+
+  function handlePreviewPollImport() {
+    if (!pollImportText.trim()) {
+      setPollImportFeedback("Paste OCR text before previewing the poll import.");
+      setPollImportPreview(null);
+      return;
+    }
+
+    setIsPollImporting(true);
+    setPollImportFeedback(null);
+
+    void (async () => {
+      try {
+        const payload = await readJson<PollBulkImportPreview>(
+          await fetch("/api/admin/polls/import/preview", {
+            body: JSON.stringify({ text: pollImportText }),
+            headers: {
+              "Content-Type": "application/json",
+            },
+            method: "POST",
+          }),
+        );
+
+        setPollImportPreview(payload);
+
+        if (!payload.totalCount) {
+          setPollImportFeedback("No poll question blocks were detected. Separate each question with a blank line.");
+          return;
+        }
+
+        setPollImportFeedback(
+          `${payload.validCount} valid poll question${payload.validCount === 1 ? "" : "s"} ready and ${payload.invalidCount} need review.`,
+        );
+      } catch (error) {
+        setPollImportFeedback(error instanceof Error ? error.message : "Unable to preview the poll OCR import.");
+      } finally {
+        setIsPollImporting(false);
+      }
+    })();
+  }
+
+  function handleKeepValidPollBlocks() {
+    if (!pollImportPreview) {
+      return;
+    }
+
+    const nextText = pollImportPreview.candidates
+      .filter((candidate) => candidate.valid)
+      .map((candidate) => candidate.rawText.trim())
+      .join("\n\n");
+
+    setPollImportText(nextText);
+    setPollImportPreview(null);
+    setPollImportFeedback(
+      nextText
+        ? "Kept only valid poll blocks. Review the text and preview again if needed."
+        : "No valid poll blocks were available to keep.",
     );
   }
 
-  function handleSavePollQuestions() {
-    const drafts = pollQuestionDrafts.filter(
-      (draft) => draft.prompt.trim() || draft.options.some((option) => option.trim()),
-    );
-
-    if (!drafts.length) {
-      setPollFeedback("Add at least one poll question before saving.");
+  function handleCommitPollImport() {
+    if (!pollImportPreview?.validCount) {
+      setPollImportFeedback("Preview valid poll questions before importing.");
       return;
     }
+
+    const drafts = pollImportPreview.candidates
+      .filter((candidate) => candidate.valid)
+      .map((candidate) => candidate.draft);
 
     void mutateWorkspace(async () => {
       await readJson<PollsResponse>(
@@ -1488,11 +1677,38 @@ export function AdminQuestionWorkspace({
         }),
       );
 
-      setPollFeedback(`Saved ${drafts.length} poll question${drafts.length === 1 ? "" : "s"}.`);
-      setPollQuestionDrafts([createEmptyPollQuestionDraft()]);
+      setPollImportFeedback(`Imported ${drafts.length} poll question${drafts.length === 1 ? "" : "s"}.`);
+      setPollImportPreview(null);
+      setPollImportText("");
     }).catch((error) => {
-      handleWorkspaceActionError(error, "Unable to save the poll questions.", setPollFeedback);
+      handleWorkspaceActionError(error, "Unable to import the previewed poll questions.", setPollImportFeedback);
     });
+  }
+
+  async function handleSaveBranding() {
+    const nextBranding = normalizeBrandingInput({
+      imageDataUrl: brandingImageDataUrl,
+      instituteName: brandingInstituteName,
+    });
+
+    try {
+      const payload = await readJson<BrandingResponse>(
+        await fetch("/api/admin/branding", {
+          body: JSON.stringify({ branding: nextBranding }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setWorkspaceBranding(payload.branding);
+      setBrandingInstituteName(payload.branding?.instituteName ?? "");
+      setBrandingImageDataUrl(payload.branding?.imageDataUrl ?? null);
+      setBrandingFeedback(payload.branding ? "Branding saved." : "Branding cleared.");
+    } catch (error) {
+      setBrandingFeedback(error instanceof Error ? error.message : "Unable to save branding.");
+    }
   }
 
   function handleSchedulePoll() {
@@ -1538,15 +1754,17 @@ export function AdminQuestionWorkspace({
     const selectedTopics = Array.from(
       new Set(selectedQuestions.map((question) => question.topic.trim()).filter(Boolean)),
     );
-    const title = selectedTopics.length === 1
-      ? selectedTopics[0]
-      : `${pollScheduleQuestionIds.length} question poll`;
+    const title = pollScheduleTitle.trim()
+      || (selectedTopics.length === 1
+        ? selectedTopics[0]
+        : `${pollScheduleQuestionIds.length} question poll`);
 
     void mutateWorkspace(async () => {
       await readJson<PollsResponse>(
         await fetch("/api/admin/polls", {
           body: JSON.stringify({
             anonymous: pollScheduleAnonymous,
+            branding: normalizeBrandingInput(workspaceBranding),
             endsAt,
             generateQrCode: pollScheduleParticipantType === "open",
             mode: editingScheduledPollId ? "update-poll" : "schedule-poll",
@@ -1612,7 +1830,7 @@ export function AdminQuestionWorkspace({
         }),
       );
 
-      setGroupFeedback("Group updated.");
+      setGroupFeedback("Group updated. New users will receive addition requests.");
       setEditingGroupId(null);
       setEditingGroupDraft(null);
     }).catch((error) => {
@@ -1655,6 +1873,7 @@ export function AdminQuestionWorkspace({
       await readJson<ScheduledTestsResponse>(
         await fetch("/api/admin/tests", {
           body: JSON.stringify({
+            branding: normalizeBrandingInput(workspaceBranding),
             durationMinutes,
             participantGroupIds: scheduleParticipantGroupIds,
             participantIds: [],
@@ -1662,6 +1881,7 @@ export function AdminQuestionWorkspace({
             questionCount,
             startsAt,
             testId: editingScheduledTestId,
+            title: scheduleTitle.trim(),
           }),
           headers: {
             "Content-Type": "application/json",
@@ -1717,6 +1937,7 @@ export function AdminQuestionWorkspace({
       await readJson<ScheduledTestsResponse>(
         await fetch("/api/admin/tests", {
           body: JSON.stringify({
+            branding: normalizeBrandingInput(workspaceBranding),
             durationMinutes,
             participantGroupIds: [],
             participantIds: [currentAdminIdentifier],
@@ -1724,6 +1945,7 @@ export function AdminQuestionWorkspace({
             questionCount,
             startsAt,
             testId: editingSelfTestId,
+            title: selfTestTitle.trim(),
           }),
           headers: {
             "Content-Type": "application/json",
@@ -1901,32 +2123,30 @@ export function AdminQuestionWorkspace({
   const notificationBaseline = previousSignInAt ? new Date(previousSignInAt).getTime() : null;
   const liveTestsCount = sortedScheduledTests.filter((test) => test.status === "live").length;
   const livePollsCount = sortedScheduledPolls.filter((poll) => poll.status === "live").length;
-  const pendingGroupRequestsCount = groupJoinRequests.filter((request) => request.status === "pending").length;
-  const newTestsSinceLastSignInCount = notificationBaseline === null
-    ? 0
-    : sortedScheduledTests.filter((test) => new Date(test.createdAt).getTime() > notificationBaseline).length;
-  const newPollsSinceLastSignInCount = notificationBaseline === null
-    ? 0
-    : sortedScheduledPolls.filter((poll) => new Date(poll.createdAt).getTime() > notificationBaseline).length;
+  const upcomingTestsCount = sortedScheduledTests.filter((test) => test.status === "scheduled").length;
+  const upcomingPollsCount = sortedScheduledPolls.filter((poll) => poll.status === "scheduled").length;
   const releasedTestResultsCount = notificationBaseline === null
-    ? 0
+    ? sortedScheduledTests.filter((test) => test.status === "completed").length
     : sortedScheduledTests.filter(
       (test) => test.status === "completed" && new Date(test.updatedAt).getTime() > notificationBaseline,
     ).length;
   const releasedPollResultsCount = notificationBaseline === null
-    ? 0
+    ? sortedScheduledPolls.filter((poll) => poll.status === "completed").length
     : sortedScheduledPolls.filter(
       (poll) => poll.status === "completed" && new Date(poll.updatedAt).getTime() > notificationBaseline,
     ).length;
   const notificationItems: NotificationBellItem[] = [
-    { count: liveTestsCount, label: "Live tests" },
-    { count: livePollsCount, label: "Live polls" },
-    { count: newTestsSinceLastSignInCount, label: "New tests since last sign in" },
-    { count: newPollsSinceLastSignInCount, label: "New polls since last sign in" },
-    { count: releasedTestResultsCount, label: "Test results released since last sign in" },
-    { count: releasedPollResultsCount, label: "Poll results released since last sign in" },
-    { count: pendingGroupRequestsCount, label: "Group requests pending" },
+    { count: liveTestsCount + livePollsCount, label: "Live tests and polls" },
+    { count: upcomingTestsCount + upcomingPollsCount, label: "Upcoming tests and polls" },
+    { count: releasedTestResultsCount + releasedPollResultsCount, label: "Released results" },
   ];
+  const brandingPreview = normalizeBrandingInput({
+    imageDataUrl: brandingImageDataUrl,
+    instituteName: brandingInstituteName,
+  });
+  const notificationSubtitle = notificationBaseline === null
+    ? "Counts reflect the current workspace state."
+    : "Released results are measured from your previous sign in.";
   const filteredManagedUsers = categoryManagement?.managedUsers.filter((user) => {
     const query = categorySearchQuery.trim().toLowerCase();
     const normalizedQueryCandidates = Array.from(getParticipantIdentifierCandidates(query));
@@ -2123,21 +2343,146 @@ export function AdminQuestionWorkspace({
   return (
     <div className="workspace-stack">
       <div className="workspace-toolbar">
-        {currentActorRole === "user" ? (
-          <button className="button-secondary" type="button" onClick={() => openUpgradePanel()}>
-            {isUpgradePanelOpen ? "Hide upgrade" : "Upgrade"}
+        <div className="workspace-overflow" ref={toolbarMenuRef}>
+          <button
+            aria-expanded={isOverflowMenuOpen}
+            aria-haspopup="dialog"
+            className="workspace-overflow-button"
+            type="button"
+            onClick={() => {
+              setToolbarMenuView("menu");
+              setIsOverflowMenuOpen((current) => !current);
+            }}
+          >
+            <span aria-hidden="true">...</span>
+            <span className="sr-only">Open workspace actions</span>
           </button>
-        ) : null}
-        {isSuperAdmin ? (
-          <button className="button-secondary" type="button" onClick={() => setIsManageUpgradesPanelOpen((current) => !current)}>
-            {isManageUpgradesPanelOpen ? "Hide manage upgrades" : "Manage Upgrades"}
-          </button>
-        ) : null}
-        <NotificationBell
-          items={notificationItems}
-          subtitle={notificationBaseline === null ? "Counts reflect the current workspace state." : "Counts are measured from your previous sign in."}
-          title="Admin workspace alerts"
-        />
+
+          {isOverflowMenuOpen ? (
+            <div className="workspace-overflow-panel panel" role="dialog">
+              {toolbarMenuView === "menu" ? (
+                <div className="workspace-overflow-stack">
+                  <p className="eyebrow">Workspace actions</p>
+                  {currentActorRole === "user" ? (
+                    <button
+                      className="workspace-overflow-action"
+                      type="button"
+                      onClick={() => {
+                        openUpgradePanel();
+                        setIsOverflowMenuOpen(false);
+                      }}
+                    >
+                      {isUpgradePanelOpen ? "Hide upgrade" : "Upgrade"}
+                    </button>
+                  ) : null}
+                  {isSuperAdmin ? (
+                    <button
+                      className="workspace-overflow-action"
+                      type="button"
+                      onClick={() => {
+                        setIsManageUpgradesPanelOpen((current) => !current);
+                        setIsOverflowMenuOpen(false);
+                      }}
+                    >
+                      {isManageUpgradesPanelOpen ? "Hide manage upgrades" : "Manage upgrades"}
+                    </button>
+                  ) : null}
+                  <button
+                    className="workspace-overflow-action"
+                    type="button"
+                    onClick={() => setToolbarMenuView("notifications")}
+                  >
+                    Notifications
+                  </button>
+                  {currentActorRole !== "user" ? (
+                    <button
+                      className="workspace-overflow-action"
+                      type="button"
+                      onClick={() => setToolbarMenuView("branding")}
+                    >
+                      Branding
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {toolbarMenuView === "notifications" ? (
+                <div className="workspace-overflow-stack">
+                  <div className="workspace-overflow-head">
+                    <button className="button-secondary small-button" type="button" onClick={() => setToolbarMenuView("menu")}>
+                      Back
+                    </button>
+                    <p className="eyebrow">Notifications</p>
+                  </div>
+                  <h2 className="section-title">Admin workspace alerts</h2>
+                  <p className="muted-text notification-panel-subtitle">{notificationSubtitle}</p>
+                  <div className="notification-panel-list">
+                    {notificationItems.map((item) => (
+                      <div className="notification-panel-item" key={item.label}>
+                        <span>{item.label}</span>
+                        <strong>{item.count}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {toolbarMenuView === "branding" ? (
+                <div className="workspace-overflow-stack">
+                  <div className="workspace-overflow-head">
+                    <button className="button-secondary small-button" type="button" onClick={() => setToolbarMenuView("menu")}>
+                      Back
+                    </button>
+                    <p className="eyebrow">Branding</p>
+                  </div>
+                  <h2 className="section-title">Institute branding</h2>
+                  <div className="form-stack">
+                    <div className="field">
+                      <label htmlFor="branding-institute-name">Institute name</label>
+                      <input
+                        id="branding-institute-name"
+                        placeholder="Enter institute name"
+                        value={brandingInstituteName}
+                        onChange={(event) => setBrandingInstituteName(event.target.value)}
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="branding-image">Logo or branding image</label>
+                      <input
+                        accept="image/*"
+                        id="branding-image"
+                        type="file"
+                        onChange={(event) => void handleBrandingFileSelection(event.target.files?.[0] ?? null)}
+                      />
+                    </div>
+                    {brandingPreview?.imageDataUrl ? (
+                      <div className="branding-preview-card">
+                        <img alt="Branding preview" className="branding-preview-image" src={brandingPreview.imageDataUrl} />
+                      </div>
+                    ) : null}
+                    {brandingFeedback ? <p className="muted-text">{brandingFeedback}</p> : null}
+                    <div className="inline-actions">
+                      <button className="button" disabled={isMutating} type="button" onClick={() => void handleSaveBranding()}>
+                        Save branding
+                      </button>
+                      <button
+                        className="button-secondary"
+                        disabled={isMutating || (!brandingInstituteName.trim() && !brandingImageDataUrl)}
+                        type="button"
+                        onClick={() => {
+                          setBrandingInstituteName("");
+                          setBrandingImageDataUrl(null);
+                        }}
+                      >
+                        Clear form
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div className="admin-shell">
@@ -2207,40 +2552,57 @@ export function AdminQuestionWorkspace({
                     <p className="muted-text">Choose any higher category available from your current plan.</p>
                   )}
                   {suggestedUpgradePlans.length ? (
-                    <div className="dashboard-grid compact-grid">
-                      {suggestedUpgradePlans.map((plan) => {
-                        const isHighlighted = plan.category === suggestedUpgradeCategory;
+                    <div className="leaderboard-table-wrap membership-upgrade-table-wrap">
+                      <table className="leaderboard-table membership-upgrade-table">
+                        <thead>
+                          <tr>
+                            <th scope="col">Plan</th>
+                            <th scope="col">Pools</th>
+                            <th scope="col">Questions / pool</th>
+                            <th scope="col">Scheduled tests / month</th>
+                            <th scope="col">Self tests / month</th>
+                            <th scope="col">Poll scheduling</th>
+                            <th scope="col">Open polls</th>
+                            <th scope="col">Group management</th>
+                            <th scope="col">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {suggestedUpgradePlans.map((plan) => {
+                            const isHighlighted = plan.category === suggestedUpgradeCategory;
+                            const hasPendingRequest = userPendingCategoryRequest?.requestedCategory === plan.category;
 
-                        return (
-                          <article key={plan.category} className={`dashboard-card${isHighlighted ? " is-highlighted" : ""}`}>
-                            <p className="section-title">{plan.label.replace(/ users$/i, " user")}</p>
-                            {isHighlighted ? <p className="muted-text">Recommended for the selected feature.</p> : null}
-                            <p className="muted-text">
-                              Pools: {plan.definition.test.maxQuestionPools} | Questions per pool: {plan.definition.test.maxQuestionsPerPool ?? "Unlimited"}
-                            </p>
-                            <p className="muted-text">
-                              Scheduled tests/month: {plan.definition.test.maxScheduledTestsPerMonth} | Self tests/month: {plan.definition.test.maxSelfTestsPerMonth}
-                            </p>
-                            <p className="muted-text">
-                              Polls: {plan.definition.poll.schedule ? "Enabled" : "Not included"} | Open to all: {plan.definition.poll.shareOpenToAll ? "Enabled" : "Not included"}
-                            </p>
-                            <p className="muted-text">
-                              Groups: {plan.definition.group.manage ? "Enabled" : "Not included"}
-                            </p>
-                            {userPendingCategoryRequest?.requestedCategory === plan.category ? (
-                              <p className="muted-text">Upgrade request pending review.</p>
-                            ) : (
-                              <button
-                                className="button-secondary small-button"
-                                type="button"
-                                onClick={() => void handleRequestCategoryUpgrade(plan.category)}
-                              >
-                                Send upgrade request
-                              </button>
-                            )}
-                          </article>
-                        );
-                      })}
+                            return (
+                              <tr key={plan.category} className={isHighlighted ? "membership-upgrade-row is-recommended" : "membership-upgrade-row"}>
+                                <td>
+                                  <strong>{plan.label.replace(/ users$/i, " user")}</strong>
+                                  {isHighlighted ? <div className="membership-upgrade-note">Recommended for the selected feature.</div> : null}
+                                </td>
+                                <td>{plan.definition.test.maxQuestionPools}</td>
+                                <td>{plan.definition.test.maxQuestionsPerPool ?? "Unlimited"}</td>
+                                <td>{plan.definition.test.maxScheduledTestsPerMonth}</td>
+                                <td>{plan.definition.test.maxSelfTestsPerMonth}</td>
+                                <td>{plan.definition.poll.schedule ? "Included" : "Not included"}</td>
+                                <td>{plan.definition.poll.shareOpenToAll ? "Included" : "Not included"}</td>
+                                <td>{plan.definition.group.manage ? "Included" : "Not included"}</td>
+                                <td>
+                                  {hasPendingRequest ? (
+                                    <span className="status-chip warning">Pending review</span>
+                                  ) : (
+                                    <button
+                                      className="button-secondary small-button"
+                                      type="button"
+                                      onClick={() => void handleRequestCategoryUpgrade(plan.category)}
+                                    >
+                                      Send request
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
                     </div>
                   ) : (
                     <p className="muted-text">You are already on the highest available category.</p>
@@ -2895,6 +3257,7 @@ export function AdminQuestionWorkspace({
                             }
                           />
                           <p className="muted-text">Selected members appear below. Click Remove on any member to take them out of the group.</p>
+                          <p className="muted-text">Enter the complete phone number to reveal a user. New selections receive a group addition request before joining.</p>
                         </div>
                         <div className="inline-actions">
                           <button
@@ -2943,13 +3306,17 @@ export function AdminQuestionWorkspace({
                             <div>
                               <strong>{request.requesterLabel}</strong>
                               <p className="muted-text">{request.requesterId}</p>
-                              <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
+                              <p className="muted-text">
+                                {request.requestType === "admin-invite"
+                                  ? `Invited ${formatShortDateTime(request.requestedAt)}`
+                                  : `Requested ${formatShortDateTime(request.requestedAt)}`}
+                              </p>
                             </div>
                             <div className="inline-actions">
                               <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
                                 {request.status}
                               </span>
-                              {request.status === "pending" ? (
+                              {request.status === "pending" && request.requestType === "user-request" ? (
                                 <>
                                   <button
                                     className="button-secondary small-button"
@@ -2968,6 +3335,8 @@ export function AdminQuestionWorkspace({
                                     Reject
                                   </button>
                                 </>
+                              ) : request.status === "pending" ? (
+                                <span className="muted-text">Waiting for participant response.</span>
                               ) : null}
                             </div>
                           </article>
@@ -2992,6 +3361,16 @@ export function AdminQuestionWorkspace({
         onToggle={() => toggleSection("schedule")}
       >
         <div className="form-stack">
+          <div className="field">
+            <label htmlFor="schedule-title">Topic or purpose</label>
+            <input
+              id="schedule-title"
+              placeholder="Weekly revision test"
+              value={scheduleTitle}
+              onChange={(event) => setScheduleTitle(event.target.value)}
+            />
+          </div>
+
           <div className="field">
             <label htmlFor="schedule-pool">Question pool</label>
             <select
@@ -3115,6 +3494,16 @@ export function AdminQuestionWorkspace({
         onToggle={() => toggleSection("self-test")}
       >
         <div className="form-stack">
+          <div className="field">
+            <label htmlFor="self-test-title">Topic or purpose</label>
+            <input
+              id="self-test-title"
+              placeholder="Practice chemistry mock"
+              value={selfTestTitle}
+              onChange={(event) => setSelfTestTitle(event.target.value)}
+            />
+          </div>
+
           <div className="field-row">
             <div className="field grow-field">
               <label htmlFor="self-test-pool">Question pool</label>
@@ -3218,113 +3607,115 @@ export function AdminQuestionWorkspace({
         onToggle={() => toggleSection("poll-questions")}
       >
         <div className="form-stack">
-          {pollQuestionDrafts.map((draft, draftIndex) => (
-            <article className="question-card" key={`poll-draft-${draftIndex}`}>
-              <div className="question-head">
-                <strong>Poll question {draftIndex + 1}</strong>
-                <div className="inline-actions">
-                  {pollQuestionDrafts.length > 1 ? (
-                    <button
-                      className="button-secondary small-button"
-                      type="button"
-                      onClick={() =>
-                        setPollQuestionDrafts((currentDrafts) =>
-                          currentDrafts.filter((_, currentIndex) => currentIndex !== draftIndex),
-                        )
-                      }
-                    >
-                      Remove question
-                    </button>
-                  ) : null}
+          <div className="question-bank-summary">
+            <div>
+              <strong>OCR import</strong>
+              <p className="muted-text question-bank-summary-copy">
+                Use the same OCR workflow as tests to preview and clean poll questions before saving them.
+              </p>
+            </div>
+            <button
+              className="button-secondary small-button"
+              type="button"
+              onClick={() => setIsPollOcrImportOpen((currentState) => !currentState)}
+            >
+              {isPollOcrImportOpen ? "Hide OCR import" : "Show OCR import"}
+            </button>
+          </div>
+
+          {isPollOcrImportOpen ? (
+            <div className="form-stack import-card">
+              <div className="section-head">
+                <div>
+                  <p className="eyebrow">OCR import</p>
+                  <h2 className="section-title">Import and preview poll questions</h2>
+                </div>
+                <div className="form-stack">
+                  <p className="muted-text">
+                    If the poll questions are on paper or already in text, send the photo or text to AI and use this exact prompt.
+                  </p>
+                  <div className="field textarea-field">
+                    <label htmlFor="poll-ai-prompt">AI prompt</label>
+                    <textarea id="poll-ai-prompt" readOnly value={POLL_OCR_PROMPT} />
+                  </div>
                 </div>
               </div>
 
               <div className="field textarea-field">
-                <label htmlFor={`poll-question-${draftIndex}`}>Question</label>
+                <label htmlFor="poll-import-text">OCR text</label>
                 <textarea
-                  id={`poll-question-${draftIndex}`}
-                  placeholder="Enter poll question"
-                  value={draft.prompt}
-                  onChange={(event) =>
-                    updatePollQuestionDraft(draftIndex, (currentDraft) => ({
-                      ...currentDraft,
-                      prompt: event.target.value,
-                    }))
-                  }
+                  id="poll-import-text"
+                  placeholder={POLL_OCR_EXAMPLE}
+                  value={pollImportText}
+                  onChange={(event) => setPollImportText(event.target.value)}
                 />
               </div>
 
-              <div className="option-list">
-                {draft.options.map((option, optionIndex) => (
-                  <div className="option-editor" key={`poll-option-${draftIndex}-${optionIndex}`}>
-                    <div className="field">
-                      <label htmlFor={`poll-option-input-${draftIndex}-${optionIndex}`}>
-                        Option {optionIndex + 1}
-                      </label>
-                      <input
-                        id={`poll-option-input-${draftIndex}-${optionIndex}`}
-                        value={option}
-                        onChange={(event) =>
-                          updatePollQuestionDraft(draftIndex, (currentDraft) => ({
-                            ...currentDraft,
-                            options: currentDraft.options.map((currentOption, currentIndex) =>
-                              currentIndex === optionIndex ? event.target.value : currentOption,
-                            ),
-                          }))
-                        }
-                      />
-                    </div>
-                    {draft.options.length > 2 ? (
-                      <button
-                        className="button-secondary small-button"
-                        type="button"
-                        onClick={() =>
-                          updatePollQuestionDraft(draftIndex, (currentDraft) => ({
-                            ...currentDraft,
-                            options: currentDraft.options.filter((_, currentIndex) => currentIndex !== optionIndex),
-                          }))
-                        }
-                      >
-                        Remove option
-                      </button>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-
+              {pollImportFeedback ? <p className="muted-text">{pollImportFeedback}</p> : null}
               <div className="inline-actions">
+                <button className="button" disabled={isPollImporting || isMutating} type="button" onClick={handlePreviewPollImport}>
+                  Preview import
+                </button>
                 <button
-                  className="button-secondary small-button"
+                  className="button-secondary"
+                  disabled={!pollImportPreview?.validCount || isMutating}
                   type="button"
-                  onClick={() =>
-                    updatePollQuestionDraft(draftIndex, (currentDraft) => ({
-                      ...currentDraft,
-                      options: [...currentDraft.options, ""],
-                    }))
-                  }
+                  onClick={handleCommitPollImport}
                 >
-                  Add option
+                  Import valid poll questions
+                </button>
+                <button
+                  className="button-secondary"
+                  disabled={!pollImportPreview?.validCount || isMutating}
+                  type="button"
+                  onClick={handleKeepValidPollBlocks}
+                >
+                  Keep valid blocks only
                 </button>
               </div>
-            </article>
-          ))}
+
+              {pollImportPreview ? (
+                <div className="import-preview-list">
+                  <div className="import-summary">
+                    <strong>{pollImportPreview.validCount}</strong>
+                    <span>valid</span>
+                    <strong>{pollImportPreview.invalidCount}</strong>
+                    <span>need fixes</span>
+                    <strong>{pollImportPreview.totalCount}</strong>
+                    <span>total blocks</span>
+                  </div>
+
+                  {pollImportPreview.candidates.map((candidate, index) => (
+                    <article className="question-card" key={candidate.id}>
+                      <div className="question-head">
+                        <strong>Imported block {index + 1}</strong>
+                        <span className={candidate.valid ? "status-chip success" : "status-chip warning"}>
+                          {candidate.valid ? "Ready" : "Needs cleanup"}
+                        </span>
+                      </div>
+                      <p>{candidate.draft.prompt || "Prompt missing"}</p>
+                      {candidate.draft.options.length ? (
+                        <ol className="question-options">
+                          {candidate.draft.options.map((option, optionIndex) => (
+                            <li key={`${candidate.id}-${optionIndex}`}>{option}</li>
+                          ))}
+                        </ol>
+                      ) : null}
+                      {candidate.issues.length ? (
+                        <ul className="issue-list">
+                          {candidate.issues.map((issue, issueIndex) => (
+                            <li key={`${candidate.id}-issue-${issueIndex}`}>{issue.message}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           {pollFeedback ? <p className="muted-text">{pollFeedback}</p> : null}
-
-          <div className="inline-actions">
-            <button
-              className="button-secondary"
-              type="button"
-              onClick={() =>
-                setPollQuestionDrafts((currentDrafts) => [...currentDrafts, createEmptyPollQuestionDraft()])
-              }
-            >
-              Add another question
-            </button>
-            <button className="button" disabled={isMutating} type="button" onClick={handleSavePollQuestions}>
-              Save poll questions
-            </button>
-          </div>
 
           {pollQuestions.length ? (
             <div className="question-card">
@@ -3362,6 +3753,16 @@ export function AdminQuestionWorkspace({
       >
         <div className="form-stack">
           <div className="question-card form-stack">
+            <div className="field">
+              <label htmlFor="poll-title">Topic or purpose</label>
+              <input
+                id="poll-title"
+                placeholder="Parent feedback poll"
+                value={pollScheduleTitle}
+                onChange={(event) => setPollScheduleTitle(event.target.value)}
+              />
+            </div>
+
             <div className="field">
               <label>Start now</label>
               <div className="selection-grid">
@@ -4014,12 +4415,44 @@ export function AdminQuestionWorkspace({
               <div className="request-list">
                 {outgoingGroupJoinRequests.map((request) => (
                   <article className="request-card" key={`admin-request-${request.id}`}>
-                    <strong>{request.adminGroupName}</strong>
-                    <p className="muted-text">Requested as {request.requesterLabel}</p>
-                    <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
-                    <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
-                      {request.status}
-                    </span>
+                    <div>
+                      <strong>{request.adminGroupName}</strong>
+                      {request.requestType === "admin-invite" ? (
+                        <>
+                          <p className="muted-text">Invited by {request.adminLabel}</p>
+                          <p className="muted-text">Contact: {request.adminIdentifier}</p>
+                          <p className="muted-text">Invitation sent {formatShortDateTime(request.requestedAt)}</p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="muted-text">Requested as {request.requesterLabel}</p>
+                          <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
+                        </>
+                      )}
+                    </div>
+                    <div className="inline-actions">
+                      <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
+                        {request.status}
+                      </span>
+                      {request.status === "pending" && request.requestType === "admin-invite" ? (
+                        <>
+                          <button
+                            className="button-secondary small-button"
+                            type="button"
+                            onClick={() => void handleResolveOwnGroupInvite(request.id, "accept")}
+                          >
+                            Accept
+                          </button>
+                          <button
+                            className="button-secondary small-button"
+                            type="button"
+                            onClick={() => void handleResolveOwnGroupInvite(request.id, "reject")}
+                          >
+                            Reject
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
                   </article>
                 ))}
               </div>

@@ -132,34 +132,24 @@ export function RestrictedUserDashboardWorkspace({
     return new Date(rightPoll.startsAt).getTime() - new Date(leftPoll.startsAt).getTime();
   });
   const notificationBaseline = previousSignInAt ? new Date(previousSignInAt).getTime() : null;
-  const pendingGroupRequestsCount = groupJoinRequests.filter((request) => request.status === "pending").length;
-  const completedTestsCount = sortedAvailableTests.filter((test) => test.status === "completed").length;
   const liveTestsCount = sortedAvailableTests.filter((test) => test.status === "live").length;
   const livePollsCount = sortedAvailablePolls.filter((poll) => poll.status === "live").length;
-  const newTestsSinceLastSignInCount = notificationBaseline === null
-    ? 0
-    : sortedAvailableTests.filter((test) => new Date(test.createdAt).getTime() > notificationBaseline).length;
-  const newPollsSinceLastSignInCount = notificationBaseline === null
-    ? 0
-    : sortedAvailablePolls.filter((poll) => new Date(poll.createdAt).getTime() > notificationBaseline).length;
+  const upcomingTestsCount = sortedAvailableTests.filter((test) => test.status === "scheduled").length;
+  const upcomingPollsCount = sortedAvailablePolls.filter((poll) => poll.status === "scheduled").length;
   const releasedTestResultsCount = notificationBaseline === null
-    ? 0
+    ? sortedAvailableTests.filter((test) => test.status === "completed").length
     : sortedAvailableTests.filter(
       (test) => test.status === "completed" && new Date(test.updatedAt).getTime() > notificationBaseline,
     ).length;
   const releasedPollResultsCount = notificationBaseline === null
-    ? 0
+    ? sortedAvailablePolls.filter((poll) => poll.status === "completed").length
     : sortedAvailablePolls.filter(
       (poll) => poll.status === "completed" && new Date(poll.updatedAt).getTime() > notificationBaseline,
     ).length;
   const notificationItems: NotificationBellItem[] = [
-    { count: liveTestsCount, label: "Live tests" },
-    { count: livePollsCount, label: "Live polls" },
-    { count: newTestsSinceLastSignInCount, label: "New tests since last sign in" },
-    { count: newPollsSinceLastSignInCount, label: "New polls since last sign in" },
-    { count: releasedTestResultsCount, label: "Test results released since last sign in" },
-    { count: releasedPollResultsCount, label: "Poll results released since last sign in" },
-    { count: pendingGroupRequestsCount, label: "Group requests pending" },
+    { count: liveTestsCount + livePollsCount, label: "Live tests and polls" },
+    { count: upcomingTestsCount + upcomingPollsCount, label: "Upcoming tests and polls" },
+    { count: releasedTestResultsCount + releasedPollResultsCount, label: "Released results" },
   ];
 
   async function loadDashboard(nextIdentifier?: string) {
@@ -360,12 +350,42 @@ export function RestrictedUserDashboardWorkspace({
     }
   }
 
+  async function handleResolveGroupInvite(requestId: string, decision: "accept" | "reject") {
+    try {
+      const payload = await readJson<{ groupJoinRequests: GroupJoinRequest[] }>(
+        await fetch("/api/user/groups", {
+          body: JSON.stringify({
+            decision,
+            mode: "resolve-request",
+            requestId,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setGroupJoinRequests(payload.groupJoinRequests);
+      await loadDashboard();
+      setGroupSearchFeedback(
+        decision === "accept"
+          ? "Group invitation accepted. You can now use this group."
+          : "Group invitation rejected.",
+      );
+    } catch (error) {
+      setGroupSearchFeedback(
+        error instanceof Error ? error.message : "Unable to update the group invitation.",
+      );
+    }
+  }
+
   return (
     <div className="workspace-stack">
       <div className="workspace-toolbar">
         <NotificationBell
           items={notificationItems}
-          subtitle={notificationBaseline === null ? "Counts reflect the current dashboard state." : "Counts are measured from your previous sign in."}
+          subtitle={notificationBaseline === null ? "Counts reflect the current dashboard state." : "Released results are measured from your previous sign in."}
           title="User dashboard alerts"
         />
       </div>
@@ -679,12 +699,44 @@ export function RestrictedUserDashboardWorkspace({
                     <div className="request-list">
                       {groupJoinRequests.map((request) => (
                         <article className="request-card" key={request.id}>
-                          <strong>{request.adminGroupName}</strong>
-                          <p className="muted-text">Requested as {request.requesterLabel}</p>
-                          <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
-                          <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
-                            {request.status}
-                          </span>
+                          <div>
+                            <strong>{request.adminGroupName}</strong>
+                            {request.requestType === "admin-invite" ? (
+                              <>
+                                <p className="muted-text">Invited by {request.adminLabel}</p>
+                                <p className="muted-text">Contact: {request.adminIdentifier}</p>
+                                <p className="muted-text">Invitation sent {formatShortDateTime(request.requestedAt)}</p>
+                              </>
+                            ) : (
+                              <>
+                                <p className="muted-text">Requested as {request.requesterLabel}</p>
+                                <p className="muted-text">Requested {formatShortDateTime(request.requestedAt)}</p>
+                              </>
+                            )}
+                          </div>
+                          <div className="inline-actions">
+                            <span className={`status-chip ${request.status === "accepted" ? "success" : request.status === "rejected" ? "warning" : ""}`}>
+                              {request.status}
+                            </span>
+                            {request.status === "pending" && request.requestType === "admin-invite" ? (
+                              <>
+                                <button
+                                  className="button-secondary small-button"
+                                  type="button"
+                                  onClick={() => void handleResolveGroupInvite(request.id, "accept")}
+                                >
+                                  Accept
+                                </button>
+                                <button
+                                  className="button-secondary small-button"
+                                  type="button"
+                                  onClick={() => void handleResolveGroupInvite(request.id, "reject")}
+                                >
+                                  Reject
+                                </button>
+                              </>
+                            ) : null}
+                          </div>
                         </article>
                       ))}
                     </div>

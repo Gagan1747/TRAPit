@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { type PollParticipantType, type PollQuestionDraft } from "@trapit/testing";
+import { type PollParticipantType, type PollQuestionDraft, type WorkspaceBranding } from "@trapit/testing";
 
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 import { assertCanCreatePollQuestions, assertCanSchedulePoll } from "../../../../lib/user-category-limits";
@@ -18,6 +18,7 @@ type PollBody =
     }
   | {
       anonymous?: boolean;
+      branding?: WorkspaceBranding | null;
       endsAt?: string;
       generateQrCode?: boolean;
       mode?: "schedule-poll";
@@ -29,6 +30,7 @@ type PollBody =
     }
   | {
       anonymous?: boolean;
+      branding?: WorkspaceBranding | null;
       endsAt?: string;
       generateQrCode?: boolean;
       mode?: "update-poll";
@@ -119,6 +121,7 @@ export async function POST(request: Request) {
     try {
       const scheduledPolls = await createScheduledPoll({
         anonymous: Boolean(body.anonymous),
+        branding: body.branding ?? null,
         createdBy: actor.sub,
         creatorDisplayName: actor.displayName,
         creatorIdentifier: actor.identifier,
@@ -168,6 +171,7 @@ export async function POST(request: Request) {
     try {
       const scheduledPolls = await updateScheduledPoll({
         anonymous: Boolean(body.anonymous),
+        branding: body.branding ?? null,
         createdBy: actor.sub,
         creatorDisplayName: actor.displayName,
         creatorIdentifier: actor.identifier,

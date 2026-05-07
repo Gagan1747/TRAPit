@@ -9,6 +9,7 @@ import {
 import {
   createEntityId,
   createPersistentPollQuestion,
+  normalizeWorkspaceBranding,
   normalizePollQuestionDraft,
   resolveScheduledPollStatus,
   validatePollQuestionDraft,
@@ -17,12 +18,14 @@ import {
   type PollQuestionDraft,
   type PersistentPollQuestion,
   type ScheduledPoll,
+  type WorkspaceBranding,
 } from "@trapit/testing";
 
 import { getDynamoDbDocumentClient } from "./dynamodb";
 
 type CreateScheduledPollInput = {
   anonymous: boolean;
+  branding?: WorkspaceBranding | null;
   createdBy: string | null;
   creatorDisplayName?: string | null;
   creatorIdentifier?: string | null;
@@ -129,6 +132,7 @@ async function scanAllItems<T>(tableName: string): Promise<T[]> {
 function hydrateScheduledPolls(polls: ScheduledPoll[]) {
   return polls.map((poll) => ({
     ...poll,
+    branding: normalizeWorkspaceBranding(poll.branding),
     creatorDisplayName: poll.creatorDisplayName ?? null,
     creatorIdentifier: poll.creatorIdentifier ?? null,
     status: resolveScheduledPollStatus(poll),
@@ -359,6 +363,7 @@ export async function createScheduledPollInBackend(input: CreateScheduledPollInp
   const timestamp = new Date().toISOString();
   const scheduledPoll: ScheduledPoll = {
     anonymous,
+    branding: normalizeWorkspaceBranding(input.branding),
     createdAt: timestamp,
     createdBy: input.createdBy,
     creatorDisplayName: input.creatorDisplayName?.trim() || null,
@@ -448,6 +453,7 @@ export async function updateScheduledPollInBackend(input: UpdateScheduledPollInp
   const nextPoll: ScheduledPoll = {
     ...existingPoll,
     anonymous,
+    branding: normalizeWorkspaceBranding(input.branding) ?? existingPoll.branding ?? null,
     creatorDisplayName: input.creatorDisplayName?.trim() || existingPoll.creatorDisplayName || null,
     creatorIdentifier: input.creatorIdentifier?.trim() || existingPoll.creatorIdentifier || null,
     endsAt: input.endsAt,

@@ -5,7 +5,7 @@ import { AuthShell } from "../../components/auth-shell";
 
 export default function SignUpPage() {
   return (
-    <AuthShell title={authCopy.signInTitle}>
+    <AuthShell title={authCopy.signUpTitle}>
       <Suspense fallback={null}>
         <AuthForm mode="sign-up" />
       </Suspense>

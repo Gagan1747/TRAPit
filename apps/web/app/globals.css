@@ -100,6 +100,7 @@ main {
 .hero-links {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 12px;
   margin-top: 24px;
 }
@@ -114,6 +115,7 @@ main {
   border-radius: 999px;
   border: 1px solid transparent;
   font-weight: 600;
+  line-height: 1;
 }
 
 .button {
@@ -494,6 +496,61 @@ main {
   gap: 12px;
 }
 
+.workspace-overflow {
+  position: relative;
+}
+
+.workspace-overflow-button {
+  min-width: 52px;
+  height: 52px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  border: 1px solid rgba(180, 76, 47, 0.24);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(247, 228, 217, 0.92));
+  color: var(--accent-deep);
+  box-shadow: 0 18px 36px rgba(96, 42, 25, 0.14);
+  font: inherit;
+  font-size: 1.4rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.workspace-overflow-panel {
+  position: absolute;
+  top: calc(100% + 14px);
+  right: 0;
+  z-index: 20;
+  width: min(360px, calc(100vw - 48px));
+}
+
+.workspace-overflow-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.workspace-overflow-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-overflow-action {
+  width: 100%;
+  min-height: 46px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(180, 76, 47, 0.16);
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+}
+
 .notification-bell {
   position: relative;
 }
@@ -560,6 +617,36 @@ main {
   gap: 16px;
   padding: 12px 14px;
   border-radius: 14px;
+  background: rgba(255, 255, 255, 0.6);
+  border: 1px solid rgba(180, 76, 47, 0.16);
+}
+
+.branding-preview-card {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(180, 76, 47, 0.16);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.branding-preview-image,
+.assessment-branding-image {
+  max-width: 100%;
+  width: auto;
+  height: 72px;
+  object-fit: contain;
+}
+
+.assessment-branding {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: 16px;
   background: rgba(255, 255, 255, 0.6);
   border: 1px solid rgba(180, 76, 47, 0.16);
 }
@@ -1076,6 +1163,34 @@ button:disabled {
   font-size: 0.82rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+
+.membership-upgrade-table-wrap {
+  margin-top: 18px;
+}
+
+.membership-upgrade-table {
+  min-width: 960px;
+}
+
+.membership-upgrade-table td {
+  white-space: nowrap;
+}
+
+.membership-upgrade-table td:first-child {
+  white-space: normal;
+  min-width: 190px;
+}
+
+.membership-upgrade-row.is-recommended {
+  background: rgba(180, 76, 47, 0.08);
+}
+
+.membership-upgrade-note {
+  margin-top: 6px;
+  color: var(--accent-deep);
+  font-size: 0.84rem;
+  line-height: 1.4;
 }
 
 @media (max-width: 900px) {

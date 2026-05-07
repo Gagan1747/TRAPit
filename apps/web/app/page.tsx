@@ -19,7 +19,7 @@ export default function HomePage() {
         <div>
           <h2>Welcome to TRAPit</h2>
           <p className="muted-text">
-            Tests made easier.
+            Tests and Poll made easier.
           </p>
         </div>
         {authConfigured ? (
