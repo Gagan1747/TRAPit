@@ -2318,7 +2318,9 @@ export function AdminQuestionWorkspace({
   const groupMenuItems: Array<{ label: string; section: AdminWorkspaceSection }> = [
     { label: "Create", section: "create-groups" },
     { label: "Manage", section: "manage-groups" },
-    ...(activeParticipantTestId ? [] : [{ label: "Join", section: "join-groups" }]),
+    ...(activeParticipantTestId
+      ? []
+      : ([{ label: "Join", section: "join-groups" }] satisfies Array<{ label: string; section: AdminWorkspaceSection }>)),
   ];
   const sortedScheduledPolls = [...scheduledPolls].sort((leftPoll, rightPoll) => {
     const priorityDifference =
