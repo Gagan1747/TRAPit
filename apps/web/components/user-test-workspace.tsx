@@ -742,160 +742,163 @@ export function UserTestWorkspace({
               (() => {
                 const historyEntry = historyByTestId.get(test.id);
                 const isCompleted = test.status === "completed";
+                const statusLabel = isCompleted
+                  ? historyEntry?.status === "missed"
+                    ? "missed"
+                    : "completed"
+                  : test.status;
 
                 return (
-                  <article className="question-card" key={test.id}>
-                    <div className="question-head">
-                      <strong>{test.title}</strong>
+                  <details className="question-card result-card" key={test.id}>
+                    <summary className="result-card-summary">
+                      <div className="result-card-summary-main">
+                        <strong>{test.title}</strong>
+                        {typeof historyEntry?.rank === "number" ? <span className="result-card-summary-meta">Rank {historyEntry.rank}</span> : null}
+                        <span className="result-card-summary-meta">{formatShortDateTime(test.startsAt)}</span>
+                      </div>
                       <span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>
-                        {isCompleted
-                          ? historyEntry?.status === "missed"
-                            ? "missed"
-                            : "completed"
-                          : test.status}
+                        {statusLabel}
                       </span>
-                    </div>
-                    <p className="muted-text">Starts {formatShortDateTime(test.startsAt)}</p>
-                    <p className="muted-text">
-                      {test.questionCount} questions, {test.durationMinutes} minutes
-                    </p>
+                    </summary>
+                    <div className="result-card-body">
+                      <p className="muted-text">
+                        {test.questionCount} questions, {test.durationMinutes} minutes
+                      </p>
 
-                    {isCompleted ? (
-                      historyEntry?.status === "missed" ? (
-                        <>
-                          <p className="muted-text">This test closed without a submission.</p>
-                          <div className="inline-actions">
-                            <button
-                              className="button-secondary small-button"
-                              disabled={reviewLoadingByTestId[test.id]}
-                              type="button"
-                              onClick={() => void handleLoadReview(test.id)}
-                            >
-                              {reviewLoadingByTestId[test.id]
-                                ? "Loading..."
-                                : visibleReviewTestIds.includes(test.id)
-                                  ? "Hide review"
-                                  : "Review questions"}
-                            </button>
-                          </div>
-                        </>
-                      ) : historyEntry ? (
-                        <>
-                          <p className="muted-text">
-                            Submitted as {historyEntry.participantName?.trim() || historyEntry.participantId}
-                          </p>
-                          <p className="muted-text">
-                            Score {historyEntry.correctCount}/{historyEntry.totalCount}
-                          </p>
-                          <p className="muted-text">Time taken {formatElapsedTime(historyEntry.elapsedMs)}</p>
-                          {typeof historyEntry.rank === "number" ? (
-                            <p className="muted-text">Rank {historyEntry.rank}</p>
-                          ) : null}
-                          {test.topPerformer ? (
+                      {isCompleted ? (
+                        historyEntry?.status === "missed" ? (
+                          <>
+                            <p className="muted-text">This test closed without a submission.</p>
+                            <div className="inline-actions">
+                              <button
+                                className="button-secondary small-button"
+                                disabled={reviewLoadingByTestId[test.id]}
+                                type="button"
+                                onClick={() => void handleLoadReview(test.id)}
+                              >
+                                {reviewLoadingByTestId[test.id]
+                                  ? "Loading..."
+                                  : visibleReviewTestIds.includes(test.id)
+                                    ? "Hide review"
+                                    : "Review questions"}
+                              </button>
+                            </div>
+                          </>
+                        ) : historyEntry ? (
+                          <>
                             <p className="muted-text">
-                              Topper {test.topPerformer.participantName}: {test.topPerformer.correctCount}/{historyEntry.totalCount} in {formatElapsedTime(test.topPerformer.elapsedMs)}
+                              Submitted as {historyEntry.participantName?.trim() || historyEntry.participantId}
                             </p>
-                          ) : null}
-                          <div className="inline-actions">
-                            <button
-                              className="button-secondary small-button"
-                              disabled={reviewLoadingByTestId[test.id]}
-                              type="button"
-                              onClick={() => void handleLoadReview(test.id)}
-                            >
-                              {reviewLoadingByTestId[test.id]
-                                ? "Loading..."
-                                : visibleReviewTestIds.includes(test.id)
-                                  ? "Hide review"
-                                  : "Review questions"}
-                            </button>
-                          </div>
-                        </>
+                            <p className="muted-text">
+                              Score {historyEntry.correctCount}/{historyEntry.totalCount}
+                            </p>
+                            <p className="muted-text">Time taken {formatElapsedTime(historyEntry.elapsedMs)}</p>
+                            {test.topPerformer ? (
+                              <p className="muted-text">
+                                Topper {test.topPerformer.participantName}: {test.topPerformer.correctCount}/{historyEntry.totalCount} in {formatElapsedTime(test.topPerformer.elapsedMs)}
+                              </p>
+                            ) : null}
+                            <div className="inline-actions">
+                              <button
+                                className="button-secondary small-button"
+                                disabled={reviewLoadingByTestId[test.id]}
+                                type="button"
+                                onClick={() => void handleLoadReview(test.id)}
+                              >
+                                {reviewLoadingByTestId[test.id]
+                                  ? "Loading..."
+                                  : visibleReviewTestIds.includes(test.id)
+                                    ? "Hide review"
+                                    : "Review questions"}
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <p className="muted-text">This test is completed.</p>
+                            {test.topPerformer ? (
+                              <p className="muted-text">
+                                Topper {test.topPerformer.participantName}: {test.topPerformer.correctCount}/{test.questionCount} in {formatElapsedTime(test.topPerformer.elapsedMs)}
+                              </p>
+                            ) : null}
+                            <div className="inline-actions">
+                              <button
+                                className="button-secondary small-button"
+                                disabled={reviewLoadingByTestId[test.id]}
+                                type="button"
+                                onClick={() => void handleLoadReview(test.id)}
+                              >
+                                {reviewLoadingByTestId[test.id]
+                                  ? "Loading..."
+                                  : visibleReviewTestIds.includes(test.id)
+                                    ? "Hide review"
+                                    : "Review questions"}
+                              </button>
+                            </div>
+                          </>
+                        )
                       ) : (
                         <>
-                          <p className="muted-text">This test is completed.</p>
-                          {test.topPerformer ? (
-                            <p className="muted-text">
-                              Topper {test.topPerformer.participantName}: {test.topPerformer.correctCount}/{test.questionCount} in {formatElapsedTime(test.topPerformer.elapsedMs)}
-                            </p>
-                          ) : null}
+                          <div className="field">
+                            <label htmlFor={`participant-name-${test.id}`}>Your name for this test</label>
+                            <input
+                              id={`participant-name-${test.id}`}
+                              placeholder="Enter your name before starting"
+                              value={participantNamesByTest[test.id] ?? ""}
+                              onChange={(event) =>
+                                setParticipantNamesByTest((current) => ({
+                                  ...current,
+                                  [test.id]: event.target.value,
+                                }))
+                              }
+                            />
+                          </div>
                           <div className="inline-actions">
                             <button
-                              className="button-secondary small-button"
-                              disabled={reviewLoadingByTestId[test.id]}
+                              className="button"
+                              disabled={test.status !== "live" || test.hasAttempt || !(participantNamesByTest[test.id] ?? "").trim()}
                               type="button"
-                              onClick={() => void handleLoadReview(test.id)}
+                              onClick={() => startTest(test.id)}
                             >
-                              {reviewLoadingByTestId[test.id]
-                                ? "Loading..."
-                                : visibleReviewTestIds.includes(test.id)
-                                  ? "Hide review"
-                                  : "Review questions"}
+                              {test.hasAttempt
+                                ? "Already submitted"
+                                : test.status === "scheduled"
+                                  ? "Not live yet"
+                                  : "Start test"}
                             </button>
                           </div>
                         </>
-                      )
-                    ) : (
-                      <>
-                        <div className="field">
-                          <label htmlFor={`participant-name-${test.id}`}>Your name for this test</label>
-                          <input
-                            id={`participant-name-${test.id}`}
-                            placeholder="Enter your name before starting"
-                            value={participantNamesByTest[test.id] ?? ""}
-                            onChange={(event) =>
-                              setParticipantNamesByTest((current) => ({
-                                ...current,
-                                [test.id]: event.target.value,
-                              }))
-                            }
-                          />
-                        </div>
-                        <div className="inline-actions">
-                          <button
-                            className="button"
-                            disabled={test.status !== "live" || test.hasAttempt || !(participantNamesByTest[test.id] ?? "").trim()}
-                            type="button"
-                            onClick={() => startTest(test.id)}
-                          >
-                            {test.hasAttempt
-                              ? "Already submitted"
-                              : test.status === "scheduled"
-                                ? "Not live yet"
-                                : "Start test"}
-                          </button>
-                        </div>
-                      </>
-                    )}
+                      )}
 
-                    {visibleReviewTestIds.includes(test.id) && reviewByTestId[test.id] ? (
-                      <div className="review-list">
-                        {reviewByTestId[test.id].review.map((question, reviewIndex) => (
-                          <article className="question-card nested-card" key={`${test.id}-review-${question.questionId}`}>
-                            <div className="question-head">
-                              <strong>Question {reviewIndex + 1}</strong>
-                              <span className="status-chip success">
-                                Correct option {question.correctOptionIndex + 1}
-                              </span>
-                            </div>
-                            <p>{question.prompt}</p>
-                            <ol className="question-options compact-question-options">
-                              {question.options.map((option, optionIndex) => (
-                                <li key={`${question.questionId}-${optionIndex}`}>
-                                  {option}
-                                  {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
-                                  {optionIndex === question.selectedOptionIndex ? " (your answer)" : ""}
-                                </li>
-                              ))}
-                            </ol>
-                            <p className="muted-text">
-                              Your response: {formatAnswerLabel(question.selectedOptionIndex, question.options)}
-                            </p>
-                          </article>
-                        ))}
-                      </div>
-                    ) : null}
-                  </article>
+                      {visibleReviewTestIds.includes(test.id) && reviewByTestId[test.id] ? (
+                        <div className="review-list">
+                          {reviewByTestId[test.id].review.map((question, reviewIndex) => (
+                            <article className="question-card nested-card" key={`${test.id}-review-${question.questionId}`}>
+                              <div className="question-head">
+                                <strong>Question {reviewIndex + 1}</strong>
+                                <span className="status-chip success">
+                                  Correct option {question.correctOptionIndex + 1}
+                                </span>
+                              </div>
+                              <p>{question.prompt}</p>
+                              <ol className="question-options compact-question-options">
+                                {question.options.map((option, optionIndex) => (
+                                  <li key={`${question.questionId}-${optionIndex}`}>
+                                    {option}
+                                    {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
+                                    {optionIndex === question.selectedOptionIndex ? " (your answer)" : ""}
+                                  </li>
+                                ))}
+                              </ol>
+                              <p className="muted-text">
+                                Your response: {formatAnswerLabel(question.selectedOptionIndex, question.options)}
+                              </p>
+                            </article>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </details>
                 );
               })()
             ))}

@@ -526,11 +526,25 @@ main {
   width: min(360px, calc(100vw - 48px));
   padding: 18px;
   box-sizing: border-box;
+  overflow: hidden;
 }
 
 .workspace-overflow-stack {
   display: grid;
   gap: 16px;
+  min-width: 0;
+}
+
+.workspace-overflow-panel .field,
+.workspace-overflow-panel .inline-actions,
+.workspace-overflow-panel input,
+.workspace-overflow-panel textarea {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.workspace-overflow-panel input[type="file"] {
+  width: 100%;
 }
 
 .workspace-overflow-head {
@@ -627,10 +641,13 @@ main {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
   padding: 12px;
   border-radius: 16px;
   border: 1px solid rgba(180, 76, 47, 0.16);
   background: rgba(255, 255, 255, 0.72);
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .branding-preview-image,
@@ -651,6 +668,48 @@ main {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.6);
   border: 1px solid rgba(180, 76, 47, 0.16);
+}
+
+.result-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.result-card-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 20px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.result-card-summary::-webkit-details-marker {
+  display: none;
+}
+
+.result-card-summary-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.result-card-summary-meta {
+  color: var(--muted);
+  font-size: 0.94rem;
+}
+
+.result-card[open] .result-card-summary {
+  border-bottom: 1px solid rgba(180, 76, 47, 0.16);
+}
+
+.result-card-body {
+  display: grid;
+  gap: 16px;
+  padding: 18px 20px 20px;
 }
 
 .sr-only {

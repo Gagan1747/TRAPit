@@ -4083,40 +4083,54 @@ export function AdminQuestionWorkspace({
                     : test.hasAdminScope
                       ? "Scheduled as admin"
                       : "Attended as participant";
+                const summaryRank = typeof participantHistoryEntry?.rank === "number"
+                  ? participantHistoryEntry.rank
+                  : null;
 
                 return (
-                  <article className="question-card" key={`merged-test-${test.id}`}>
-                    <div className="question-head">
-                      <strong>{test.title}</strong>
-                      <div className="inline-actions">
-                        {scheduledTest && scheduledTest.status === "scheduled" ? (
-                          <button
-                            className="button-secondary small-button"
-                            type="button"
-                            onClick={() =>
-                              scheduledTest.participantIds.length
-                                ? handleStartEditingSelfTest(scheduledTest)
-                                : handleStartEditingScheduledTest(scheduledTest)
-                            }
-                          >
-                            Edit test
-                          </button>
-                        ) : null}
-                        <span className="status-chip success">{scopeLabel}</span>
-                        <span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>
-                          {test.status}
-                        </span>
+                  <details className="question-card result-card" key={`merged-test-${test.id}`}>
+                    <summary className="result-card-summary">
+                      <div className="result-card-summary-main">
+                        <strong>{test.title}</strong>
+                        {summaryRank !== null ? <span className="result-card-summary-meta">Rank {summaryRank}</span> : null}
+                        <span className="result-card-summary-meta">{formatShortDateTime(test.startsAt)}</span>
                       </div>
-                    </div>
-                    <p className="muted-text">
-                      Pool: {pools.find((pool) => pool.id === test.poolId)?.name ?? "Unknown pool"}
-                    </p>
-                    <p className="muted-text">Starts: {formatShortDateTime(test.startsAt)}</p>
-                    <p className="muted-text">Duration: {test.durationMinutes} min</p>
-                    <p className="muted-text">Questions: {test.questionCount}</p>
+                      <span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>
+                        {test.status}
+                      </span>
+                    </summary>
+                    <div className="result-card-body">
+                      <div className="question-head">
+                        <strong>{test.title}</strong>
+                        <div className="inline-actions">
+                          {scheduledTest && scheduledTest.status === "scheduled" ? (
+                            <button
+                              className="button-secondary small-button"
+                              type="button"
+                              onClick={() =>
+                                scheduledTest.participantIds.length
+                                  ? handleStartEditingSelfTest(scheduledTest)
+                                  : handleStartEditingScheduledTest(scheduledTest)
+                              }
+                            >
+                              Edit test
+                            </button>
+                          ) : null}
+                          <span className="status-chip success">{scopeLabel}</span>
+                          <span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>
+                            {test.status}
+                          </span>
+                        </div>
+                      </div>
+                      <p className="muted-text">
+                        Pool: {pools.find((pool) => pool.id === test.poolId)?.name ?? "Unknown pool"}
+                      </p>
+                      <p className="muted-text">Starts: {formatShortDateTime(test.startsAt)}</p>
+                      <p className="muted-text">Duration: {test.durationMinutes} min</p>
+                      <p className="muted-text">Questions: {test.questionCount}</p>
 
-                    {scheduledTest ? (
-                      <div className="form-stack">
+                      {scheduledTest ? (
+                        <div className="form-stack">
                         <p className="muted-text">
                           Participants: {scheduledTest.resolvedParticipantIdentifiers.length
                             ? scheduledTest.resolvedParticipantIdentifiers
@@ -4282,7 +4296,8 @@ export function AdminQuestionWorkspace({
                         </div>
                       </div>
                     ) : null}
-                  </article>
+                    </div>
+                  </details>
                 );
               })}
               </div>
@@ -4308,65 +4323,76 @@ export function AdminQuestionWorkspace({
                       : "Available as participant";
 
                 return (
-                  <article className="question-card" key={`merged-poll-${poll.id}`}>
-                    <div className="question-head">
-                      <strong>{resolvedPoll.title}</strong>
-                      <div className="inline-actions">
-                        <span className="status-chip success">{scopeLabel}</span>
-                        <span className={`status-chip ${resolvedPoll.status === "live" ? "success" : "warning"}`}>
-                          {resolvedPoll.status}
-                        </span>
+                  <details className="question-card result-card" key={`merged-poll-${poll.id}`}>
+                    <summary className="result-card-summary">
+                      <div className="result-card-summary-main">
+                        <strong>{resolvedPoll.title}</strong>
+                        <span className="result-card-summary-meta">{formatShortDateTime(resolvedPoll.startsAt)}</span>
                       </div>
-                    </div>
-                    <p className="muted-text">Starts: {formatShortDateTime(resolvedPoll.startsAt)}</p>
-                    <p className="muted-text">Ends: {formatShortDateTime(resolvedPoll.endsAt)}</p>
-                    <p className="muted-text">Questions: {resolvedPoll.questionIds.length}</p>
-                    <p className="muted-text">Participant type: {resolvedPoll.participantType === "registered" ? "Shared with groups" : "Open to all"}</p>
-                    <p className="muted-text">Anonymity: {resolvedPoll.anonymous ? "Anonymous" : "Named"}</p>
-                    {resolvedPoll.participantType === "registered" ? (
-                      <p className="muted-text">
-                        Groups: {resolvedPoll.participantGroupIds.length
-                          ? resolvedPoll.participantGroupIds
-                              .map((groupId) => participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group")
-                              .join(", ")
-                          : "None"}
-                      </p>
-                    ) : null}
-                    {resolvedPoll.shareCode ? <p className="muted-text">Access code: {resolvedPoll.shareCode}</p> : null}
-                    {resolvedPoll.shareCode ? (
-                      <p className="muted-text">
-                        URL: <a href={getPollAccessUrl(resolvedPoll.shareCode)} target="_blank" rel="noreferrer">{getPollAccessUrl(resolvedPoll.shareCode)}</a>
-                      </p>
-                    ) : null}
-                    {resolvedPoll.shareCode ? (
-                      <div className="form-stack">
+                      <span className={`status-chip ${resolvedPoll.status === "live" ? "success" : "warning"}`}>
+                        {resolvedPoll.status}
+                      </span>
+                    </summary>
+                    <div className="result-card-body">
+                      <div className="question-head">
+                        <strong>{resolvedPoll.title}</strong>
                         <div className="inline-actions">
-                          <a
-                            className="button-secondary small-button"
-                            href={getPollAccessUrl(resolvedPoll.shareCode)}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Open poll page
-                          </a>
+                          <span className="status-chip success">{scopeLabel}</span>
+                          <span className={`status-chip ${resolvedPoll.status === "live" ? "success" : "warning"}`}>
+                            {resolvedPoll.status}
+                          </span>
                         </div>
-                        {pollQrCodes[resolvedPoll.id] ? (
-                          <img alt={`QR code for ${resolvedPoll.title}`} height={180} src={pollQrCodes[resolvedPoll.id]} width={180} />
-                        ) : null}
                       </div>
-                    ) : null}
-                    {poll.scheduledPoll ? (
-                      resolvedPoll.status === "completed" ? (
-                        <p className="muted-text">Poll response summaries will appear here when poll participation is recorded.</p>
-                      ) : resolvedPoll.status === "live" ? (
-                        <p className="muted-text">This poll is live. Response summaries will populate here as participants submit.</p>
+                      <p className="muted-text">Starts: {formatShortDateTime(resolvedPoll.startsAt)}</p>
+                      <p className="muted-text">Ends: {formatShortDateTime(resolvedPoll.endsAt)}</p>
+                      <p className="muted-text">Questions: {resolvedPoll.questionIds.length}</p>
+                      <p className="muted-text">Participant type: {resolvedPoll.participantType === "registered" ? "Shared with groups" : "Open to all"}</p>
+                      <p className="muted-text">Anonymity: {resolvedPoll.anonymous ? "Anonymous" : "Named"}</p>
+                      {resolvedPoll.participantType === "registered" ? (
+                        <p className="muted-text">
+                          Groups: {resolvedPoll.participantGroupIds.length
+                            ? resolvedPoll.participantGroupIds
+                                .map((groupId) => participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group")
+                                .join(", ")
+                            : "None"}
+                        </p>
+                      ) : null}
+                      {resolvedPoll.shareCode ? <p className="muted-text">Access code: {resolvedPoll.shareCode}</p> : null}
+                      {resolvedPoll.shareCode ? (
+                        <p className="muted-text">
+                          URL: <a href={getPollAccessUrl(resolvedPoll.shareCode)} target="_blank" rel="noreferrer">{getPollAccessUrl(resolvedPoll.shareCode)}</a>
+                        </p>
+                      ) : null}
+                      {resolvedPoll.shareCode ? (
+                        <div className="form-stack">
+                          <div className="inline-actions">
+                            <a
+                              className="button-secondary small-button"
+                              href={getPollAccessUrl(resolvedPoll.shareCode)}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open poll page
+                            </a>
+                          </div>
+                          {pollQrCodes[resolvedPoll.id] ? (
+                            <img alt={`QR code for ${resolvedPoll.title}`} height={180} src={pollQrCodes[resolvedPoll.id]} width={180} />
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {poll.scheduledPoll ? (
+                        resolvedPoll.status === "completed" ? (
+                          <p className="muted-text">Poll response summaries will appear here when poll participation is recorded.</p>
+                        ) : resolvedPoll.status === "live" ? (
+                          <p className="muted-text">This poll is live. Response summaries will populate here as participants submit.</p>
+                        ) : (
+                          <p className="muted-text">This poll has not opened yet.</p>
+                        )
                       ) : (
-                        <p className="muted-text">This poll has not opened yet.</p>
-                      )
-                    ) : (
-                      <p className="muted-text">This poll is available in your participant scope.</p>
-                    )}
-                  </article>
+                        <p className="muted-text">This poll is available in your participant scope.</p>
+                      )}
+                    </div>
+                  </details>
                 );
               })}
             </div>
