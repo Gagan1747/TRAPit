@@ -524,11 +524,13 @@ main {
   right: 0;
   z-index: 20;
   width: min(360px, calc(100vw - 48px));
+  padding: 18px;
+  box-sizing: border-box;
 }
 
 .workspace-overflow-stack {
   display: grid;
-  gap: 14px;
+  gap: 16px;
 }
 
 .workspace-overflow-head {
@@ -681,6 +683,9 @@ main {
 }
 
 .segmented-control-item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 46px;
   padding: 0 16px;
   border: 0;
@@ -689,7 +694,10 @@ main {
   color: var(--muted);
   font: inherit;
   font-weight: 700;
+  line-height: 1;
   text-align: center;
+  text-decoration: none;
+  vertical-align: middle;
 }
 
 .segmented-control-item.is-active {
@@ -1173,16 +1181,18 @@ button:disabled {
   min-width: 960px;
 }
 
-.membership-upgrade-table td {
+.membership-upgrade-table td,
+.membership-upgrade-table th {
   white-space: nowrap;
 }
 
-.membership-upgrade-table td:first-child {
+.membership-upgrade-table th:first-child,
+.membership-upgrade-table tbody th {
   white-space: normal;
   min-width: 190px;
 }
 
-.membership-upgrade-row.is-recommended {
+.membership-upgrade-column.is-recommended {
   background: rgba(180, 76, 47, 0.08);
 }
 

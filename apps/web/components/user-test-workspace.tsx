@@ -252,8 +252,11 @@ export function UserTestWorkspace({
     }));
 
     try {
+      const query = !authConfigured
+        ? `?participantId=${encodeURIComponent(identifierRef.current)}`
+        : "";
       const payload = await readJson<UserTestReviewResponse>(
-        await fetch(`/api/user/tests/${testId}/review`),
+        await fetch(`/api/user/tests/${testId}/review${query}`),
       );
 
       setReviewByTestId((currentReviews) => ({

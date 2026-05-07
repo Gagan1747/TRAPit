@@ -631,11 +631,9 @@ function ParticipantSearchPicker({
             ))}
           </div>
         ) : hasSearchQuery ? (
-          <p className="muted-text">
-            {searchQuery.trim().replace(/\D/g, "").length > 0 && searchQuery.trim().replace(/\D/g, "").length < 10
-              ? "Enter the complete phone number to reveal the participant name."
-              : "No participant was found for that exact phone number."}
-          </p>
+          searchQuery.trim().replace(/\D/g, "").length >= 10 ? (
+            <p className="muted-text">No participant was found for that exact phone number.</p>
+          ) : null
         ) : null
       ) : (
         <p className="muted-text">Add participants first, then include them in a group.</p>
@@ -2556,36 +2554,73 @@ export function AdminQuestionWorkspace({
                       <table className="leaderboard-table membership-upgrade-table">
                         <thead>
                           <tr>
-                            <th scope="col">Plan</th>
-                            <th scope="col">Pools</th>
-                            <th scope="col">Questions / pool</th>
-                            <th scope="col">Scheduled tests / month</th>
-                            <th scope="col">Self tests / month</th>
-                            <th scope="col">Poll scheduling</th>
-                            <th scope="col">Open polls</th>
-                            <th scope="col">Group management</th>
-                            <th scope="col">Status</th>
+                            <th scope="col">Feature</th>
+                            {suggestedUpgradePlans.map((plan) => {
+                              const isHighlighted = plan.category === suggestedUpgradeCategory;
+
+                              return (
+                                <th
+                                  key={plan.category}
+                                  className={isHighlighted ? "membership-upgrade-column is-recommended" : "membership-upgrade-column"}
+                                  scope="col"
+                                >
+                                  <strong>{plan.label.replace(/ users$/i, " user")}</strong>
+                                  {isHighlighted ? <div className="membership-upgrade-note">Recommended for the selected feature.</div> : null}
+                                </th>
+                              );
+                            })}
                           </tr>
                         </thead>
                         <tbody>
-                          {suggestedUpgradePlans.map((plan) => {
-                            const isHighlighted = plan.category === suggestedUpgradeCategory;
-                            const hasPendingRequest = userPendingCategoryRequest?.requestedCategory === plan.category;
+                          <tr>
+                            <th scope="row">Pools</th>
+                            {suggestedUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-pools`}>{plan.definition.test.maxQuestionPools}</td>
+                            ))}
+                          </tr>
+                          <tr>
+                            <th scope="row">Questions / pool</th>
+                            {suggestedUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-questions`}>{plan.definition.test.maxQuestionsPerPool ?? "Unlimited"}</td>
+                            ))}
+                          </tr>
+                          <tr>
+                            <th scope="row">Scheduled tests / month</th>
+                            {suggestedUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-scheduled-tests`}>{plan.definition.test.maxScheduledTestsPerMonth}</td>
+                            ))}
+                          </tr>
+                          <tr>
+                            <th scope="row">Self tests / month</th>
+                            {suggestedUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-self-tests`}>{plan.definition.test.maxSelfTestsPerMonth}</td>
+                            ))}
+                          </tr>
+                          <tr>
+                            <th scope="row">Poll scheduling</th>
+                            {suggestedUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-poll-schedule`}>{plan.definition.poll.schedule ? "Included" : "Not included"}</td>
+                            ))}
+                          </tr>
+                          <tr>
+                            <th scope="row">Open polls</th>
+                            {suggestedUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-open-polls`}>{plan.definition.poll.shareOpenToAll ? "Included" : "Not included"}</td>
+                            ))}
+                          </tr>
+                          <tr>
+                            <th scope="row">Group management</th>
+                            {suggestedUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-group-management`}>{plan.definition.group.manage ? "Included" : "Not included"}</td>
+                            ))}
+                          </tr>
+                          <tr>
+                            <th scope="row">Status</th>
+                            {suggestedUpgradePlans.map((plan) => {
+                              const hasPendingRequest = userPendingCategoryRequest?.requestedCategory === plan.category;
 
-                            return (
-                              <tr key={plan.category} className={isHighlighted ? "membership-upgrade-row is-recommended" : "membership-upgrade-row"}>
-                                <td>
-                                  <strong>{plan.label.replace(/ users$/i, " user")}</strong>
-                                  {isHighlighted ? <div className="membership-upgrade-note">Recommended for the selected feature.</div> : null}
-                                </td>
-                                <td>{plan.definition.test.maxQuestionPools}</td>
-                                <td>{plan.definition.test.maxQuestionsPerPool ?? "Unlimited"}</td>
-                                <td>{plan.definition.test.maxScheduledTestsPerMonth}</td>
-                                <td>{plan.definition.test.maxSelfTestsPerMonth}</td>
-                                <td>{plan.definition.poll.schedule ? "Included" : "Not included"}</td>
-                                <td>{plan.definition.poll.shareOpenToAll ? "Included" : "Not included"}</td>
-                                <td>{plan.definition.group.manage ? "Included" : "Not included"}</td>
-                                <td>
+                              return (
+                                <td key={`${plan.category}-status`}>
                                   {hasPendingRequest ? (
                                     <span className="status-chip warning">Pending review</span>
                                   ) : (
@@ -2598,9 +2633,9 @@ export function AdminQuestionWorkspace({
                                     </button>
                                   )}
                                 </td>
-                              </tr>
-                            );
-                          })}
+                              );
+                            })}
+                          </tr>
                         </tbody>
                       </table>
                     </div>
