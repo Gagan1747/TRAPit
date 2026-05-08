@@ -1954,6 +1954,11 @@ export async function listAvailablePollsForParticipant(identifier: string): Prom
       )
       .map((group) => group.id),
   );
+  const respondedPollIds = new Set(
+    state.pollAttempts
+      .filter((attempt) => identifiersMatch(attempt.userId, normalizedIdentifier))
+      .map((attempt) => attempt.pollId),
+  );
 
   const scheduledPolls = isDynamoDbPollStoreEnabled()
     ? await withPollStoreFallback(
@@ -1963,8 +1968,13 @@ export async function listAvailablePollsForParticipant(identifier: string): Prom
     : hydrateScheduledPolls(state);
 
   return scheduledPolls
-    .filter((poll) => poll.participantType === "registered")
-    .filter((poll) => poll.participantGroupIds.some((groupId) => participantGroupIds.has(groupId)))
+    .filter((poll) => {
+      if (poll.participantType === "registered") {
+        return poll.participantGroupIds.some((groupId) => participantGroupIds.has(groupId));
+      }
+
+      return poll.participantType === "open" && respondedPollIds.has(poll.id);
+    })
     .sort((leftPoll, rightPoll) => {
       const priorityDifference =
         pollStatusPriority[leftPoll.status] - pollStatusPriority[rightPoll.status];

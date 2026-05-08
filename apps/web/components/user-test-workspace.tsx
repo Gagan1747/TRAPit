@@ -458,6 +458,20 @@ export function UserTestWorkspace({
     setCurrentQuestionIndex((currentIndex) => currentIndex + 1);
   }
 
+  function goToPreviousQuestion() {
+    setCurrentQuestionIndex((currentIndex) => Math.max(currentIndex - 1, 0));
+    setFeedback(null);
+  }
+
+  function goToNextQuestion() {
+    if (!activeTest) {
+      return;
+    }
+
+    setCurrentQuestionIndex((currentIndex) => Math.min(currentIndex + 1, activeTest.questions.length));
+    setFeedback(null);
+  }
+
   function cancelActiveTest() {
     setActiveTestId(null);
     setAnswers({});
@@ -679,7 +693,7 @@ export function UserTestWorkspace({
                   Time left {formatCountdown(remainingMs)}
                 </span>
               </div>
-              <p className="muted-text">Each answer moves you straight to the next question.</p>
+              <p className="muted-text">Each answer moves you straight to the next question. Use the navigation buttons to review earlier answers or skip ahead.</p>
             </article>
 
             {activeQuestion ? (
@@ -707,6 +721,19 @@ export function UserTestWorkspace({
                     </label>
                   ))}
                 </div>
+                <div className="inline-actions">
+                  <button
+                    className="button-secondary"
+                    disabled={currentQuestionIndex === 0}
+                    type="button"
+                    onClick={goToPreviousQuestion}
+                  >
+                    Previous question
+                  </button>
+                  <button className="button-secondary" type="button" onClick={goToNextQuestion}>
+                    Next question
+                  </button>
+                </div>
               </article>
             ) : (
               <article className="question-card">
@@ -718,6 +745,9 @@ export function UserTestWorkspace({
                   You have answered all questions. Submit now to see your score and ranking.
                 </p>
                 <div className="inline-actions">
+                  <button className="button-secondary" disabled={activeTest.questions.length === 0} type="button" onClick={goToPreviousQuestion}>
+                    Review previous question
+                  </button>
                   <button className="button" disabled={isSubmitting} type="button" onClick={() => void submitTest()}>
                     Submit test
                   </button>

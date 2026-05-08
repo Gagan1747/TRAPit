@@ -155,6 +155,42 @@ export function MobileUserTestWorkspace({ currentParticipantIdentifier }: Mobile
     return `${minutes}:${seconds.toString().padStart(2, "0")}`;
   }
 
+  function handleSelectAnswer(questionId: string, originalOptionIndex: number) {
+    if (!activeTest) {
+      return;
+    }
+
+    const nextAnswers = {
+      ...answersRef.current,
+      [questionId]: originalOptionIndex,
+    };
+
+    answersRef.current = nextAnswers;
+    setAnswers(nextAnswers);
+    setFeedback(null);
+
+    if (currentQuestionIndex >= activeTest.questionCount - 1) {
+      setCurrentQuestionIndex(activeTest.questionCount);
+      return;
+    }
+
+    setCurrentQuestionIndex((currentIndex) => currentIndex + 1);
+  }
+
+  function goToPreviousQuestion() {
+    setCurrentQuestionIndex((currentIndex) => Math.max(currentIndex - 1, 0));
+    setFeedback(null);
+  }
+
+  function goToNextQuestion() {
+    if (!activeTest) {
+      return;
+    }
+
+    setCurrentQuestionIndex((currentIndex) => Math.min(currentIndex + 1, activeTest.questionCount));
+    setFeedback(null);
+  }
+
   function handleLoadReview(testId: string) {
     if (!currentParticipantIdentifier) {
       return;
@@ -222,6 +258,7 @@ export function MobileUserTestWorkspace({ currentParticipantIdentifier }: Mobile
                 <Text style={styles.countdownValue}>{formatCountdown(remainingMs)}</Text>
               </View>
               <Text style={styles.meta}>Question {Math.min(currentQuestionIndex + 1, activeTest.questionCount)} of {activeTest.questionCount}</Text>
+              <Text style={styles.meta}>Each answer moves you to the next question. Use the navigation buttons to review or skip.</Text>
             </View>
 
             {activeQuestion ? (
@@ -236,23 +273,7 @@ export function MobileUserTestWorkspace({ currentParticipantIdentifier }: Mobile
                         styles.answerOption,
                         answers[activeQuestion.question.id] === activeQuestion.originalOptionIndexes[optionIndex] && styles.answerOptionActive,
                       ]}
-                      onPress={() => {
-                        const nextAnswers = {
-                          ...answersRef.current,
-                          [activeQuestion.question.id]: activeQuestion.originalOptionIndexes[optionIndex],
-                        };
-
-                        answersRef.current = nextAnswers;
-                        setAnswers(nextAnswers);
-                        setFeedback(null);
-
-                        if (currentQuestionIndex >= activeTest.questionCount - 1) {
-                          setCurrentQuestionIndex(activeTest.questionCount);
-                          return;
-                        }
-
-                        setCurrentQuestionIndex((currentIndex) => currentIndex + 1);
-                      }}
+                      onPress={() => handleSelectAnswer(activeQuestion.question.id, activeQuestion.originalOptionIndexes[optionIndex])}
                     >
                       <Text
                         style={[
@@ -265,14 +286,35 @@ export function MobileUserTestWorkspace({ currentParticipantIdentifier }: Mobile
                     </Pressable>
                   ))}
                 </View>
+                <View style={styles.navigationRow}>
+                  <Pressable
+                    disabled={currentQuestionIndex === 0}
+                    style={[styles.secondaryButton, currentQuestionIndex === 0 && styles.buttonDisabled]}
+                    onPress={goToPreviousQuestion}
+                  >
+                    <Text style={[styles.secondaryButtonText, currentQuestionIndex === 0 && styles.buttonTextDisabled]}>Previous question</Text>
+                  </Pressable>
+                  <Pressable style={styles.secondaryButton} onPress={goToNextQuestion}>
+                    <Text style={styles.secondaryButtonText}>Next question</Text>
+                  </Pressable>
+                </View>
               </View>
             ) : (
               <View style={styles.card}>
                 <Text style={styles.cardTitle}>Ready to submit</Text>
                 <Text style={styles.meta}>You have answered all questions. Submit now to see your result.</Text>
-                <Pressable style={styles.primaryButton} onPress={() => void submitTest()}>
-                  <Text style={styles.primaryButtonText}>Submit test</Text>
-                </Pressable>
+                <View style={styles.navigationRow}>
+                  <Pressable
+                    disabled={activeTest.questionCount === 0}
+                    style={[styles.secondaryButton, activeTest.questionCount === 0 && styles.buttonDisabled]}
+                    onPress={goToPreviousQuestion}
+                  >
+                    <Text style={[styles.secondaryButtonText, activeTest.questionCount === 0 && styles.buttonTextDisabled]}>Review previous question</Text>
+                  </Pressable>
+                  <Pressable style={styles.primaryButton} onPress={() => void submitTest()}>
+                    <Text style={styles.primaryButtonText}>Submit test</Text>
+                  </Pressable>
+                </View>
               </View>
             )}
           </View>
@@ -517,10 +559,15 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "700",
   },
+  navigationRow: {
+    flexDirection: "row",
+    gap: 10,
+  },
   primaryButton: {
     alignItems: "center",
     backgroundColor: "#b44c2f",
     borderRadius: 999,
+    flex: 1,
     justifyContent: "center",
     minHeight: 48,
     paddingHorizontal: 18,
@@ -565,6 +612,7 @@ const styles = StyleSheet.create({
     borderColor: "#d7c3af",
     borderRadius: 999,
     borderWidth: 1,
+    flex: 1,
     justifyContent: "center",
     minHeight: 46,
     paddingHorizontal: 16,
@@ -573,6 +621,12 @@ const styles = StyleSheet.create({
     color: "#6d5a4e",
     fontSize: 14,
     fontWeight: "700",
+  },
+  buttonDisabled: {
+    opacity: 0.5,
+  },
+  buttonTextDisabled: {
+    color: "#8f8075",
   },
   stack: {
     gap: 16,

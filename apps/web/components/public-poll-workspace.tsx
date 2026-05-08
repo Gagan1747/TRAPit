@@ -62,6 +62,7 @@ type PublicPollWorkspaceProps = {
 
 export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
   const [answers, setAnswers] = useState<Record<string, number | undefined>>({});
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [guestId, setGuestId] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
@@ -69,6 +70,13 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
   const [participantName, setParticipantName] = useState("");
   const [payload, setPayload] = useState<PublicPollResponse | null>(null);
   const [startedAt, setStartedAt] = useState<string | null>(null);
+  const activeQuestion =
+    payload && currentQuestionIndex < payload.questions.length
+      ? payload.questions[currentQuestionIndex]
+      : null;
+  const answeredCount = payload
+    ? payload.questions.filter((question) => typeof answers[question.id] === "number").length
+    : 0;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -104,6 +112,7 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
         }
 
         setPayload(nextPayload);
+        setCurrentQuestionIndex(0);
         setParticipantName(
           nextPayload.actor.displayName?.trim()
             || nextPayload.actor.identifier?.trim()
@@ -175,6 +184,7 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
       );
 
       setPayload(nextPayload);
+      setCurrentQuestionIndex(0);
       setFeedback("Poll submitted.");
 
       if (!nextPayload.actor.isRegistered && typeof window !== "undefined") {
@@ -185,6 +195,34 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  function handleSelectAnswer(questionId: string, optionIndex: number) {
+    setAnswers((currentAnswers) => ({
+      ...currentAnswers,
+      [questionId]: optionIndex,
+    }));
+    setFeedback(null);
+
+    if (!payload) {
+      return;
+    }
+
+    setCurrentQuestionIndex((currentIndex) => Math.min(currentIndex + 1, payload.questions.length));
+  }
+
+  function goToPreviousQuestion() {
+    setCurrentQuestionIndex((currentIndex) => Math.max(currentIndex - 1, 0));
+    setFeedback(null);
+  }
+
+  function goToNextQuestion() {
+    if (!payload) {
+      return;
+    }
+
+    setCurrentQuestionIndex((currentIndex) => Math.min(currentIndex + 1, payload.questions.length));
+    setFeedback(null);
   }
 
   return (
@@ -252,40 +290,75 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
                   />
                 </div>
 
-                <div className="question-list">
-                  {payload.questions.map((question) => (
-                    <article className="question-card" key={question.id}>
-                      <div className="question-head">
-                        <strong>{question.prompt}</strong>
-                        {question.topic ? <span className="status-chip warning">{question.topic}</span> : null}
-                      </div>
-                      <div className="selection-grid">
-                        {question.options.map((option, optionIndex) => (
-                          <label className="role-option" key={`${question.id}-${optionIndex}`}>
-                            <input
-                              checked={answers[question.id] === optionIndex}
-                              name={`poll-question-${question.id}`}
-                              type="radio"
-                              onChange={() =>
-                                setAnswers((currentAnswers) => ({
-                                  ...currentAnswers,
-                                  [question.id]: optionIndex,
-                                }))
-                              }
-                            />
-                            <span>{option}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </article>
-                  ))}
-                </div>
+                <article className="question-card runner-summary-card">
+                  <div className="question-head">
+                    <strong>{payload.poll.title}</strong>
+                    <span className="status-chip success">
+                      Question {Math.min(currentQuestionIndex + 1, payload.questions.length)} of {payload.questions.length}
+                    </span>
+                  </div>
+                  <p className="muted-text">Each response moves you straight to the next question. Use the navigation buttons to review or skip.</p>
+                  <p className="muted-text">Answered {answeredCount} of {payload.questions.length}</p>
+                </article>
 
-                <div className="inline-actions">
-                  <button className="button" disabled={isSubmitting} type="button" onClick={() => void submitPoll()}>
-                    {isSubmitting ? "Submitting..." : "Submit poll"}
-                  </button>
-                </div>
+                {activeQuestion ? (
+                  <article className="question-card" key={activeQuestion.id}>
+                    <div className="question-head">
+                      <strong>{activeQuestion.prompt}</strong>
+                      {activeQuestion.topic ? <span className="status-chip warning">{activeQuestion.topic}</span> : null}
+                    </div>
+                    <p className="muted-text">
+                      Question {currentQuestionIndex + 1} of {payload.questions.length}
+                    </p>
+                    <div className="selection-grid">
+                      {activeQuestion.options.map((option, optionIndex) => (
+                        <label className="role-option" key={`${activeQuestion.id}-${optionIndex}`}>
+                          <input
+                            checked={answers[activeQuestion.id] === optionIndex}
+                            name={`poll-question-${activeQuestion.id}`}
+                            type="radio"
+                            onChange={() => handleSelectAnswer(activeQuestion.id, optionIndex)}
+                          />
+                          <span>{option}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <div className="inline-actions">
+                      <button
+                        className="button-secondary"
+                        disabled={currentQuestionIndex === 0}
+                        type="button"
+                        onClick={goToPreviousQuestion}
+                      >
+                        Previous question
+                      </button>
+                      <button className="button-secondary" type="button" onClick={goToNextQuestion}>
+                        Next question
+                      </button>
+                    </div>
+                  </article>
+                ) : (
+                  <article className="question-card">
+                    <div className="question-head">
+                      <strong>Ready to submit</strong>
+                      <span className="status-chip success">{answeredCount}/{payload.questions.length} answered</span>
+                    </div>
+                    <p className="muted-text">Review earlier questions if needed, then submit your poll response.</p>
+                    <div className="inline-actions">
+                      <button
+                        className="button-secondary"
+                        disabled={payload.questions.length === 0}
+                        type="button"
+                        onClick={goToPreviousQuestion}
+                      >
+                        Review previous question
+                      </button>
+                      <button className="button" disabled={isSubmitting} type="button" onClick={() => void submitPoll()}>
+                        {isSubmitting ? "Submitting..." : "Submit poll"}
+                      </button>
+                    </div>
+                  </article>
+                )}
               </div>
             ) : payload.hasSubmitted ? (
               <p className="muted-text">Your response has already been recorded for this poll.</p>
