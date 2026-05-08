@@ -1237,18 +1237,44 @@ button:disabled {
 }
 
 .membership-upgrade-table {
-  min-width: 960px;
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+  font-size: 0.88rem;
 }
 
 .membership-upgrade-table td,
 .membership-upgrade-table th {
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  padding: 8px 10px;
 }
 
 .membership-upgrade-table th:first-child,
 .membership-upgrade-table tbody th {
   white-space: normal;
-  min-width: 190px;
+  min-width: 0;
+  width: 18%;
+}
+
+.membership-upgrade-table th:not(:first-child),
+.membership-upgrade-table td {
+  width: calc(82% / 5);
+}
+
+.membership-upgrade-column {
+  font-size: 0.78rem;
+}
+
+.membership-upgrade-column strong {
+  display: block;
+  font-size: 0.95rem;
+  line-height: 1.25;
+}
+
+.membership-upgrade-column.is-current {
+  background: rgba(120, 141, 94, 0.12);
 }
 
 .membership-upgrade-column.is-recommended {
@@ -1256,10 +1282,25 @@ button:disabled {
 }
 
 .membership-upgrade-note {
-  margin-top: 6px;
+  margin-top: 4px;
   color: var(--accent-deep);
-  font-size: 0.84rem;
-  line-height: 1.4;
+  font-size: 0.76rem;
+  line-height: 1.3;
+}
+
+@media (max-width: 1200px) {
+  .membership-upgrade-table {
+    font-size: 0.82rem;
+  }
+
+  .membership-upgrade-table td,
+  .membership-upgrade-table th {
+    padding: 7px 8px;
+  }
+
+  .membership-upgrade-column strong {
+    font-size: 0.88rem;
+  }
 }
 
 @media (max-width: 900px) {

@@ -90,6 +90,22 @@ function toDateTimeInputValue(value: string) {
   return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
 }
 
+function formatMembershipCount(value: number) {
+  return value > 0 ? value : "-";
+}
+
+function formatMembershipBoolean(value: boolean) {
+  return value ? "✓" : "-";
+}
+
+function formatMembershipQuestionsPerPool(plan: (typeof normalUserCategoryDefinitions)[NormalUserCategory]) {
+  if (!plan.test.addQuestion || plan.test.maxQuestionPools <= 0 || plan.test.maxQuestionsPerPool === null) {
+    return "-";
+  }
+
+  return plan.test.maxQuestionsPerPool;
+}
+
 type QuestionApiResponse = {
   questions: PersistentQuestion[];
 };
@@ -1109,9 +1125,13 @@ export function AdminQuestionWorkspace({
   }
 
   function toggleSection(section: AdminWorkspaceSection) {
-    setOpenSection((currentSection) =>
-      currentSection === section ? null : section,
-    );
+    setOpenSection((currentSection) => {
+      if (currentSection === section && section === "history") {
+        return currentSection;
+      }
+
+      return currentSection === section ? null : section;
+    });
   }
 
   function openUpgradePanel(prompt?: UpgradePrompt | null) {
@@ -2437,6 +2457,16 @@ export function AdminQuestionWorkspace({
         (plan) => orderedNormalUserCategories.indexOf(plan.category) > orderedNormalUserCategories.indexOf(currentUserCategory),
       )
     : [];
+  const membershipUpgradePlans = currentUserCategory && categorySnapshot
+    ? [
+        {
+          category: currentUserCategory,
+          definition: normalUserCategoryDefinitions[currentUserCategory],
+          label: categorySnapshot.currentCategoryLabel,
+        },
+        ...suggestedUpgradePlans,
+      ]
+    : [];
   const latestResolvedCategoryMessage = latestResolvedCategoryRequest
     ? latestResolvedCategoryRequest.status === "accepted"
       ? `Your upgrade request for ${normalUserCategoryDefinitions[latestResolvedCategoryRequest.requestedCategory].label} was approved${latestResolvedCategoryRequest.approvedDurationMonths ? ` for ${latestResolvedCategoryRequest.approvedDurationMonths === 12 ? "1 year" : "3 months"}` : ""}.`
@@ -2789,44 +2819,27 @@ export function AdminQuestionWorkspace({
                   Close
                 </button>
               </div>
-              <div className="dashboard-grid compact-grid">
-                <article className="dashboard-card">
-                  <p className="dashboard-label">Current category</p>
-                  <p className="section-title">{categorySnapshot.currentCategoryLabel.replace(/ users$/i, " user")}</p>
-                  <p className="muted-text">Signed-in access follows this category across your normal-user workspace.</p>
-                  {categorySnapshot.activeAssignment?.expiresAt ? (
-                    <p className="muted-text">Current upgrade ends on {formatShortDate(categorySnapshot.activeAssignment.expiresAt)}.</p>
-                  ) : (
-                    <p className="muted-text">Base access remains active until a new category is approved.</p>
-                  )}
-                </article>
-
-                <article className="dashboard-card">
-                  <p className="dashboard-label">Available upgrades</p>
-                  {upgradePrompt ? (
-                    <p className="muted-text">
-                      Feature selected: <strong>{upgradePrompt.featureLabel}</strong>. {upgradePrompt.message}
-                    </p>
-                  ) : (
-                    <p className="muted-text">Choose any higher category available from your current plan.</p>
-                  )}
-                  {suggestedUpgradePlans.length ? (
-                    <div className="leaderboard-table-wrap membership-upgrade-table-wrap">
-                      <table className="leaderboard-table membership-upgrade-table">
+              {membershipUpgradePlans.length ? (
+                <div className="leaderboard-table-wrap membership-upgrade-table-wrap">
+                  <table className="leaderboard-table membership-upgrade-table">
                         <thead>
                           <tr>
                             <th scope="col">Feature</th>
-                            {suggestedUpgradePlans.map((plan) => {
+                            {membershipUpgradePlans.map((plan) => {
+                              const isCurrentPlan = plan.category === currentUserCategory;
                               const isHighlighted = plan.category === suggestedUpgradeCategory;
 
                               return (
                                 <th
                                   key={plan.category}
-                                  className={isHighlighted ? "membership-upgrade-column is-recommended" : "membership-upgrade-column"}
+                                  className={[
+                                    "membership-upgrade-column",
+                                    isCurrentPlan ? "is-current" : "",
+                                    isHighlighted ? "is-recommended" : "",
+                                  ].filter(Boolean).join(" ")}
                                   scope="col"
                                 >
                                   <strong>{plan.label.replace(/ users$/i, " user")}</strong>
-                                  {isHighlighted ? <div className="membership-upgrade-note">Recommended for the selected feature.</div> : null}
                                 </th>
                               );
                             })}
@@ -2835,54 +2848,57 @@ export function AdminQuestionWorkspace({
                         <tbody>
                           <tr>
                             <th scope="row">Pools</th>
-                            {suggestedUpgradePlans.map((plan) => (
-                              <td key={`${plan.category}-pools`}>{plan.definition.test.maxQuestionPools}</td>
+                            {membershipUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-pools`}>{formatMembershipCount(plan.definition.test.maxQuestionPools)}</td>
                             ))}
                           </tr>
                           <tr>
                             <th scope="row">Questions / pool</th>
-                            {suggestedUpgradePlans.map((plan) => (
-                              <td key={`${plan.category}-questions`}>{plan.definition.test.maxQuestionsPerPool ?? "Unlimited"}</td>
+                            {membershipUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-questions`}>{formatMembershipQuestionsPerPool(plan.definition)}</td>
                             ))}
                           </tr>
                           <tr>
                             <th scope="row">Scheduled tests / month</th>
-                            {suggestedUpgradePlans.map((plan) => (
-                              <td key={`${plan.category}-scheduled-tests`}>{plan.definition.test.maxScheduledTestsPerMonth}</td>
+                            {membershipUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-scheduled-tests`}>{formatMembershipCount(plan.definition.test.maxScheduledTestsPerMonth)}</td>
                             ))}
                           </tr>
                           <tr>
                             <th scope="row">Self tests / month</th>
-                            {suggestedUpgradePlans.map((plan) => (
-                              <td key={`${plan.category}-self-tests`}>{plan.definition.test.maxSelfTestsPerMonth}</td>
+                            {membershipUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-self-tests`}>{formatMembershipCount(plan.definition.test.maxSelfTestsPerMonth)}</td>
                             ))}
                           </tr>
                           <tr>
                             <th scope="row">Poll scheduling</th>
-                            {suggestedUpgradePlans.map((plan) => (
-                              <td key={`${plan.category}-poll-schedule`}>{plan.definition.poll.schedule ? "Included" : "Not included"}</td>
+                            {membershipUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-poll-schedule`}>{formatMembershipBoolean(plan.definition.poll.schedule)}</td>
                             ))}
                           </tr>
                           <tr>
                             <th scope="row">Open polls</th>
-                            {suggestedUpgradePlans.map((plan) => (
-                              <td key={`${plan.category}-open-polls`}>{plan.definition.poll.shareOpenToAll ? "Included" : "Not included"}</td>
+                            {membershipUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-open-polls`}>{formatMembershipBoolean(plan.definition.poll.shareOpenToAll)}</td>
                             ))}
                           </tr>
                           <tr>
                             <th scope="row">Group management</th>
-                            {suggestedUpgradePlans.map((plan) => (
-                              <td key={`${plan.category}-group-management`}>{plan.definition.group.manage ? "Included" : "Not included"}</td>
+                            {membershipUpgradePlans.map((plan) => (
+                              <td key={`${plan.category}-group-management`}>{formatMembershipBoolean(plan.definition.group.manage)}</td>
                             ))}
                           </tr>
                           <tr>
                             <th scope="row">Status</th>
-                            {suggestedUpgradePlans.map((plan) => {
+                            {membershipUpgradePlans.map((plan) => {
+                              const isCurrentPlan = plan.category === currentUserCategory;
                               const hasPendingRequest = userPendingCategoryRequest?.requestedCategory === plan.category;
 
                               return (
                                 <td key={`${plan.category}-status`}>
-                                  {hasPendingRequest ? (
+                                  {isCurrentPlan ? (
+                                    <span className="status-chip success">Current plan</span>
+                                  ) : hasPendingRequest ? (
                                     <span className="status-chip warning">Pending review</span>
                                   ) : (
                                     <button
@@ -2898,13 +2914,10 @@ export function AdminQuestionWorkspace({
                             })}
                           </tr>
                         </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p className="muted-text">You are already on the highest available category.</p>
-                  )}
-                </article>
-              </div>
+                  </table>
+                </div>
+              ) : null}
+              {!suggestedUpgradePlans.length ? <p className="muted-text">You are already on the highest available category.</p> : null}
               {latestResolvedCategoryMessage ? <p className="muted-text">{latestResolvedCategoryMessage}</p> : null}
               {categorySnapshot.activeAssignment ? (
                 <p className="muted-text">

@@ -192,7 +192,13 @@ export function RestrictedUserDashboardWorkspace({
   }, [authConfigured, defaultParticipantIdentifier]);
 
   function toggleSection(section: UserDashboardSection) {
-    setOpenSection((currentSection) => (currentSection === section ? null : section));
+    setOpenSection((currentSection) => {
+      if (currentSection === section && section === "history") {
+        return currentSection;
+      }
+
+      return currentSection === section ? null : section;
+    });
   }
 
   function openLockedFeatureModal(featureLabel: string) {
