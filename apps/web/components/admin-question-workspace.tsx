@@ -4661,7 +4661,7 @@ export function AdminQuestionWorkspace({
                           </p>
                         ) : null}
 
-                        {participantHistoryEntry || participantTest.status === "completed" ? (
+                        {participantTest.status === "completed" ? (
                           <div className="inline-actions">
                             <button
                               className="button-secondary small-button"
@@ -4676,6 +4676,8 @@ export function AdminQuestionWorkspace({
                                   : "Review questions"}
                             </button>
                           </div>
+                        ) : participantHistoryEntry ? (
+                          <p className="muted-text">You have submitted this test. Review opens after the test is completed and results are announced.</p>
                         ) : participantTest.status === "live" ? (
                           <>
                             <div className="field">
