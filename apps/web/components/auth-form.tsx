@@ -15,6 +15,8 @@ type AuthFormProps = {
 
 type SignUpSubMode = "confirm" | "create";
 
+const EXISTING_ACCOUNT_ERROR = "An account with this phone number already exists.";
+
 async function readAuthResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
   const contentType = response.headers.get("content-type") ?? "";
 
@@ -34,6 +36,10 @@ export function AuthForm({ mode }: AuthFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialSignUpSubMode = searchParams.get("step") === "confirm" ? "confirm" : "create";
+  const initialConfirmAvailable = searchParams.get("step") === "confirm";
+  const initialSignUpHint = searchParams.get("signup") === "retry"
+    ? "If your earlier SMS code expired or got lost, enter your phone number below, resend the OTP, and confirm the account."
+    : null;
   const [confirmationCode, setConfirmationCode] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [fullName, setFullName] = useState("");
@@ -43,6 +49,9 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [countryCode, setCountryCode] = useState("+91");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [signUpSubMode, setSignUpSubMode] = useState<SignUpSubMode>(initialSignUpSubMode);
+  const [isConfirmOptionAvailable, setIsConfirmOptionAvailable] = useState(initialConfirmAvailable);
+  const [resendMessage, setResendMessage] = useState<string | null>(null);
+  const [signUpHint, setSignUpHint] = useState<string | null>(initialSignUpHint);
   const [signUpState, setSignUpState] = useState<{
     destination: string | null;
     requiresConfirmation: boolean;
@@ -67,6 +76,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   function setNextSignUpSubMode(nextMode: SignUpSubMode) {
     setSignUpSubMode(nextMode);
     setErrorMessage(null);
+    setResendMessage(null);
   }
 
   function handlePhoneNumberChange(nextPhoneNumber: string) {
@@ -82,6 +92,7 @@ export function AuthForm({ mode }: AuthFormProps) {
     setConfirmationCode("");
     setSignUpState(null);
     setErrorMessage(null);
+    setResendMessage(null);
   }
 
   function handleCountryCodeChange(nextCountryCode: string) {
@@ -97,11 +108,32 @@ export function AuthForm({ mode }: AuthFormProps) {
     setConfirmationCode("");
     setSignUpState(null);
     setErrorMessage(null);
+    setResendMessage(null);
+  }
+
+  function openConfirmAccount(options?: {
+    destination?: string | null;
+    hint?: string | null;
+    warning?: string;
+  }) {
+    setIsConfirmOptionAvailable(true);
+    setSignUpSubMode("confirm");
+    setSignUpHint(options?.hint ?? null);
+    setResendMessage(null);
+
+    if (options?.destination || options?.warning) {
+      setSignUpState({
+        destination: options.destination ?? null,
+        requiresConfirmation: true,
+        warning: options.warning,
+      });
+    }
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setErrorMessage(null);
+    setResendMessage(null);
 
     if (!authConfigured) {
       setErrorMessage(getPublicWebAuthSetupMessage());
@@ -146,7 +178,15 @@ export function AuthForm({ mode }: AuthFormProps) {
         }>(response, "Sign-up failed.");
 
         if (!response.ok) {
-          throw new Error(payload.error ?? "Sign-up failed.");
+          const nextError = payload.error ?? "Sign-up failed.";
+
+          if (nextError === EXISTING_ACCOUNT_ERROR) {
+            openConfirmAccount({
+              hint: "This phone number already has a pending account. Confirm it with the OTP, or resend the OTP if you no longer have it.",
+            });
+          }
+
+          throw new Error(nextError);
         }
 
         setSignUpState({
@@ -154,7 +194,9 @@ export function AuthForm({ mode }: AuthFormProps) {
           requiresConfirmation: payload.requiresConfirmation ?? true,
           warning: payload.warning,
         });
+        setIsConfirmOptionAvailable(true);
         setSignUpSubMode("confirm");
+        setSignUpHint("Use the OTP sent for this account creation to confirm your number before signing in.");
 
         if (!(payload.requiresConfirmation ?? true)) {
           router.push("/sign-in?created=1");
@@ -184,6 +226,57 @@ export function AuthForm({ mode }: AuthFormProps) {
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Authentication failed.",
+      );
+    } finally {
+      setIsPending(false);
+    }
+  }
+
+  async function handleResendConfirmationCode() {
+    setErrorMessage(null);
+    setResendMessage(null);
+
+    if (!authConfigured) {
+      setErrorMessage(getPublicWebAuthSetupMessage());
+      return;
+    }
+
+    if (!phoneNumber) {
+      setErrorMessage("Phone number is required to resend the confirmation code.");
+      return;
+    }
+
+    setIsPending(true);
+
+    try {
+      const response = await fetch("/api/auth/resend-confirmation-code", {
+        body: JSON.stringify({ phoneNumber: combinedPhoneNumber }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      });
+      const payload = await readAuthResponse<{
+        deliveryDestination?: string | null;
+        error?: string;
+      }>(response, "Unable to resend the confirmation code.");
+
+      if (!response.ok) {
+        throw new Error(payload.error ?? "Unable to resend the confirmation code.");
+      }
+
+      setSignUpState((currentState) => ({
+        destination: payload.deliveryDestination ?? currentState?.destination ?? null,
+        requiresConfirmation: true,
+        warning: currentState?.warning,
+      }));
+      setResendMessage(`A new OTP was sent${payload.deliveryDestination ? ` to ${payload.deliveryDestination}` : ""}.`);
+      setIsConfirmOptionAvailable(true);
+      setSignUpSubMode("confirm");
+      setSignUpHint("Use the latest OTP you receive by SMS. Older OTPs may no longer work.");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Unable to resend the confirmation code.",
       );
     } finally {
       setIsPending(false);
@@ -247,7 +340,7 @@ export function AuthForm({ mode }: AuthFormProps) {
         {!authConfigured ? <p className="muted-text">{getPublicWebAuthSetupMessage()}</p> : null}
       </div>
 
-      {mode === "sign-up" ? (
+      {mode === "sign-up" && isConfirmOptionAvailable ? (
         <div aria-label="Sign up step" className="segmented-control segmented-control-wide" role="group">
           <button
             aria-pressed={signUpSubMode === "create"}
@@ -332,9 +425,11 @@ export function AuthForm({ mode }: AuthFormProps) {
 
       {mode === "sign-up" && signUpSubMode === "confirm" ? (
         <p className="muted-text">
-          Enter the same phone number you used during sign-up, then submit the SMS OTP to finish creating the account.
+          Enter the same phone number you used during sign-up, then submit the latest SMS OTP to finish creating the account.
         </p>
       ) : null}
+
+      {mode === "sign-up" && signUpHint ? <p className="muted-text">{signUpHint}</p> : null}
 
       {mode === "sign-up" && signUpSubMode === "confirm" ? (
         <div className="field">
@@ -355,9 +450,22 @@ export function AuthForm({ mode }: AuthFormProps) {
         </p>
       ) : null}
 
+      {mode === "sign-up" && signUpSubMode === "confirm" ? (
+        <button
+          className="button-secondary"
+          disabled={isPending || !authConfigured}
+          type="button"
+          onClick={() => void handleResendConfirmationCode()}
+        >
+          Resend OTP
+        </button>
+      ) : null}
+
       {signUpState?.warning ? (
         <p className="muted-text">{signUpState.warning}</p>
       ) : null}
+
+      {resendMessage ? <p className="muted-text">{resendMessage}</p> : null}
 
       {infoMessage ? <p className="muted-text">{infoMessage}</p> : null}
 
@@ -382,8 +490,8 @@ export function AuthForm({ mode }: AuthFormProps) {
       ) : null}
 
       {mode === "sign-in" ? null : (
-        <a className="button-secondary" href={signUpSubMode === "confirm" ? "/sign-in" : "/sign-up?step=confirm"}>
-          {signUpSubMode === "confirm" ? "Already confirmed? Sign in" : "Already created an account? Confirm it"}
+        <a className="button-secondary" href={signUpSubMode === "confirm" ? "/sign-in" : "/sign-up?step=confirm&signup=retry"}>
+          {signUpSubMode === "confirm" ? "Already confirmed? Sign in" : "Already tried signing up? Confirm account"}
         </a>
       )}
     </form>

@@ -33,6 +33,12 @@ type ConfirmSignUpResponse = {
   status: "confirmed";
 };
 
+type ResendConfirmationCodeResponse = {
+  CodeDeliveryDetails?: {
+    Destination?: string;
+  };
+};
+
 type ForgotPasswordResponse = {
   CodeDeliveryDetails?: {
     Destination?: string;
@@ -242,6 +248,19 @@ export async function confirmCognitoSignUp(phoneNumber: string, code: string) {
   );
 }
 
+export async function resendCognitoConfirmationCode(phoneNumber: string) {
+  const config = getConfig();
+  const normalizedPhoneNumber = normalizePhoneNumber(phoneNumber);
+
+  return cognitoJsonRequest<ResendConfirmationCodeResponse>(
+    "AWSCognitoIdentityProviderService.ResendConfirmationCode",
+    {
+      ClientId: config.webClientId,
+      Username: normalizedPhoneNumber,
+    },
+  );
+}
+
 export async function signInWithCognito(phoneNumber: string, password: string) {
   const config = getConfig();
   const normalizedPhoneNumber = normalizePhoneNumber(phoneNumber);
@@ -420,6 +439,8 @@ export function getCognitoErrorMessage(error: unknown): string {
         return "Confirm the account before signing in.";
       case "UsernameExistsException":
         return "An account with this phone number already exists.";
+      case "LimitExceededException":
+        return "Too many attempts. Wait a moment before requesting another code.";
       default:
         return error.message;
     }
