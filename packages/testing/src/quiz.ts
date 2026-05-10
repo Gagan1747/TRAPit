@@ -211,6 +211,7 @@ export type TestingWorkspaceState = {
   scheduledPolls: ScheduledPoll[];
   scheduledTests: ScheduledTest[];
   workspaceBranding: WorkspaceBranding | null;
+  workspaceBrandingByActor: Record<string, WorkspaceBranding>;
 };
 
 export type ImportIssue = {
@@ -798,6 +799,7 @@ export function createEmptyTestingWorkspaceState(): TestingWorkspaceState {
     scheduledPolls: [],
     scheduledTests: [],
     workspaceBranding: null,
+    workspaceBrandingByActor: {},
   };
 }
 

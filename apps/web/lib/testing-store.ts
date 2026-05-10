@@ -137,6 +137,15 @@ function normalizeParticipantIdentifier(value: string) {
   return value.trim().toLowerCase();
 }
 
+function normalizeBrandingActorKey(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = normalizeParticipantIdentifier(value);
+  return normalized || null;
+}
+
 function getParticipantIdentifierCandidates(value: string) {
   const normalized = normalizeParticipantIdentifier(value);
   const compact = normalized.replace(/[\s()-]/g, "");
@@ -159,6 +168,27 @@ function identifiersMatch(left: string, right: string) {
 
   return Array.from(getParticipantIdentifierCandidates(right)).some((candidate) =>
     leftCandidates.has(candidate),
+  );
+}
+
+function normalizeWorkspaceBrandingByActor(
+  brandingByActor: Record<string, WorkspaceBranding | null | undefined> | null | undefined,
+) {
+  if (!brandingByActor) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(brandingByActor)
+      .map(([actorKey, branding]) => {
+        const normalizedActorKey = normalizeBrandingActorKey(actorKey);
+        const normalizedBranding = normalizeWorkspaceBranding(branding);
+
+        return normalizedActorKey && normalizedBranding
+          ? [normalizedActorKey, normalizedBranding]
+          : null;
+      })
+      .filter((entry): entry is [string, WorkspaceBranding] => entry !== null),
   );
 }
 
@@ -223,19 +253,44 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       title: test.title?.trim() || "Scheduled test",
     })),
     workspaceBranding: normalizeWorkspaceBranding(parsed.workspaceBranding),
+    workspaceBrandingByActor: normalizeWorkspaceBrandingByActor(parsed.workspaceBrandingByActor),
   };
 }
 
-export async function getWorkspaceBranding() {
+export async function getWorkspaceBranding(actorKey?: string | null) {
   const state = await readStore();
-  return state.workspaceBranding;
+  const normalizedActorKey = normalizeBrandingActorKey(actorKey);
+
+  if (!normalizedActorKey) {
+    return state.workspaceBranding;
+  }
+
+  return state.workspaceBrandingByActor[normalizedActorKey] ?? state.workspaceBranding;
 }
 
-export async function updateWorkspaceBranding(branding: WorkspaceBranding | null) {
+export async function updateWorkspaceBranding(
+  branding: WorkspaceBranding | null,
+  actorKey?: string | null,
+) {
   const state = await readStore();
-  state.workspaceBranding = normalizeWorkspaceBranding(branding);
+  const normalizedBranding = normalizeWorkspaceBranding(branding);
+  const normalizedActorKey = normalizeBrandingActorKey(actorKey);
+
+  if (!normalizedActorKey) {
+    state.workspaceBranding = normalizedBranding;
+  } else if (normalizedBranding) {
+    state.workspaceBrandingByActor[normalizedActorKey] = normalizedBranding;
+  } else {
+    delete state.workspaceBrandingByActor[normalizedActorKey];
+  }
+
   await writeStore(state);
-  return state.workspaceBranding;
+
+  if (!normalizedActorKey) {
+    return state.workspaceBranding;
+  }
+
+  return state.workspaceBrandingByActor[normalizedActorKey] ?? state.workspaceBranding;
 }
 
 function isOwnedByActor(ownerId: string | null | undefined, actorId: string | null) {

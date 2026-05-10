@@ -11,7 +11,7 @@ export async function GET() {
     return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
-  const branding = await getWorkspaceBranding();
+  const branding = await getWorkspaceBranding(actor.identifier ?? actor.sub);
   return NextResponse.json({ branding });
 }
 
@@ -23,6 +23,6 @@ export async function POST(request: Request) {
   }
 
   const body = (await request.json()) as { branding?: WorkspaceBranding | null };
-  const branding = await updateWorkspaceBranding(body.branding ?? null);
+  const branding = await updateWorkspaceBranding(body.branding ?? null, actor.identifier ?? actor.sub);
   return NextResponse.json({ branding });
 }
