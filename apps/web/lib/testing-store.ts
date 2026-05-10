@@ -671,9 +671,12 @@ async function assignUnownedGroupsToOwner(ownerIdentifier: string) {
   return participantGroups;
 }
 
-export async function listQuestions(actorId: string | null = null) {
+export async function listQuestions(
+  actorId: string | null = null,
+  actorIdentifier: string | null = null,
+) {
   const state = await readStore();
-  return filterQuestionsForActor(state.questions, actorId);
+  return filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier);
 }
 
 export async function createQuestion(
@@ -1249,9 +1252,12 @@ export async function listPools() {
   return filterPoolsForActor(state.pools, getQuestionMap(state), null);
 }
 
-export async function listPoolsForActor(actorId: string | null = null) {
+export async function listPoolsForActor(
+  actorId: string | null = null,
+  actorIdentifier: string | null = null,
+) {
   const state = await readStore();
-  return filterPoolsForActor(state.pools, getQuestionMap(state), actorId);
+  return filterPoolsForActor(state.pools, getQuestionMap(state), actorId, actorIdentifier);
 }
 
 export async function createPool(input: {
