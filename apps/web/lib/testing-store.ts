@@ -189,6 +189,11 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       ...pool,
       createdBy: pool.createdBy ?? null,
       questionIds: dedupe(pool.questionIds ?? []),
+      sharedWithIdentifiers: dedupe(
+        (pool.sharedWithIdentifiers ?? [])
+          .map((identifier) => normalizeParticipantIdentifier(identifier))
+          .filter(Boolean),
+      ),
     })),
     questions: parsed.questions ?? [],
     scheduledPolls: (parsed.scheduledPolls ?? []).map((poll) => {
@@ -381,9 +386,10 @@ function getQuestionMap(state: TestingWorkspaceState) {
 function canActorAccessPool(
   pool: QuestionPool,
   actorId: string | null,
+  actorIdentifier: string | null,
   questionMap: Map<string, PersistentQuestion>,
 ) {
-  if (!actorId) {
+  if (!actorId && !actorIdentifier) {
     return true;
   }
 
@@ -391,27 +397,47 @@ function canActorAccessPool(
     return true;
   }
 
+  if (
+    actorIdentifier
+    && pool.sharedWithIdentifiers.some((identifier) => identifiersMatch(identifier, actorIdentifier))
+  ) {
+    return true;
+  }
+
   return pool.questionIds.some((questionId) => questionMap.get(questionId)?.createdBy === actorId);
 }
 
-function filterQuestionsForActor(questions: PersistentQuestion[], actorId: string | null) {
-  if (!actorId) {
+function filterQuestionsForActor(
+  questions: PersistentQuestion[],
+  actorId: string | null,
+  pools: QuestionPool[] = [],
+  actorIdentifier: string | null = null,
+) {
+  if (!actorId && !actorIdentifier) {
     return questions;
   }
 
-  return questions.filter((question) => question.createdBy === actorId);
+  const questionMap = new Map(questions.map((question) => [question.id, question]));
+  const accessiblePoolIds = new Set(
+    filterPoolsForActor(pools, questionMap, actorId, actorIdentifier).map((pool) => pool.id),
+  );
+
+  return questions.filter(
+    (question) => question.createdBy === actorId || question.poolIds.some((poolId) => accessiblePoolIds.has(poolId)),
+  );
 }
 
 function filterPoolsForActor(
   pools: QuestionPool[],
   questionMap: Map<string, PersistentQuestion>,
   actorId: string | null,
+  actorIdentifier: string | null = null,
 ) {
-  if (!actorId) {
+  if (!actorId && !actorIdentifier) {
     return pools;
   }
 
-  return pools.filter((pool) => canActorAccessPool(pool, actorId, questionMap));
+  return pools.filter((pool) => canActorAccessPool(pool, actorId, actorIdentifier, questionMap));
 }
 
 function filterScheduledTestsForActor(tests: ScheduledTest[], actorId: string | null) {
@@ -467,8 +493,8 @@ function ensureActorOwnsPool(
     throw new Error("Select a valid question pool.");
   }
 
-  if (!canActorAccessPool(pool, actorId, getQuestionMap(state))) {
-    throw new Error("You can only use question pools you created.");
+  if (!canActorAccessPool(pool, actorId, actorIdentifier, getQuestionMap(state))) {
+    throw new Error("You can only use question pools available to you.");
   }
 
   return pool;
@@ -655,12 +681,13 @@ export async function createQuestion(
   actorId: string | null,
   source: QuestionImportSource = "manual",
   poolIds: string[] = [],
+  actorIdentifier: string | null = null,
 ) {
   const state = await readStore();
   const normalizedPoolIds = dedupe(poolIds);
 
   for (const poolId of normalizedPoolIds) {
-    ensureActorOwnsPool(state, poolId, actorId);
+    ensureActorOwnsPool(state, poolId, actorId, actorIdentifier);
   }
 
   const question = createPersistentQuestion(draft, {
@@ -673,19 +700,20 @@ export async function createQuestion(
   syncQuestionPoolMemberships(state, question.id, question.poolIds);
   await writeStore(state);
 
-  return filterQuestionsForActor(state.questions, actorId);
+  return filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier);
 }
 
 export async function importQuestions(
   drafts: QuestionDraft[],
   actorId: string | null,
   poolIds: string[] = [],
+  actorIdentifier: string | null = null,
 ) {
   const state = await readStore();
   const normalizedPoolIds = dedupe(poolIds);
 
   for (const poolId of normalizedPoolIds) {
-    ensureActorOwnsPool(state, poolId, actorId);
+    ensureActorOwnsPool(state, poolId, actorId, actorIdentifier);
   }
 
   const importedQuestions = drafts.map((draft) =>
@@ -704,7 +732,7 @@ export async function importQuestions(
 
   await writeStore(state);
 
-  return filterQuestionsForActor(state.questions, actorId);
+  return filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier);
 }
 
 export async function updateQuestionPools(questionId: string, poolIds: string[]) {
@@ -721,6 +749,7 @@ export async function updateQuestion(
     poolIds?: string[];
   },
   actorId: string | null = null,
+  actorIdentifier: string | null = null,
 ) {
   const state = await readStore();
   ensureActorOwnsQuestion(state, questionId, actorId);
@@ -744,14 +773,14 @@ export async function updateQuestion(
 
   if (updates.poolIds) {
     for (const poolId of dedupe(updates.poolIds)) {
-      ensureActorOwnsPool(state, poolId, actorId);
+      ensureActorOwnsPool(state, poolId, actorId, actorIdentifier);
     }
 
     syncQuestionPoolMemberships(state, questionId, updates.poolIds);
   }
 
   await writeStore(state);
-  return filterQuestionsForActor(state.questions, actorId);
+  return filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier);
 }
 
 export async function deleteQuestion(questionId: string, actorId: string | null = null) {
@@ -1239,6 +1268,7 @@ export async function createPool(input: {
     id: createEntityId("pool"),
     name: input.name.trim(),
     questionIds: [],
+    sharedWithIdentifiers: [],
     updatedAt: timestamp,
   };
 
@@ -1246,6 +1276,46 @@ export async function createPool(input: {
   await writeStore(state);
 
   return filterPoolsForActor(state.pools, getQuestionMap(state), input.createdBy ?? null);
+}
+
+export async function updatePoolSharing(input: {
+  actorId: string | null;
+  actorIdentifier: string | null;
+  poolId: string;
+  sharedWithIdentifiers: string[];
+}) {
+  const state = await readStore();
+  const pool = state.pools.find((entry) => entry.id === input.poolId);
+
+  if (!pool) {
+    throw new Error("Select a valid question pool.");
+  }
+
+  if (input.actorId && pool.createdBy !== input.actorId) {
+    throw new Error("Only the pool owner can share this question pool.");
+  }
+
+  const normalizedSharedWithIdentifiers = dedupe(
+    input.sharedWithIdentifiers
+      .map((identifier) => normalizeParticipantIdentifier(identifier))
+      .filter(
+        (identifier) => !input.actorIdentifier || !identifiersMatch(identifier, input.actorIdentifier),
+      ),
+  );
+  const timestamp = new Date().toISOString();
+
+  state.pools = state.pools.map((entry) =>
+    entry.id === input.poolId
+      ? {
+          ...entry,
+          sharedWithIdentifiers: normalizedSharedWithIdentifiers,
+          updatedAt: timestamp,
+        }
+      : entry,
+  );
+  await writeStore(state);
+
+  return filterPoolsForActor(state.pools, getQuestionMap(state), input.actorId, input.actorIdentifier);
 }
 
 export async function listParticipants() {
@@ -1653,6 +1723,7 @@ export async function listScheduledTests(actorId: string | null = null) {
 }
 
 export async function createScheduledTest(input: {
+  actorIdentifier?: string | null;
   branding?: WorkspaceBranding | null;
   createdBy: string | null;
   durationMinutes: number;
@@ -1664,7 +1735,7 @@ export async function createScheduledTest(input: {
   title?: string | null;
 }) {
   const state = await readStore();
-  const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy);
+  const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy, input.actorIdentifier ?? null);
 
   const poolQuestionIds = dedupe(pool.questionIds).filter((questionId) =>
     state.questions.some((question) => question.id === questionId),
@@ -1715,6 +1786,7 @@ export async function createScheduledTest(input: {
 }
 
 export async function updateScheduledTest(input: {
+  actorIdentifier?: string | null;
   branding?: WorkspaceBranding | null;
   createdBy: string | null;
   durationMinutes: number;
@@ -1733,7 +1805,7 @@ export async function updateScheduledTest(input: {
     throw new Error("Only tests that have not started can be edited.");
   }
 
-  const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy);
+  const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy, input.actorIdentifier ?? null);
   const poolQuestionIds = dedupe(pool.questionIds).filter((questionId) =>
     state.questions.some((question) => question.id === questionId),
   );
@@ -1816,8 +1888,8 @@ export async function listStateSummary(input?: {
   const actorSub = input?.actorSub ?? null;
   const actorIdentifier = input?.actorIdentifier ?? null;
   const questionMap = getQuestionMap(state);
-  const visibleQuestions = filterQuestionsForActor(state.questions, actorSub);
-  const visiblePools = filterPoolsForActor(state.pools, questionMap, actorSub);
+  const visibleQuestions = filterQuestionsForActor(state.questions, actorSub, state.pools, actorIdentifier);
+  const visiblePools = filterPoolsForActor(state.pools, questionMap, actorSub, actorIdentifier);
   const visibleScheduledTests = filterScheduledTestsForActor(hydrateScheduledTests(state), actorSub);
   const visibleScheduledTestIds = new Set(visibleScheduledTests.map((test) => test.id));
   const visibleAttempts = state.attempts.filter((attempt) => visibleScheduledTestIds.has(attempt.testId));

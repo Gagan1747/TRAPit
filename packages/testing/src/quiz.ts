@@ -42,6 +42,7 @@ export type QuestionPool = {
   id: string;
   name: string;
   questionIds: string[];
+  sharedWithIdentifiers: string[];
   updatedAt: string;
 };
 

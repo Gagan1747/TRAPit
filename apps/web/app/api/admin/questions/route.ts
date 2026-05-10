@@ -11,6 +11,19 @@ import {
   listPoolsForActor,
 } from "../../../../lib/testing-store";
 
+function decorateQuestion<T extends { createdBy: string | null }>(
+  question: T,
+  actorSub: string | null,
+) {
+  const canManage = Boolean(actorSub && question.createdBy === actorSub);
+
+  return {
+    ...question,
+    canManage,
+    isShared: !canManage,
+  };
+}
+
 type CreateQuestionBody = {
   draft?: QuestionDraft;
   drafts?: QuestionDraft[];
@@ -39,9 +52,9 @@ export async function GET() {
     return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
-  const questions = await listQuestions(actor.sub);
+  const questions = await listQuestions(actor.sub, actor.identifier);
 
-  return NextResponse.json({ questions });
+  return NextResponse.json({ questions: questions.map((question) => decorateQuestion(question, actor.sub)) });
 }
 
 export async function POST(request: Request) {
@@ -72,7 +85,7 @@ export async function POST(request: Request) {
     }
 
     if (actor.role === "user") {
-      const pools = await listPoolsForActor(actor.sub);
+      const pools = await listPoolsForActor(actor.sub, actor.identifier);
       const nextCounts = (body.poolIds ?? []).map((poolId) => {
         const pool = pools.find((entry) => entry.id === poolId);
         return (pool?.questionIds.length ?? 0) + drafts.length;
@@ -81,8 +94,8 @@ export async function POST(request: Request) {
       assertCanAddQuestionsToPools(actor.userCategory, nextCounts);
     }
 
-    const questions = await importQuestions(drafts, actor.sub, body.poolIds ?? []);
-    return NextResponse.json({ questions });
+    const questions = await importQuestions(drafts, actor.sub, body.poolIds ?? [], actor.identifier);
+    return NextResponse.json({ questions: questions.map((question) => decorateQuestion(question, actor.sub)) });
   }
 
   if (body.mode !== "create" || !body.draft) {
@@ -103,7 +116,7 @@ export async function POST(request: Request) {
   }
 
   if (actor.role === "user") {
-    const pools = await listPoolsForActor(actor.sub);
+    const pools = await listPoolsForActor(actor.sub, actor.identifier);
     const nextCounts = (body.poolIds ?? []).map((poolId) => {
       const pool = pools.find((entry) => entry.id === poolId);
       return (pool?.questionIds.length ?? 0) + 1;
@@ -112,9 +125,9 @@ export async function POST(request: Request) {
     assertCanAddQuestionsToPools(actor.userCategory, nextCounts);
   }
 
-  const questions = await createQuestion(body.draft, actor.sub, "manual", body.poolIds ?? []);
+  const questions = await createQuestion(body.draft, actor.sub, "manual", body.poolIds ?? [], actor.identifier);
 
-  return NextResponse.json({ questions });
+  return NextResponse.json({ questions: questions.map((question) => decorateQuestion(question, actor.sub)) });
 }
 
 export async function DELETE(request: Request) {
@@ -135,7 +148,7 @@ export async function DELETE(request: Request) {
   if (Array.isArray(body.questionIds) && body.questionIds.length) {
     try {
       const questions = await deleteQuestions(body.questionIds, actor.sub);
-      return NextResponse.json({ questions });
+      return NextResponse.json({ questions: questions.map((question) => decorateQuestion(question, actor.sub)) });
     } catch (error) {
       return NextResponse.json(
         { error: error instanceof Error ? error.message : "Unable to remove the selected questions." },

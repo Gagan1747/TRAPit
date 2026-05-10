@@ -5,6 +5,19 @@ import { getWorkspaceActor } from "../../../../../lib/workspace-actor";
 import { assertCanAddQuestionsToPools } from "../../../../../lib/user-category-limits";
 import { deleteQuestion, listPoolsForActor, listQuestions, updateQuestion } from "../../../../../lib/testing-store";
 
+function decorateQuestion<T extends { createdBy: string | null }>(
+  question: T,
+  actorSub: string | null,
+) {
+  const canManage = Boolean(actorSub && question.createdBy === actorSub);
+
+  return {
+    ...question,
+    canManage,
+    isShared: !canManage,
+  };
+}
+
 export async function DELETE(
   _request: Request,
   context: { params: { questionId: string } },
@@ -17,7 +30,7 @@ export async function DELETE(
 
   try {
     const questions = await deleteQuestion(context.params.questionId, workspaceActor.sub);
-    return NextResponse.json({ questions });
+    return NextResponse.json({ questions: questions.map((question) => decorateQuestion(question, workspaceActor.sub)) });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to remove the question." },
@@ -65,8 +78,8 @@ export async function PATCH(
 
   if (actor.role === "user" && body.poolIds) {
     const [questions, pools] = await Promise.all([
-      listQuestions(actor.sub),
-      listPoolsForActor(actor.sub),
+      listQuestions(actor.sub, actor.identifier),
+      listPoolsForActor(actor.sub, actor.identifier),
     ]);
     const editedQuestion = questions.find((question) => question.id === context.params.questionId);
     const nextCounts = body.poolIds.map((poolId) => {
@@ -83,9 +96,9 @@ export async function PATCH(
     const questions = await updateQuestion(context.params.questionId, {
       draft: body.draft,
       poolIds: body.poolIds,
-    }, actor.sub);
+    }, actor.sub, actor.identifier);
 
-    return NextResponse.json({ questions });
+    return NextResponse.json({ questions: questions.map((question) => decorateQuestion(question, actor.sub)) });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to update the question." },

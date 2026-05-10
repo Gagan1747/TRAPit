@@ -89,6 +89,7 @@ export async function POST(request: Request) {
 
   try {
     const scheduledTests = await createScheduledTest({
+      actorIdentifier: actor.identifier,
       branding: body.branding ?? null,
       createdBy: actor.sub,
       durationMinutes: body.durationMinutes,
@@ -162,6 +163,7 @@ export async function PATCH(request: Request) {
 
   try {
     const scheduledTests = await updateScheduledTest({
+      actorIdentifier: actor.identifier,
       branding: body.branding ?? null,
       createdBy: actor.sub,
       durationMinutes: body.durationMinutes,

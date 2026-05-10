@@ -8,7 +8,6 @@ import {
 } from "@trapit/auth";
 import {
   createPresentedQuestions,
-  createEmptyTestingWorkspaceState,
   formatElapsedTime,
   type GroupJoinRequest,
   type ObjectiveQuestion,
@@ -106,8 +105,21 @@ function formatMembershipQuestionsPerPool(plan: (typeof normalUserCategoryDefini
   return plan.test.maxQuestionsPerPool;
 }
 
+function formatCountShare(count: number, total: number) {
+  if (total <= 0) {
+    return "0%";
+  }
+
+  return `${Math.round((count / total) * 100)}%`;
+}
+
 type QuestionApiResponse = {
-  questions: PersistentQuestion[];
+  questions: WorkspaceQuestion[];
+};
+
+type WorkspaceQuestion = PersistentQuestion & {
+  canManage: boolean;
+  isShared: boolean;
 };
 
 type QuestionMutationPayload =
@@ -131,7 +143,12 @@ type QuestionMutationPayload =
     };
 
 type PoolsResponse = {
-  pools: QuestionPool[];
+  pools: WorkspaceQuestionPool[];
+};
+
+type WorkspaceQuestionPool = QuestionPool & {
+  canManage: boolean;
+  isShared: boolean;
 };
 
 type ParticipantsResponse = {
@@ -582,6 +599,17 @@ function formatParticipantName(
     : participant.label || participant.identifier;
 }
 
+function normalizeDuplicateQuestionValue(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function createQuestionDuplicateSignature(question: Pick<PersistentQuestion, "options" | "prompt">) {
+  return [
+    normalizeDuplicateQuestionValue(question.prompt),
+    ...question.options.map((option) => normalizeDuplicateQuestionValue(option)),
+  ].join("||");
+}
+
 function formatResultParticipantName(
   identifier: string,
   participantName: string | undefined,
@@ -798,14 +826,13 @@ export function AdminQuestionWorkspace({
   const [scheduledPolls, setScheduledPolls] = useState<ScheduledPoll[]>([]);
   const [poolFeedback, setPoolFeedback] = useState<string | null>(null);
   const [poolName, setPoolName] = useState("");
-  const [pools, setPools] = useState<QuestionPool[]>([]);
+  const [poolShareSearch, setPoolShareSearch] = useState("");
+  const [pools, setPools] = useState<WorkspaceQuestionPool[]>([]);
   const [authorPoolId, setAuthorPoolId] = useState("");
   const [isOcrImportOpen, setIsOcrImportOpen] = useState(false);
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
   const [selectedQuestionBankPoolId, setSelectedQuestionBankPoolId] = useState<string | null>(null);
-  const [questions, setQuestions] = useState<PersistentQuestion[]>(
-    createEmptyTestingWorkspaceState().questions,
-  );
+  const [questions, setQuestions] = useState<WorkspaceQuestion[]>([]);
   const [reviewByTestId, setReviewByTestId] = useState<Record<string, AdminTestReviewResponse>>({});
   const [reviewLoadingByTestId, setReviewLoadingByTestId] = useState<Record<string, boolean>>({});
   const [resultsMode, setResultsMode] = useState<AdminResultsMode>("tests");
@@ -838,7 +865,7 @@ export function AdminQuestionWorkspace({
     scheduledTests: 0,
   });
   const [testListFilter, setTestListFilter] = useState<AdminTestListFilter>("both");
-  const [toolbarMenuView, setToolbarMenuView] = useState<"branding" | "menu" | "notifications">("menu");
+  const [toolbarMenuView, setToolbarMenuView] = useState<"branding" | "menu" | "notifications" | "user-details">("menu");
   const [visibleParticipantReviewTestIds, setVisibleParticipantReviewTestIds] = useState<string[]>([]);
   const [visibleReviewTestIds, setVisibleReviewTestIds] = useState<string[]>([]);
   const [workspaceBranding, setWorkspaceBranding] = useState<WorkspaceBranding | null>(null);
@@ -1659,6 +1686,40 @@ export function AdminQuestionWorkspace({
     });
   }
 
+  function handleTogglePoolShareIdentifier(identifier: string) {
+    if (!selectedQuestionBankPool || !selectedQuestionBankPool.canManage) {
+      return;
+    }
+
+    const nextSharedIdentifiers = selectedQuestionBankPool.sharedWithIdentifiers.includes(identifier)
+      ? selectedQuestionBankPool.sharedWithIdentifiers.filter((currentIdentifier) => currentIdentifier !== identifier)
+      : [...selectedQuestionBankPool.sharedWithIdentifiers, identifier];
+
+    void mutateWorkspace(async () => {
+      const payload = await readJson<PoolsResponse>(
+        await fetch("/api/admin/pools", {
+          body: JSON.stringify({
+            poolId: selectedQuestionBankPool.id,
+            sharedWithIdentifiers: nextSharedIdentifiers,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "PATCH",
+        }),
+      );
+
+      setPools(payload.pools);
+      setFeedback(
+        nextSharedIdentifiers.includes(identifier)
+          ? "Question pool shared successfully."
+          : "Question pool sharing updated.",
+      );
+    }).catch((error) => {
+      setFeedback(error instanceof Error ? error.message : "Unable to update question pool sharing.");
+    });
+  }
+
   function handlePreviewImport() {
     if (!importText.trim()) {
       setImportFeedback("Paste OCR text before previewing the import.");
@@ -2241,13 +2302,65 @@ export function AdminQuestionWorkspace({
   const filteredQuestionBankQuestions = selectedQuestionBankPoolId
     ? questions.filter((question) => question.poolIds.includes(selectedQuestionBankPoolId))
     : [];
-  const filteredQuestionBankQuestionIds = filteredQuestionBankQuestions.map((question) => question.id);
+  const filteredQuestionBankQuestionIds = filteredQuestionBankQuestions
+    .filter((question) => question.canManage)
+    .map((question) => question.id);
   const selectedVisibleQuestionIds = filteredQuestionBankQuestionIds.filter((questionId) =>
     selectedQuestionIds.includes(questionId),
   );
   const areAllVisibleQuestionsSelected =
     filteredQuestionBankQuestionIds.length > 0 &&
     filteredQuestionBankQuestionIds.every((questionId) => selectedQuestionIds.includes(questionId));
+  const questionBankQuestionPositionById = new Map(
+    filteredQuestionBankQuestions.map((question, index) => [question.id, index + 1]),
+  );
+  const duplicateQuestionGroupsBySignature = new Map<string, WorkspaceQuestion[]>();
+
+  for (const question of filteredQuestionBankQuestions) {
+    const signature = createQuestionDuplicateSignature(question);
+    const existingQuestions = duplicateQuestionGroupsBySignature.get(signature);
+
+    if (existingQuestions) {
+      existingQuestions.push(question);
+    } else {
+      duplicateQuestionGroupsBySignature.set(signature, [question]);
+    }
+  }
+
+  const duplicateQuestionGroups = Array.from(duplicateQuestionGroupsBySignature.entries())
+    .filter(([, duplicateQuestions]) => duplicateQuestions.length > 1)
+    .map(([signature, duplicateQuestions]) => ({
+      questions: duplicateQuestions,
+      signature,
+    }));
+  const duplicateQuestionGroupByQuestionId = new Map<
+    string,
+    {
+      questions: WorkspaceQuestion[];
+      signature: string;
+    }
+  >();
+
+  for (const duplicateGroup of duplicateQuestionGroups) {
+    for (const question of duplicateGroup.questions) {
+      duplicateQuestionGroupByQuestionId.set(question.id, duplicateGroup);
+    }
+  }
+
+  const filteredShareableParticipants = participants.filter((participant) => {
+    if (currentAdminIdentifier && participantIdentifiersMatch(participant.identifier, currentAdminIdentifier)) {
+      return false;
+    }
+
+    const query = poolShareSearch.trim().toLowerCase();
+
+    if (!query) {
+      return true;
+    }
+
+    const searchableText = [participant.identifier, participant.label].join(" ").toLowerCase();
+    return searchableText.includes(query);
+  });
   const mergedTestListMap = new Map<string, UnifiedAdminTestListItem>();
 
   for (const scheduledTest of sortedScheduledTests) {
@@ -2469,6 +2582,17 @@ export function AdminQuestionWorkspace({
     : [];
   const latestResolvedCategoryMessage = latestResolvedCategoryRequest
     ? latestResolvedCategoryRequest.status === "accepted"
+      const totalManagedUsers = categoryManagement?.managedUsers.length ?? 0;
+      const userPlanDistribution = orderedNormalUserCategories.map((category) => {
+        const count = categoryManagement?.managedUsers.filter((user) => user.currentCategory === category).length ?? 0;
+
+        return {
+          category,
+          count,
+          label: normalUserCategoryDefinitions[category].label,
+          share: formatCountShare(count, totalManagedUsers),
+        };
+      });
       ? `Your upgrade request for ${normalUserCategoryDefinitions[latestResolvedCategoryRequest.requestedCategory].label} was approved${latestResolvedCategoryRequest.approvedDurationMonths ? ` for ${latestResolvedCategoryRequest.approvedDurationMonths === 12 ? "1 year" : "3 months"}` : ""}.`
       : `Your upgrade request for ${normalUserCategoryDefinitions[latestResolvedCategoryRequest.requestedCategory].label} was rejected.`
     : null;
@@ -2477,7 +2601,9 @@ export function AdminQuestionWorkspace({
     const visibleQuestionIds = new Set(
       selectedQuestionBankPoolId
         ? questions
-            .filter((question) => question.poolIds.includes(selectedQuestionBankPoolId))
+            .filter(
+              (question) => question.poolIds.includes(selectedQuestionBankPoolId) && question.canManage,
+            )
             .map((question) => question.id)
         : [],
     );
@@ -2680,6 +2806,15 @@ export function AdminQuestionWorkspace({
                       {isManageUpgradesPanelOpen ? "Hide manage upgrades" : "Manage upgrades"}
                     </button>
                   ) : null}
+                  {isSuperAdmin ? (
+                    <button
+                      className="workspace-overflow-action"
+                      type="button"
+                      onClick={() => setToolbarMenuView("user-details")}
+                    >
+                      User details
+                    </button>
+                  ) : null}
                   <button
                     className="workspace-overflow-action"
                     type="button"
@@ -2717,6 +2852,37 @@ export function AdminQuestionWorkspace({
                       </div>
                     ))}
                   </div>
+                </div>
+              ) : null}
+
+              {toolbarMenuView === "user-details" ? (
+                <div className="workspace-overflow-stack">
+                  <div className="workspace-overflow-head">
+                    <button className="button-secondary small-button" type="button" onClick={() => setToolbarMenuView("menu")}>
+                      Back
+                    </button>
+                    <p className="eyebrow">User details</p>
+                  </div>
+                  <h2 className="section-title">Registered users</h2>
+                  <div className="notification-panel-item user-detail-summary-card">
+                    <span>Total registered users</span>
+                    <strong>{totalManagedUsers}</strong>
+                  </div>
+                  {categoryManagement ? (
+                    <div className="notification-panel-list">
+                      {userPlanDistribution.map((plan) => (
+                        <div className="notification-panel-item user-detail-plan-row" key={plan.category}>
+                          <div className="user-detail-plan-copy">
+                            <strong>{plan.label.replace(/ users$/i, " user")}</strong>
+                            <span className="muted-text">{plan.share} of registered users</span>
+                          </div>
+                          <strong>{plan.count}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted-text">Unable to load user distribution right now.</p>
+                  )}
                 </div>
               ) : null}
 
@@ -3232,6 +3398,11 @@ export function AdminQuestionWorkspace({
             <div className="pool-filter-grid">
               {pools.map((pool) => {
                 const questionCount = questions.filter((question) => question.poolIds.includes(pool.id)).length;
+                const shareSummary = pool.isShared
+                  ? "Shared with you"
+                  : pool.sharedWithIdentifiers.length
+                    ? `Shared with ${pool.sharedWithIdentifiers.length} user${pool.sharedWithIdentifiers.length === 1 ? "" : "s"}`
+                    : null;
 
                 return (
                   <button
@@ -3241,7 +3412,10 @@ export function AdminQuestionWorkspace({
                     onClick={() => setSelectedQuestionBankPoolId(pool.id)}
                   >
                     <strong>{pool.name}</strong>
-                    <span>{questionCount} question{questionCount === 1 ? "" : "s"}</span>
+                    <span>
+                      {questionCount} question{questionCount === 1 ? "" : "s"}
+                      {shareSummary ? ` · ${shareSummary}` : ""}
+                    </span>
                   </button>
                 );
               })}
@@ -3254,6 +3428,16 @@ export function AdminQuestionWorkspace({
                   <p className="muted-text question-bank-summary-copy">
                     {selectedQuestionBankPool.description || "No description added for this pool yet."}
                   </p>
+                  <div className="inline-actions question-bank-summary-chips">
+                    {selectedQuestionBankPool.isShared ? (
+                      <span className="status-chip">Shared with you</span>
+                    ) : null}
+                    {duplicateQuestionGroups.length ? (
+                      <span className="status-chip warning">
+                        {duplicateQuestionGroups.length} duplicate set{duplicateQuestionGroups.length === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="inline-actions">
                   <label className="radio-chip">
@@ -3284,26 +3468,142 @@ export function AdminQuestionWorkspace({
               </div>
             )}
 
+            {selectedQuestionBankPool ? (
+              <div className="question-card question-bank-share-panel">
+                <div className="question-bank-share-panel-head">
+                  <div>
+                    <strong>Share question pool</strong>
+                    <p className="muted-text question-bank-summary-copy">
+                      {selectedQuestionBankPool.canManage
+                        ? "Choose users who should be able to open and use this pool."
+                        : "This pool was shared with you. Only the owner can change sharing."}
+                    </p>
+                  </div>
+                  <span className="status-chip">
+                    {selectedQuestionBankPool.sharedWithIdentifiers.length} shared
+                  </span>
+                </div>
+
+                {selectedQuestionBankPool.sharedWithIdentifiers.length ? (
+                  <div className="question-bank-share-chip-row">
+                    {selectedQuestionBankPool.sharedWithIdentifiers.map((identifier) => (
+                      <button
+                        className="button-secondary small-button"
+                        disabled={!selectedQuestionBankPool.canManage || isMutating}
+                        key={`${selectedQuestionBankPool.id}-${identifier}`}
+                        type="button"
+                        onClick={() => handleTogglePoolShareIdentifier(identifier)}
+                      >
+                        {formatParticipantName(identifier, participants)}
+                        {selectedQuestionBankPool.canManage ? " Remove" : ""}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted-text">This pool is not shared with anyone yet.</p>
+                )}
+
+                {selectedQuestionBankPool.canManage ? (
+                  <div className="form-stack">
+                    <div className="field">
+                      <label htmlFor="pool-share-search">Search users to share with</label>
+                      <input
+                        id="pool-share-search"
+                        placeholder="Search by phone number or name"
+                        value={poolShareSearch}
+                        onChange={(event) => setPoolShareSearch(event.target.value)}
+                      />
+                    </div>
+
+                    <div className="question-bank-share-chip-row">
+                      {filteredShareableParticipants.length ? (
+                        filteredShareableParticipants.map((participant) => {
+                          const isShared = selectedQuestionBankPool.sharedWithIdentifiers.some((identifier) =>
+                            participantIdentifiersMatch(identifier, participant.identifier),
+                          );
+
+                          return (
+                            <button
+                              className={isShared ? "button small-button" : "button-secondary small-button"}
+                              disabled={isMutating}
+                              key={participant.id}
+                              type="button"
+                              onClick={() => handleTogglePoolShareIdentifier(participant.identifier)}
+                            >
+                              {formatParticipantName(participant.identifier, participants)}
+                            </button>
+                          );
+                        })
+                      ) : (
+                        <p className="muted-text">No matching users found.</p>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {selectedQuestionBankPoolId && duplicateQuestionGroups.length ? (
+              <div className="duplicate-group-list">
+                {duplicateQuestionGroups.map((duplicateGroup, groupIndex) => {
+                  const duplicatePositions = duplicateGroup.questions
+                    .map((question) => `Q${questionBankQuestionPositionById.get(question.id)}`)
+                    .join(", ");
+
+                  return (
+                    <article className="question-card duplicate-group-card" key={duplicateGroup.signature}>
+                      <div className="question-bank-share-panel-head">
+                        <strong>Duplicate set {groupIndex + 1}</strong>
+                        <span className="status-chip warning">
+                          {duplicateGroup.questions.length} copies
+                        </span>
+                      </div>
+                      <p className="compact-question-prompt">{duplicateGroup.questions[0]?.prompt}</p>
+                      <p className="muted-text compact-question-meta">Found at {duplicatePositions}</p>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : null}
+
             {selectedQuestionBankPoolId && filteredQuestionBankQuestions.length ? (
               <div className="question-bank-grid">
-                {filteredQuestionBankQuestions.map((question, index) => (
-                  <article className="question-card compact-question-card" key={question.id}>
+                {filteredQuestionBankQuestions.map((question, index) => {
+                  const duplicateGroup = duplicateQuestionGroupByQuestionId.get(question.id);
+                  const duplicatePositions = duplicateGroup
+                    ? duplicateGroup.questions
+                        .filter((entry) => entry.id !== question.id)
+                        .map((entry) => `Q${questionBankQuestionPositionById.get(entry.id)}`)
+                        .join(", ")
+                    : "";
+                  const removableDuplicateIds = duplicateGroup
+                    ? duplicateGroup.questions
+                        .filter((entry) => entry.id !== question.id && entry.canManage)
+                        .map((entry) => entry.id)
+                    : [];
+
+                  return (
+                  <article
+                    className={`question-card compact-question-card${duplicateGroup ? " is-duplicate" : ""}`}
+                    key={question.id}
+                  >
                     <div className="question-head compact-question-head">
                       <div className="inline-actions">
                         <label className="radio-chip">
                           <input
                             checked={selectedQuestionIds.includes(question.id)}
+                            disabled={!question.canManage}
                             type="checkbox"
                             onChange={() => toggleQuestionSelection(question.id)}
                           />
-                          Select
+                          {question.canManage ? "Select" : "Read-only"}
                         </label>
                         <strong>Q{index + 1}</strong>
                       </div>
                       <div className="inline-actions">
                         <button
                           className="button-secondary small-button"
-                          disabled={isMutating}
+                          disabled={isMutating || !question.canManage}
                           type="button"
                           onClick={() =>
                             editingQuestionId === question.id
@@ -3315,7 +3615,7 @@ export function AdminQuestionWorkspace({
                         </button>
                         <button
                           className="button-secondary small-button"
-                          disabled={isMutating}
+                          disabled={isMutating || !question.canManage}
                           type="button"
                           onClick={() => handleDeleteQuestion(question.id)}
                         >
@@ -3323,6 +3623,37 @@ export function AdminQuestionWorkspace({
                         </button>
                       </div>
                     </div>
+                    {duplicateGroup || question.isShared ? (
+                      <div className="duplicate-question-banner">
+                        {duplicateGroup ? (
+                          <>
+                            <div className="inline-actions">
+                              <span className="status-chip warning">
+                                Duplicate with {duplicateGroup.questions.length - 1} other question{duplicateGroup.questions.length === 2 ? "" : "s"}
+                              </span>
+                              {!question.canManage ? <span className="status-chip">Read-only</span> : null}
+                            </div>
+                            <p className="muted-text compact-question-meta">
+                              Matches {duplicatePositions}. Keep one copy and remove the rest.
+                            </p>
+                            {question.canManage ? (
+                              <div className="inline-actions">
+                                <button
+                                  className="button-secondary small-button"
+                                  disabled={!removableDuplicateIds.length || isMutating}
+                                  type="button"
+                                  onClick={() => handleDeleteSelectedQuestions(removableDuplicateIds)}
+                                >
+                                  Keep this, remove others
+                                </button>
+                              </div>
+                            ) : null}
+                          </>
+                        ) : (
+                          <span className="status-chip">Shared question</span>
+                        )}
+                      </div>
+                    ) : null}
                     {editingQuestionId === question.id && editingQuestionDraft ? (
                       <div className="form-stack">
                         <div className="field textarea-field">
@@ -3431,7 +3762,7 @@ export function AdminQuestionWorkspace({
                       {question.source} · {formatShortDate(question.createdAt)}
                     </p>
                   </article>
-                ))}
+                );})}
               </div>
             ) : selectedQuestionBankPoolId ? (
               <div className="empty-state compact-empty-state">

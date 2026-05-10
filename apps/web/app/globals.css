@@ -637,6 +637,19 @@ main {
   border: 1px solid rgba(180, 76, 47, 0.16);
 }
 
+.user-detail-summary-card {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.72), rgba(247, 228, 217, 0.72));
+}
+
+.user-detail-plan-row {
+  align-items: flex-start;
+}
+
+.user-detail-plan-copy {
+  display: grid;
+  gap: 4px;
+}
+
 .branding-preview-card {
   display: inline-flex;
   align-items: center;
@@ -902,6 +915,37 @@ main {
   margin: 6px 0 0;
 }
 
+.question-bank-summary-chips {
+  margin-top: 10px;
+}
+
+.question-bank-share-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.question-bank-share-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.question-bank-share-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.duplicate-group-list {
+  display: grid;
+  gap: 12px;
+}
+
+.duplicate-group-card {
+  background: rgba(180, 76, 47, 0.08);
+}
+
 .question-bank-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -912,8 +956,23 @@ main {
   padding: 14px;
 }
 
+.compact-question-card.is-duplicate {
+  border-color: rgba(180, 76, 47, 0.4);
+  background: rgba(180, 76, 47, 0.08);
+}
+
 .compact-question-head {
   margin-bottom: 6px;
+}
+
+.duplicate-question-banner {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(180, 76, 47, 0.18);
+  background: rgba(255, 255, 255, 0.55);
 }
 
 .compact-question-prompt {
