@@ -2580,19 +2580,19 @@ export function AdminQuestionWorkspace({
         ...suggestedUpgradePlans,
       ]
     : [];
+  const totalManagedUsers = categoryManagement?.managedUsers.length ?? 0;
+  const userPlanDistribution = orderedNormalUserCategories.map((category) => {
+    const count = categoryManagement?.managedUsers.filter((user) => user.currentCategory === category).length ?? 0;
+
+    return {
+      category,
+      count,
+      label: normalUserCategoryDefinitions[category].label,
+      share: formatCountShare(count, totalManagedUsers),
+    };
+  });
   const latestResolvedCategoryMessage = latestResolvedCategoryRequest
     ? latestResolvedCategoryRequest.status === "accepted"
-      const totalManagedUsers = categoryManagement?.managedUsers.length ?? 0;
-      const userPlanDistribution = orderedNormalUserCategories.map((category) => {
-        const count = categoryManagement?.managedUsers.filter((user) => user.currentCategory === category).length ?? 0;
-
-        return {
-          category,
-          count,
-          label: normalUserCategoryDefinitions[category].label,
-          share: formatCountShare(count, totalManagedUsers),
-        };
-      });
       ? `Your upgrade request for ${normalUserCategoryDefinitions[latestResolvedCategoryRequest.requestedCategory].label} was approved${latestResolvedCategoryRequest.approvedDurationMonths ? ` for ${latestResolvedCategoryRequest.approvedDurationMonths === 12 ? "1 year" : "3 months"}` : ""}.`
       : `Your upgrade request for ${normalUserCategoryDefinitions[latestResolvedCategoryRequest.requestedCategory].label} was rejected.`
     : null;
