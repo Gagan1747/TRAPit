@@ -1,14 +1,14 @@
 :root {
   color-scheme: light;
-  --bg: #f4efe7;
-  --surface: rgba(255, 250, 243, 0.88);
-  --surface-strong: #fffaf3;
+  --bg: #e7f4ff;
+  --surface: rgba(244, 249, 255, 0.9);
+  --surface-strong: #f8fbff;
   --ink: #1c140f;
-  --muted: #69584d;
-  --accent: #b44c2f;
-  --accent-deep: #7d2d1d;
+  --muted: #556575;
+  --accent: #7f63c9;
+  --accent-deep: #513785;
   --line: rgba(28, 20, 15, 0.12);
-  --shadow: 0 24px 60px rgba(90, 45, 27, 0.14);
+  --shadow: 0 24px 60px rgba(77, 112, 154, 0.16);
 }
 
 * {
@@ -21,9 +21,9 @@ body {
   min-height: 100%;
   font-family: Georgia, "Times New Roman", serif;
   background:
-    radial-gradient(circle at top left, rgba(180, 76, 47, 0.18), transparent 28%),
-    radial-gradient(circle at top right, rgba(120, 141, 94, 0.18), transparent 26%),
-    linear-gradient(180deg, #f8f2ea 0%, #efe5d7 100%);
+    radial-gradient(circle at top left, rgba(117, 179, 255, 0.24), transparent 30%),
+    radial-gradient(circle at top right, rgba(176, 153, 255, 0.22), transparent 28%),
+    linear-gradient(180deg, #f3fbff 0%, #e1f0ff 100%);
   color: var(--ink);
 }
 
@@ -74,7 +74,7 @@ main {
   width: 220px;
   height: 220px;
   border-radius: 999px;
-  background: rgba(180, 76, 47, 0.1);
+  background: rgba(127, 99, 201, 0.12);
 }
 
 .eyebrow {
@@ -298,18 +298,18 @@ main {
   min-height: 46px;
   padding: 0 16px;
   border-radius: 16px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.56);
-  color: var(--ink);
+  border: 1px solid rgba(127, 99, 201, 0.28);
+  background: rgba(224, 211, 255, 0.92);
+  color: #2f204f;
   font: inherit;
   font-weight: 700;
   text-align: left;
 }
 
 .admin-menu-group-toggle.is-active {
-  border-color: rgba(180, 76, 47, 0.42);
-  background: rgba(180, 76, 47, 0.12);
-  color: var(--accent-deep);
+  border-color: rgba(98, 70, 163, 0.45);
+  background: rgba(191, 171, 245, 0.96);
+  color: #26183f;
 }
 
 .admin-menu-group-toggle.is-disabled {
@@ -319,8 +319,8 @@ main {
 
 .admin-menu-group-toggle.is-disabled:hover,
 .admin-menu-group-toggle.is-disabled:focus-visible {
-  border-color: rgba(180, 76, 47, 0.22);
-  background: rgba(180, 76, 47, 0.08);
+  border-color: rgba(127, 99, 201, 0.26);
+  background: rgba(214, 200, 248, 0.9);
 }
 
 .admin-menu-group-toggle-symbol {
@@ -350,18 +350,18 @@ main {
   min-height: 46px;
   padding: 0 16px;
   border-radius: 16px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.56);
-  color: var(--ink);
+  border: 1px solid rgba(127, 99, 201, 0.24);
+  background: rgba(237, 229, 255, 0.94);
+  color: #352458;
   font: inherit;
   font-weight: 600;
   text-align: left;
 }
 
 .admin-menu-item.is-active {
-  border-color: rgba(180, 76, 47, 0.42);
-  background: rgba(180, 76, 47, 0.12);
-  color: var(--accent-deep);
+  border-color: rgba(98, 70, 163, 0.45);
+  background: rgba(200, 182, 248, 0.98);
+  color: #26183f;
 }
 
 .admin-menu-item.is-disabled {
@@ -371,8 +371,8 @@ main {
 
 .admin-menu-item.is-disabled:hover,
 .admin-menu-item.is-disabled:focus-visible {
-  border-color: rgba(180, 76, 47, 0.22);
-  background: rgba(180, 76, 47, 0.08);
+  border-color: rgba(127, 99, 201, 0.24);
+  background: rgba(227, 218, 250, 0.9);
 }
 
 .workspace-card {
