@@ -486,6 +486,7 @@ function ensureActorOwnsPool(
   state: TestingWorkspaceState,
   poolId: string,
   actorId: string | null,
+  actorIdentifier: string | null = null,
 ) {
   const pool = state.pools.find((entry) => entry.id === poolId);
 
