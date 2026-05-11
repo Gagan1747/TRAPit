@@ -262,10 +262,10 @@ export async function getWorkspaceBranding(actorKey?: string | null) {
   const normalizedActorKey = normalizeBrandingActorKey(actorKey);
 
   if (!normalizedActorKey) {
-    return state.workspaceBranding;
+    return null;
   }
 
-  return state.workspaceBrandingByActor[normalizedActorKey] ?? state.workspaceBranding;
+  return state.workspaceBrandingByActor[normalizedActorKey] ?? null;
 }
 
 export async function updateWorkspaceBranding(
@@ -287,10 +287,10 @@ export async function updateWorkspaceBranding(
   await writeStore(state);
 
   if (!normalizedActorKey) {
-    return state.workspaceBranding;
+    return null;
   }
 
-  return state.workspaceBrandingByActor[normalizedActorKey] ?? state.workspaceBranding;
+  return state.workspaceBrandingByActor[normalizedActorKey] ?? null;
 }
 
 function isOwnedByActor(ownerId: string | null | undefined, actorId: string | null) {

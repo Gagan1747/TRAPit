@@ -2030,6 +2030,30 @@ export function AdminQuestionWorkspace({
     }
   }
 
+  async function handleClearBranding() {
+    setBrandingInstituteName("");
+    setBrandingImageDataUrl(null);
+
+    try {
+      const payload = await readJson<BrandingResponse>(
+        await fetch("/api/admin/branding", {
+          body: JSON.stringify({ branding: null }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setWorkspaceBranding(payload.branding);
+      setBrandingInstituteName(payload.branding?.instituteName ?? "");
+      setBrandingImageDataUrl(payload.branding?.imageDataUrl ?? null);
+      setBrandingFeedback("Branding cleared.");
+    } catch (error) {
+      setBrandingFeedback(error instanceof Error ? error.message : "Unable to clear branding.");
+    }
+  }
+
   function handleSchedulePoll() {
     const startsAt = pollScheduleStartNow
       ? new Date().toISOString()
@@ -2352,14 +2376,13 @@ export function AdminQuestionWorkspace({
       return false;
     }
 
-    const query = poolShareSearch.trim().toLowerCase();
+    const query = poolShareSearch.trim();
 
     if (!query) {
-      return true;
+      return false;
     }
 
-    const searchableText = [participant.identifier, participant.label].join(" ").toLowerCase();
-    return searchableText.includes(query);
+    return matchesParticipantSearch(participant, query);
   });
   const mergedTestListMap = new Map<string, UnifiedAdminTestListItem>();
 
@@ -2928,10 +2951,7 @@ export function AdminQuestionWorkspace({
                         className="button-secondary"
                         disabled={isMutating || (!brandingInstituteName.trim() && !brandingImageDataUrl)}
                         type="button"
-                        onClick={() => {
-                          setBrandingInstituteName("");
-                          setBrandingImageDataUrl(null);
-                        }}
+                        onClick={() => void handleClearBranding()}
                       >
                         Clear form
                       </button>
@@ -3509,14 +3529,15 @@ export function AdminQuestionWorkspace({
                       <label htmlFor="pool-share-search">Search users to share with</label>
                       <input
                         id="pool-share-search"
-                        placeholder="Search by phone number or name"
+                        placeholder="Enter the full phone number"
                         value={poolShareSearch}
                         onChange={(event) => setPoolShareSearch(event.target.value)}
                       />
                     </div>
+                    <p className="muted-text">Enter the complete phone number to reveal a user before sharing this pool.</p>
 
                     <div className="question-bank-share-chip-row">
-                      {filteredShareableParticipants.length ? (
+                      {poolShareSearch.trim() && filteredShareableParticipants.length ? (
                         filteredShareableParticipants.map((participant) => {
                           const isShared = selectedQuestionBankPool.sharedWithIdentifiers.some((identifier) =>
                             participantIdentifiersMatch(identifier, participant.identifier),
@@ -3534,8 +3555,10 @@ export function AdminQuestionWorkspace({
                             </button>
                           );
                         })
-                      ) : (
+                      ) : poolShareSearch.trim() ? (
                         <p className="muted-text">No matching users found.</p>
+                      ) : (
+                        <p className="muted-text">Enter the full phone number to search.</p>
                       )}
                     </div>
                   </div>
