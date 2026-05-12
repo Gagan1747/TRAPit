@@ -117,6 +117,10 @@ type QuestionApiResponse = {
   questions: WorkspaceQuestion[];
 };
 
+type QuestionImportResponse = {
+  importedCount: number;
+};
+
 type WorkspaceQuestion = PersistentQuestion & {
   canManage: boolean;
   isShared: boolean;
@@ -930,13 +934,6 @@ export function AdminQuestionWorkspace({
           : null,
       );
 
-      if (!categoryAssignmentIdentifier && categoryManagementPayload?.managedUsers.length) {
-        const initialUser = categoryManagementPayload.managedUsers[0];
-
-        setCategoryAssignmentIdentifier(initialUser.identifier);
-        setCategoryAssignmentCategory(initialUser.currentCategory);
-        setCategorySearchQuery(getManagedUserOptionLabel(initialUser));
-      }
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to load the admin workspace.");
     } finally {
@@ -1175,7 +1172,6 @@ export function AdminQuestionWorkspace({
 
     setCategoryAssignmentIdentifier(user.identifier);
     setCategoryAssignmentCategory(user.currentCategory);
-    setCategorySearchQuery(getManagedUserOptionLabel(user));
   }
 
   function closeManagementDrawers() {
@@ -1797,7 +1793,7 @@ export function AdminQuestionWorkspace({
       .map((candidate) => candidate.draft);
 
     void mutateWorkspace(async () => {
-      await readJson<QuestionApiResponse>(
+      const payload = await readJson<QuestionImportResponse>(
         await fetch("/api/admin/questions", {
           body: JSON.stringify({
             drafts,
@@ -1812,7 +1808,7 @@ export function AdminQuestionWorkspace({
       );
 
       setImportFeedback(
-        `Imported ${drafts.length} question${drafts.length === 1 ? "" : "s"} into the shared admin bank.`,
+        `Imported ${payload.importedCount} question${payload.importedCount === 1 ? "" : "s"} into the shared admin bank.`,
       );
       setImportPreview(null);
       setImportText("");
@@ -2571,7 +2567,7 @@ export function AdminQuestionWorkspace({
     const normalizedQueryCandidates = Array.from(getParticipantIdentifierCandidates(query));
 
     if (!query) {
-      return true;
+      return false;
     }
 
     const haystack = [user.identifier, user.displayName ?? "", user.userSub ?? ""]
@@ -2659,15 +2655,18 @@ export function AdminQuestionWorkspace({
       return;
     }
 
-    if (!filteredManagedUsers.length) {
+    if (!categoryManagement?.managedUsers.length) {
       setCategoryAssignmentIdentifier("");
       return;
     }
 
-    if (!filteredManagedUsers.some((user) => user.identifier === categoryAssignmentIdentifier)) {
-      selectManagedUser(filteredManagedUsers[0].identifier);
+    if (
+      categoryAssignmentIdentifier
+      && !categoryManagement.managedUsers.some((user) => user.identifier === categoryAssignmentIdentifier)
+    ) {
+      setCategoryAssignmentIdentifier("");
     }
-  }, [categoryAssignmentIdentifier, filteredManagedUsers, isSuperAdmin]);
+  }, [categoryAssignmentIdentifier, categoryManagement?.managedUsers, isSuperAdmin]);
 
   function handleResolveGroupRequest(requestId: string, decision: "accept" | "reject") {
     void mutateWorkspace(async () => {

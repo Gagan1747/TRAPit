@@ -231,11 +231,11 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
         <div className="compact-head">
           <div>
             <h1 className="hero-title">{payload?.poll.title ?? "Open poll"}</h1>
-            <p className="hero-text">
-              {payload?.actor.isRegistered
-                ? `Signed in as ${payload.actor.displayName ?? payload.actor.identifier ?? "participant"}`
-                : "This poll is accessible only through its direct link or QR code. Responses are anonymous."}
-            </p>
+            {payload?.actor.isRegistered ? (
+              <p className="hero-text">
+                {`Signed in as ${payload.actor.displayName ?? payload.actor.identifier ?? "participant"}`}
+              </p>
+            ) : null}
             {payload?.creator.displayName || payload?.creator.maskedIdentifier ? (
               <p className="muted-text">
                 Poll by {payload.creator.displayName ?? "TRAPit admin"}
@@ -270,7 +270,9 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
                   {payload.poll.status}
                 </span>
               </div>
-              <p className="muted-text">Starts: {formatShortDateTime(payload.poll.startsAt)}</p>
+              {payload.actor.isRegistered ? (
+                <p className="muted-text">Starts: {formatShortDateTime(payload.poll.startsAt)}</p>
+              ) : null}
               <p className="muted-text">Ends: {formatShortDateTime(payload.poll.endsAt)}</p>
               <p className="muted-text">Questions: {payload.questions.length}</p>
               <p className="muted-text">Response mode: Anonymous only</p>

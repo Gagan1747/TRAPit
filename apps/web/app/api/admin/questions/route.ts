@@ -64,22 +64,54 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
-  const body = (await request.json()) as CreateQuestionBody;
+  try {
+    const body = (await request.json()) as CreateQuestionBody;
 
-  if (body.mode === "import") {
-    const drafts = body.drafts ?? [];
-    const invalidDraft = drafts.find((draft) => validateQuestionDraft(draft));
+    if (body.mode === "import") {
+      const drafts = body.drafts ?? [];
+      const invalidDraft = drafts.find((draft) => validateQuestionDraft(draft));
 
-    if (!drafts.length || invalidDraft) {
-      return NextResponse.json(
-        { error: "Only valid imported questions can be saved." },
-        { status: 400 },
-      );
+      if (!drafts.length || invalidDraft) {
+        return NextResponse.json(
+          { error: "Only valid imported questions can be saved." },
+          { status: 400 },
+        );
+      }
+
+      if (!hasPoolSelection(body.poolIds)) {
+        return NextResponse.json(
+          { error: "Select at least one pool before importing questions." },
+          { status: 400 },
+        );
+      }
+
+      if (actor.role === "user") {
+        const pools = await listPoolsForActor(actor.sub, actor.identifier);
+        const nextCounts = (body.poolIds ?? []).map((poolId) => {
+          const pool = pools.find((entry) => entry.id === poolId);
+          return (pool?.questionIds.length ?? 0) + drafts.length;
+        });
+
+        assertCanAddQuestionsToPools(actor.userCategory, nextCounts);
+      }
+
+      await importQuestions(drafts, actor.sub, body.poolIds ?? [], actor.identifier);
+      return NextResponse.json({ importedCount: drafts.length });
+    }
+
+    if (body.mode !== "create" || !body.draft) {
+      return NextResponse.json({ error: "A question draft is required." }, { status: 400 });
+    }
+
+    const validationError = validateQuestionDraft(body.draft);
+
+    if (validationError) {
+      return NextResponse.json({ error: validationError }, { status: 400 });
     }
 
     if (!hasPoolSelection(body.poolIds)) {
       return NextResponse.json(
-        { error: "Select at least one pool before importing questions." },
+        { error: "Select at least one pool before saving a question." },
         { status: 400 },
       );
     }
@@ -88,46 +120,21 @@ export async function POST(request: Request) {
       const pools = await listPoolsForActor(actor.sub, actor.identifier);
       const nextCounts = (body.poolIds ?? []).map((poolId) => {
         const pool = pools.find((entry) => entry.id === poolId);
-        return (pool?.questionIds.length ?? 0) + drafts.length;
+        return (pool?.questionIds.length ?? 0) + 1;
       });
 
       assertCanAddQuestionsToPools(actor.userCategory, nextCounts);
     }
 
-    const questions = await importQuestions(drafts, actor.sub, body.poolIds ?? [], actor.identifier);
+    const questions = await createQuestion(body.draft, actor.sub, "manual", body.poolIds ?? [], actor.identifier);
+
     return NextResponse.json({ questions: questions.map((question) => decorateQuestion(question, actor.sub)) });
-  }
-
-  if (body.mode !== "create" || !body.draft) {
-    return NextResponse.json({ error: "A question draft is required." }, { status: 400 });
-  }
-
-  const validationError = validateQuestionDraft(body.draft);
-
-  if (validationError) {
-    return NextResponse.json({ error: validationError }, { status: 400 });
-  }
-
-  if (!hasPoolSelection(body.poolIds)) {
+  } catch (error) {
     return NextResponse.json(
-      { error: "Select at least one pool before saving a question." },
+      { error: error instanceof Error ? error.message : "Unable to save questions." },
       { status: 400 },
     );
   }
-
-  if (actor.role === "user") {
-    const pools = await listPoolsForActor(actor.sub, actor.identifier);
-    const nextCounts = (body.poolIds ?? []).map((poolId) => {
-      const pool = pools.find((entry) => entry.id === poolId);
-      return (pool?.questionIds.length ?? 0) + 1;
-    });
-
-    assertCanAddQuestionsToPools(actor.userCategory, nextCounts);
-  }
-
-  const questions = await createQuestion(body.draft, actor.sub, "manual", body.poolIds ?? [], actor.identifier);
-
-  return NextResponse.json({ questions: questions.map((question) => decorateQuestion(question, actor.sub)) });
 }
 
 export async function DELETE(request: Request) {

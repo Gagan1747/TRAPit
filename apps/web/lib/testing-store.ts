@@ -2176,7 +2176,7 @@ export async function getPollByShareCode(
           questions,
           hasSubmitted,
           summary: canViewResults ? summary : [],
-          totalResponses: canViewResults ? attempts.length : null,
+          totalResponses: attempts.length,
         };
       },
     );
@@ -2225,7 +2225,7 @@ export async function getPollByShareCode(
     questions,
     hasSubmitted,
     summary: canViewResults ? summary : [],
-    totalResponses: canViewResults ? attempts.length : null,
+    totalResponses: attempts.length,
   };
 }
 
