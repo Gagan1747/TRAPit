@@ -49,6 +49,8 @@ type AttemptResponse = {
   attempt: {
     result: TestResult;
   };
+  resultReleaseAt: string | null;
+  resultReleased: boolean;
 };
 
 type UserTestReviewResponse = {
@@ -392,7 +394,7 @@ export function UserTestWorkspace({
         }),
       );
 
-      setResult(payload.attempt.result);
+      setResult(payload.resultReleased ? payload.attempt.result : null);
       setActiveTestId(null);
       setCurrentQuestionIndex(0);
       setActiveParticipantName("");
@@ -400,7 +402,13 @@ export function UserTestWorkspace({
       setRemainingMs(null);
       setAnswers({});
       answersRef.current = {};
-      setFeedback(options?.dueToTimer ? "Time is up. Your test was submitted automatically." : null);
+      setFeedback(
+        payload.resultReleased
+          ? options?.dueToTimer
+            ? "Time is up. Your test was submitted automatically."
+            : null
+          : `Your test has been submitted. Results will be released after ${formatShortDateTime(payload.resultReleaseAt ?? activeTest.startsAt)}.`,
+      );
       await loadDashboard(identifierRef.current);
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to submit this test.");

@@ -247,6 +247,8 @@ type AttemptResponse = {
   attempt: {
     result: TestResult;
   };
+  resultReleaseAt: string | null;
+  resultReleased: boolean;
 };
 
 type UserCategoryUpgradeRequest = {
@@ -1387,7 +1389,7 @@ export function AdminQuestionWorkspace({
         }),
       );
 
-      setParticipantResult(payload.attempt.result);
+      setParticipantResult(payload.resultReleased ? payload.attempt.result : null);
       setActiveParticipantTestId(null);
       setCurrentParticipantQuestionIndex(0);
       setActiveParticipantName("");
@@ -1395,7 +1397,13 @@ export function AdminQuestionWorkspace({
       setParticipantRemainingMs(null);
       setParticipantAnswers({});
       participantAnswersRef.current = {};
-      setFeedback(options?.dueToTimer ? "Time is up. Your test was submitted automatically." : null);
+      setFeedback(
+        payload.resultReleased
+          ? options?.dueToTimer
+            ? "Time is up. Your test was submitted automatically."
+            : null
+          : `Your test has been submitted. Results will be released after ${formatShortDateTime(payload.resultReleaseAt ?? activeParticipantTest.startsAt)}.`,
+      );
       await loadWorkspace();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to submit this test.");

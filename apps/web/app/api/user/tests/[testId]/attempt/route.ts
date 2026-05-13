@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
+import { getScheduledTestEndTime } from "@trapit/testing";
 
 import { getUserActor } from "../../../../../../lib/user-api";
-import { recordAttempt } from "../../../../../../lib/testing-store";
+import { listAvailableTestsForParticipant, recordAttempt } from "../../../../../../lib/testing-store";
 
 export async function POST(
   request: Request,
@@ -37,7 +38,15 @@ export async function POST(
       userId: actor.identifier,
     });
 
-    return NextResponse.json({ attempt });
+    const availableTests = await listAvailableTestsForParticipant(actor.identifier);
+    const scheduledTest = availableTests.find((test) => test.id === context.params.testId);
+    const resultReleased = scheduledTest?.status === "completed";
+
+    return NextResponse.json({
+      attempt,
+      resultReleased,
+      resultReleaseAt: scheduledTest ? getScheduledTestEndTime(scheduledTest) : null,
+    });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to submit this test." },

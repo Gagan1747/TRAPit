@@ -323,6 +323,10 @@ function shuffleWithRandom<T>(items: T[], random: () => number) {
   return nextItems;
 }
 
+export function shuffleWithSeed<T>(items: T[], seedInput: string) {
+  return shuffleWithRandom(items, createSeededRandom(seedInput));
+}
+
 function isTailLockedOption(option: string) {
   return /^(all\s+of\s+the\s+above|both\s+[a-e]\s+and\s+[a-e])\b/i.test(option.trim());
 }
@@ -361,8 +365,9 @@ export function createPresentedQuestions(
 ): PresentedQuestion[] {
   const random = createSeededRandom(seedInput);
   const correctAnswerUsage = new Map<number, number>();
+  const orderedQuestions = shuffleWithSeed(questions, `${seedInput}:question-order`);
 
-  return questions.map((question) => {
+  return orderedQuestions.map((question) => {
     const fixedTailIndexes = question.options
       .map((option, optionIndex) => ({ option, optionIndex }))
       .filter(({ option }) => isTailLockedOption(option))
@@ -610,18 +615,7 @@ export function resolveScheduledTestStatus(
     return "scheduled";
   }
 
-  const attemptedIdentifiers = new Set(
-    attempts
-      .filter((attempt) => attempt.testId === testId)
-      .map((attempt) => attempt.userId),
-  );
-  const hasAllAttempts =
-    test.resolvedParticipantIdentifiers.length > 0 &&
-    test.resolvedParticipantIdentifiers.every((identifier) =>
-      attemptedIdentifiers.has(identifier),
-    );
-
-  if (hasAllAttempts || Date.now() >= endsAtMs) {
+  if (Date.now() >= endsAtMs) {
     return "completed";
   }
 

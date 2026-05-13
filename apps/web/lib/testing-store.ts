@@ -21,6 +21,7 @@ import {
   selectQuestionIdsForScheduledTest,
   scoreObjectiveTest,
   sampleQuestions,
+  shuffleWithSeed,
   summarizeTestHistory,
   type BulkImportPreview,
   type GroupJoinRequest,
@@ -1973,14 +1974,16 @@ export async function listUserHistory(identifier: string) {
   const state = await readStore();
   const normalizedIdentifier = normalizeParticipantIdentifier(identifier);
   const scheduledTests = hydrateScheduledTests(state);
+  const completedScheduledTests = scheduledTests.filter((scheduledTest) => scheduledTest.status === "completed");
+  const completedScheduledTestIds = new Set(completedScheduledTests.map((scheduledTest) => scheduledTest.id));
   const submittedAttempts = state.attempts.filter((attempt) =>
-    identifiersMatch(attempt.userId, normalizedIdentifier),
+    identifiersMatch(attempt.userId, normalizedIdentifier)
+      && completedScheduledTestIds.has(attempt.testId),
   );
-  const submittedHistory = summarizeTestHistory(submittedAttempts, scheduledTests);
-  const missedHistory = scheduledTests
+  const submittedHistory = summarizeTestHistory(submittedAttempts, completedScheduledTests);
+  const missedHistory = completedScheduledTests
     .filter(
       (scheduledTest) =>
-        scheduledTest.status === "completed" &&
         scheduledTest.resolvedParticipantIdentifiers.some((participantIdentifier) =>
           identifiersMatch(participantIdentifier, normalizedIdentifier),
         ) &&
@@ -2519,12 +2522,15 @@ export async function getUserTestReview(testId: string, identifier: string) {
     (entry) => entry.testId === testId && identifiersMatch(entry.userId, normalizedIdentifier),
   );
   const questionMap = getQuestionMap(state);
+  const orderedQuestions = shuffleWithSeed(
+    scheduledTest.questionIds
+      .map((questionId) => questionMap.get(questionId))
+      .filter((question): question is PersistentQuestion => Boolean(question)),
+    `${scheduledTest.id}:${normalizedIdentifier}:question-order`,
+  );
 
   return {
-    review: scheduledTest.questionIds
-      .map((questionId) => questionMap.get(questionId))
-      .filter((question): question is PersistentQuestion => Boolean(question))
-      .map((question) => ({
+    review: orderedQuestions.map((question) => ({
         correctOptionIndex: question.correctOptionIndex,
         options: question.options,
         prompt: question.prompt,

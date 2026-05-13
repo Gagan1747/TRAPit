@@ -13,6 +13,7 @@ import {
   resolveScheduledTestStatus,
   scoreObjectiveTest,
   selectQuestionIdsForScheduledTest,
+  shuffleWithSeed,
   summarizeTestHistory,
   validatePollQuestionDraft,
   type GroupJoinRequest,
@@ -1098,12 +1099,15 @@ export function QuestionBankProvider({ children }: { children: React.ReactNode }
       (entry) => entry.testId === testId && identifiersMatch(entry.userId, normalizedIdentifier),
     );
     const questionMap = getQuestionMap(workspace);
+    const orderedQuestions = shuffleWithSeed(
+      scheduledTest.questionIds
+        .map((questionId) => questionMap.get(questionId))
+        .filter((question): question is PersistentQuestion => Boolean(question)),
+      `${scheduledTest.id}:${normalizedIdentifier}:question-order`,
+    );
 
     return {
-      review: scheduledTest.questionIds
-        .map((questionId) => questionMap.get(questionId))
-        .filter((question): question is PersistentQuestion => Boolean(question))
-        .map((question) => ({
+      review: orderedQuestions.map((question) => ({
           correctOptionIndex: question.correctOptionIndex,
           options: question.options,
           prompt: question.prompt,
