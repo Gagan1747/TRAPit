@@ -614,6 +614,51 @@ function createQuestionDuplicateSignature(question: Pick<PersistentQuestion, "op
   ].join("||");
 }
 
+function formatQuestionForBulkEdit(question: Pick<PersistentQuestion, "correctOptionIndex" | "options" | "prompt">) {
+  const lines = [`Question: ${question.prompt}`];
+
+  question.options.forEach((option, index) => {
+    const optionLabel = String.fromCharCode(65 + index);
+    lines.push(`Option ${optionLabel}: ${option}`);
+  });
+
+  const answerLabel = question.options[question.correctOptionIndex]
+    ? String.fromCharCode(65 + question.correctOptionIndex)
+    : "";
+
+  lines.push(`Answer: ${answerLabel}`);
+
+  return lines.join("\n");
+}
+
+async function copyTextToClipboard(text: string) {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard access is not available in this browser.");
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+
+  const didCopy = document.execCommand("copy");
+
+  document.body.removeChild(textarea);
+
+  if (!didCopy) {
+    throw new Error("Unable to copy the question list.");
+  }
+}
+
 function formatResultParticipantName(
   identifier: string,
   participantName: string | undefined,
@@ -1636,6 +1681,26 @@ export function AdminQuestionWorkspace({
     });
   }
 
+  function handleCopyQuestionsForBulkEdit(
+    questionList: Array<Pick<PersistentQuestion, "correctOptionIndex" | "options" | "prompt">>,
+  ) {
+    if (!questionList.length) {
+      setFeedback("No questions are available to copy.");
+      return;
+    }
+
+    void (async () => {
+      try {
+        await copyTextToClipboard(questionList.map((question) => formatQuestionForBulkEdit(question)).join("\n\n"));
+        setFeedback(
+          `Copied ${questionList.length} question${questionList.length === 1 ? "" : "s"} for bulk edits.`,
+        );
+      } catch (error) {
+        setFeedback(error instanceof Error ? error.message : "Unable to copy the questions.");
+      }
+    })();
+  }
+
   function handleStartEditingQuestion(question: PersistentQuestion) {
     setEditingQuestionId(question.id);
     setEditingQuestionDraft({
@@ -2353,6 +2418,14 @@ export function AdminQuestionWorkspace({
       questions: duplicateQuestions,
       signature,
     }));
+  const removableDuplicateQuestionIds = Array.from(new Set(
+    duplicateQuestionGroups.flatMap((duplicateGroup) =>
+      duplicateGroup.questions
+        .slice(1)
+        .filter((question) => question.canManage)
+        .map((question) => question.id),
+    ),
+  ));
   const duplicateQuestionGroupByQuestionId = new Map<
     string,
     {
@@ -3459,6 +3532,22 @@ export function AdminQuestionWorkspace({
                   </div>
                 </div>
                 <div className="inline-actions">
+                  <button
+                    className="button-secondary small-button"
+                    disabled={!filteredQuestionBankQuestions.length}
+                    type="button"
+                    onClick={() => handleCopyQuestionsForBulkEdit(filteredQuestionBankQuestions)}
+                  >
+                    Copy all questions
+                  </button>
+                  <button
+                    className="button-secondary small-button"
+                    disabled={!removableDuplicateQuestionIds.length || isMutating}
+                    type="button"
+                    onClick={() => handleDeleteSelectedQuestions(removableDuplicateQuestionIds)}
+                  >
+                    Remove duplicates
+                  </button>
                   <label className="radio-chip">
                     <input
                       checked={areAllVisibleQuestionsSelected}
@@ -3571,6 +3660,10 @@ export function AdminQuestionWorkspace({
                   const duplicatePositions = duplicateGroup.questions
                     .map((question) => `Q${questionBankQuestionPositionById.get(question.id)}`)
                     .join(", ");
+                  const removableDuplicateIds = duplicateGroup.questions
+                    .slice(1)
+                    .filter((question) => question.canManage)
+                    .map((question) => question.id);
 
                   return (
                     <article className="question-card duplicate-group-card" key={duplicateGroup.signature}>
@@ -3582,6 +3675,16 @@ export function AdminQuestionWorkspace({
                       </div>
                       <p className="compact-question-prompt">{duplicateGroup.questions[0]?.prompt}</p>
                       <p className="muted-text compact-question-meta">Found at {duplicatePositions}</p>
+                      <div className="inline-actions">
+                        <button
+                          className="button-secondary small-button"
+                          disabled={!removableDuplicateIds.length || isMutating}
+                          type="button"
+                          onClick={() => handleDeleteSelectedQuestions(removableDuplicateIds)}
+                        >
+                          Keep first, remove others
+                        </button>
+                      </div>
                     </article>
                   );
                 })}
