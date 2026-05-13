@@ -94,46 +94,46 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
-  const body = (await request.json()) as ParticipantBody;
+  try {
+    const body = (await request.json()) as ParticipantBody;
 
-  if (isCreateGroupBody(body)) {
-    if (actor.role === "user") {
-      assertCanCreateGroup(actor.userCategory);
+    if (isCreateGroupBody(body)) {
+      if (actor.role === "user") {
+        assertCanCreateGroup(actor.userCategory);
+      }
+
+      if (!body.name?.trim()) {
+        return NextResponse.json({ error: "Group or class name is required." }, { status: 400 });
+      }
+
+      const participantGroups = await createGroup({
+        description: body.description,
+        name: body.name,
+        ownerLabel: actor.displayName,
+        ownerIdentifier: actor.identifier,
+        participantIds: body.participantIds ?? [],
+      });
+      const participants = await listParticipants();
+      const groupJoinRequests = actor.identifier
+        ? await listGroupJoinRequestsForAdmin(actor.identifier)
+        : [];
+
+      return NextResponse.json({ groupJoinRequests, participantGroups, participants });
     }
 
-    if (!body.name?.trim()) {
-      return NextResponse.json({ error: "Group or class name is required." }, { status: 400 });
-    }
+    if (isUpdateGroupBody(body)) {
+      if (actor.role === "user") {
+        assertCanManageGroup(actor.userCategory);
+      }
 
-    const participantGroups = await createGroup({
-      description: body.description,
-      name: body.name,
-      ownerLabel: actor.displayName,
-      ownerIdentifier: actor.identifier,
-      participantIds: body.participantIds ?? [],
-    });
-    const participants = await listParticipants();
-    const groupJoinRequests = actor.identifier
-      ? await listGroupJoinRequestsForAdmin(actor.identifier)
-      : [];
+      if (!body.groupId?.trim()) {
+        return NextResponse.json({ error: "Group id is required." }, { status: 400 });
+      }
 
-    return NextResponse.json({ groupJoinRequests, participantGroups, participants });
-  }
+      if (!body.name?.trim()) {
+        return NextResponse.json({ error: "Group or class name is required." }, { status: 400 });
+      }
 
-  if (isUpdateGroupBody(body)) {
-    if (actor.role === "user") {
-      assertCanManageGroup(actor.userCategory);
-    }
-
-    if (!body.groupId?.trim()) {
-      return NextResponse.json({ error: "Group id is required." }, { status: 400 });
-    }
-
-    if (!body.name?.trim()) {
-      return NextResponse.json({ error: "Group or class name is required." }, { status: 400 });
-    }
-
-    try {
       const participantGroups = await updateGroup({
         groupId: body.groupId,
         name: body.name,
@@ -147,34 +147,27 @@ export async function POST(request: Request) {
         : [];
 
       return NextResponse.json({ groupJoinRequests, participantGroups, participants });
-    } catch (error) {
-      return NextResponse.json(
-        { error: error instanceof Error ? error.message : "Unable to update the group." },
-        { status: 400 },
-      );
-    }
-  }
-
-  if (isResolveRequestBody(body)) {
-    if (actor.role === "user") {
-      assertCanManageGroup(actor.userCategory);
     }
 
-    if (!body.requestId?.trim() || !body.decision) {
-      return NextResponse.json(
-        { error: "Request id and decision are required." },
-        { status: 400 },
-      );
-    }
+    if (isResolveRequestBody(body)) {
+      if (actor.role === "user") {
+        assertCanManageGroup(actor.userCategory);
+      }
 
-    if (!actor.identifier) {
-      return NextResponse.json(
-        { error: "Admin identifier is required to manage requests." },
-        { status: 400 },
-      );
-    }
+      if (!body.requestId?.trim() || !body.decision) {
+        return NextResponse.json(
+          { error: "Request id and decision are required." },
+          { status: 400 },
+        );
+      }
 
-    try {
+      if (!actor.identifier) {
+        return NextResponse.json(
+          { error: "Admin identifier is required to manage requests." },
+          { status: 400 },
+        );
+      }
+
       const payload = await resolveGroupJoinRequest({
         adminIdentifier: actor.identifier,
         decision: body.decision,
@@ -182,32 +175,32 @@ export async function POST(request: Request) {
       });
 
       return NextResponse.json(payload);
-    } catch (error) {
-      return NextResponse.json(
-        { error: error instanceof Error ? error.message : "Unable to update the request." },
-        { status: 400 },
-      );
     }
+
+    if (!("identifier" in body) || !body.identifier?.trim()) {
+      return NextResponse.json({ error: "Participant identifier is required." }, { status: 400 });
+    }
+
+    if (actor.role !== "admin" && !actor.isSuperAdmin) {
+      return NextResponse.json({ error: "Participant creation is only available to admins." }, { status: 403 });
+    }
+
+    const participants = await createParticipant({
+      identifier: body.identifier,
+      label: body.label,
+    });
+    const participantGroups = actor.identifier
+      ? await listParticipantGroupsForOwner(actor.identifier, { includeUnowned: true })
+      : await listParticipantGroups();
+    const groupJoinRequests = actor.identifier
+      ? await listGroupJoinRequestsForAdmin(actor.identifier)
+      : [];
+
+    return NextResponse.json({ groupJoinRequests, participantGroups, participants });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to update participants." },
+      { status: 400 },
+    );
   }
-
-  if (!("identifier" in body) || !body.identifier?.trim()) {
-    return NextResponse.json({ error: "Participant identifier is required." }, { status: 400 });
-  }
-
-  if (actor.role !== "admin" && !actor.isSuperAdmin) {
-    return NextResponse.json({ error: "Participant creation is only available to admins." }, { status: 403 });
-  }
-
-  const participants = await createParticipant({
-    identifier: body.identifier,
-    label: body.label,
-  });
-  const participantGroups = actor.identifier
-    ? await listParticipantGroupsForOwner(actor.identifier, { includeUnowned: true })
-    : await listParticipantGroups();
-  const groupJoinRequests = actor.identifier
-    ? await listGroupJoinRequestsForAdmin(actor.identifier)
-    : [];
-
-  return NextResponse.json({ groupJoinRequests, participantGroups, participants });
 }

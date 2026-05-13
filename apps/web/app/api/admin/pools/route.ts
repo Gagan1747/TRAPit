@@ -40,27 +40,34 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
-  const body = (await request.json()) as { description?: string; name?: string };
+  try {
+    const body = (await request.json()) as { description?: string; name?: string };
 
-  if (!body.name?.trim()) {
-    return NextResponse.json({ error: "Pool name is required." }, { status: 400 });
-  }
+    if (!body.name?.trim()) {
+      return NextResponse.json({ error: "Pool name is required." }, { status: 400 });
+    }
 
-  if (actor.role === "user") {
-    const existingPools = await listPoolsForActor(actor.sub, actor.identifier);
-    assertCanCreateQuestionPool(
-      actor.userCategory,
-      existingPools.filter((pool) => pool.createdBy === actor.sub).length,
+    if (actor.role === "user") {
+      const existingPools = await listPoolsForActor(actor.sub, actor.identifier);
+      assertCanCreateQuestionPool(
+        actor.userCategory,
+        existingPools.filter((pool) => pool.createdBy === actor.sub).length,
+      );
+    }
+
+    const pools = await createPool({
+      createdBy: actor.sub,
+      description: body.description,
+      name: body.name,
+    });
+
+    return NextResponse.json({ pools: pools.map((pool) => decoratePool(pool, actor)) });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to create the pool." },
+      { status: 400 },
     );
   }
-
-  const pools = await createPool({
-    createdBy: actor.sub,
-    description: body.description,
-    name: body.name,
-  });
-
-  return NextResponse.json({ pools: pools.map((pool) => decoratePool(pool, actor)) });
 }
 
 export async function PATCH(request: Request) {
