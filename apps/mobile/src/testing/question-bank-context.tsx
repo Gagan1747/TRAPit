@@ -200,6 +200,7 @@ function createLocalPool(input: { createdBy?: string | null; description?: strin
     id: createEntityId("pool"),
     name: input.name.trim(),
     questionIds: [],
+    sharedWithIdentifiers: [],
     updatedAt: timestamp,
   };
 }
@@ -237,8 +238,16 @@ function migrateLegacyQuestions(questions: ObjectiveQuestion[]): TestingWorkspac
 
 function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspaceState {
   return {
+    ...createEmptyTestingWorkspaceState(),
     attempts: parsed.attempts ?? [],
-    groupJoinRequests: parsed.groupJoinRequests ?? [],
+    groupJoinRequests: (parsed.groupJoinRequests ?? []).map((request) => ({
+      ...request,
+      adminLabel: request.adminLabel?.trim() || request.adminIdentifier?.trim() || "Unknown admin",
+      adminGroupName: request.adminGroupName?.trim() ?? "Unnamed group",
+      requestType: request.requestType ?? "user-request",
+      resolvedAt: request.resolvedAt ?? null,
+      status: request.status ?? "pending",
+    })),
     participantGroups: parsed.participantGroups ?? [],
     participants: parsed.participants ?? [],
     pollAttempts: parsed.pollAttempts ?? [],
@@ -246,7 +255,12 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       ...question,
       topic: question.topic?.trim() ?? "",
     })),
-    pools: parsed.pools ?? [],
+    pools: (parsed.pools ?? []).map((pool) => ({
+      ...pool,
+      createdBy: pool.createdBy ?? null,
+      questionIds: dedupe(pool.questionIds ?? []),
+      sharedWithIdentifiers: dedupe(pool.sharedWithIdentifiers ?? []),
+    })),
     questions: parsed.questions ?? [],
     scheduledPolls: (parsed.scheduledPolls ?? []).map((poll) => {
       const legacyDurationValue = (poll as ScheduledPoll & { durationMinutes?: number }).durationMinutes;
@@ -265,6 +279,8 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       };
     }),
     scheduledTests: parsed.scheduledTests ?? [],
+    workspaceBranding: parsed.workspaceBranding ?? null,
+    workspaceBrandingByActor: parsed.workspaceBrandingByActor ?? {},
   };
 }
 
@@ -613,6 +629,7 @@ export function QuestionBankProvider({ children }: { children: React.ReactNode }
       adminGroupId: group.id,
       adminIdentifier: group.ownerIdentifier,
       adminGroupName: group.name,
+      adminLabel: group.ownerIdentifier,
       requesterId: input.requesterId,
       requesterLabel: input.requesterLabel,
     });

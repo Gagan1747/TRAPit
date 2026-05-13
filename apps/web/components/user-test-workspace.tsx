@@ -445,17 +445,6 @@ export function UserTestWorkspace({
     answersRef.current = nextAnswers;
     setAnswers(nextAnswers);
     setFeedback(null);
-
-    if (!activeTest) {
-      return;
-    }
-
-    if (currentQuestionIndex >= activeTest.questions.length - 1) {
-      setCurrentQuestionIndex(activeTest.questions.length);
-      return;
-    }
-
-    setCurrentQuestionIndex((currentIndex) => currentIndex + 1);
   }
 
   function goToPreviousQuestion() {
@@ -693,7 +682,7 @@ export function UserTestWorkspace({
                   Time left {formatCountdown(remainingMs)}
                 </span>
               </div>
-              <p className="muted-text">Each answer moves you straight to the next question. Use the navigation buttons to review earlier answers or skip ahead.</p>
+              <p className="muted-text">Select an answer, then use the navigation buttons to move backward or forward before submitting.</p>
             </article>
 
             {activeQuestion ? (

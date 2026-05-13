@@ -156,10 +156,6 @@ export function MobileUserTestWorkspace({ currentParticipantIdentifier }: Mobile
   }
 
   function handleSelectAnswer(questionId: string, originalOptionIndex: number) {
-    if (!activeTest) {
-      return;
-    }
-
     const nextAnswers = {
       ...answersRef.current,
       [questionId]: originalOptionIndex,
@@ -168,13 +164,6 @@ export function MobileUserTestWorkspace({ currentParticipantIdentifier }: Mobile
     answersRef.current = nextAnswers;
     setAnswers(nextAnswers);
     setFeedback(null);
-
-    if (currentQuestionIndex >= activeTest.questionCount - 1) {
-      setCurrentQuestionIndex(activeTest.questionCount);
-      return;
-    }
-
-    setCurrentQuestionIndex((currentIndex) => currentIndex + 1);
   }
 
   function goToPreviousQuestion() {
@@ -258,7 +247,7 @@ export function MobileUserTestWorkspace({ currentParticipantIdentifier }: Mobile
                 <Text style={styles.countdownValue}>{formatCountdown(remainingMs)}</Text>
               </View>
               <Text style={styles.meta}>Question {Math.min(currentQuestionIndex + 1, activeTest.questionCount)} of {activeTest.questionCount}</Text>
-              <Text style={styles.meta}>Each answer moves you to the next question. Use the navigation buttons to review or skip.</Text>
+              <Text style={styles.meta}>Select an answer, then use the navigation buttons to review or skip before submitting.</Text>
             </View>
 
             {activeQuestion ? (
