@@ -49,6 +49,8 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       branding?: WorkspaceBranding | null;
       durationMinutes?: number;
+      generateInviteLink?: boolean;
+      inviteJoinMode?: "approval-required" | "automatic";
       participantGroupIds?: string[];
       participantIds?: string[];
       poolId?: string;
@@ -92,6 +94,8 @@ export async function POST(request: Request) {
       branding: body.branding ?? null,
       createdBy: actor.sub,
       durationMinutes: body.durationMinutes,
+      generateInviteLink: Boolean(body.generateInviteLink),
+      inviteJoinMode: body.inviteJoinMode,
       participantGroupIds: body.participantGroupIds ?? [],
       participantIds: body.participantIds ?? [],
       poolId: body.poolId,
@@ -119,6 +123,8 @@ export async function PATCH(request: Request) {
     const body = (await request.json()) as {
       branding?: WorkspaceBranding | null;
       durationMinutes?: number;
+      generateInviteLink?: boolean;
+      inviteJoinMode?: "approval-required" | "automatic";
       participantGroupIds?: string[];
       participantIds?: string[];
       poolId?: string;
@@ -165,6 +171,8 @@ export async function PATCH(request: Request) {
       branding: body.branding ?? null,
       createdBy: actor.sub,
       durationMinutes: body.durationMinutes,
+      generateInviteLink: Boolean(body.generateInviteLink),
+      inviteJoinMode: body.inviteJoinMode,
       participantGroupIds: body.participantGroupIds ?? [],
       participantIds: body.participantIds ?? [],
       poolId: body.poolId,

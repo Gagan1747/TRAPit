@@ -35,6 +35,11 @@ async function readAuthResponse<T>(response: Response, fallbackMessage: string):
 export function AuthForm({ mode }: AuthFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const redirectPath = (() => {
+    const redirectValue = searchParams.get("redirect")?.trim() ?? "";
+
+    return redirectValue.startsWith("/") ? redirectValue : "";
+  })();
   const initialSignUpSubMode = searchParams.get("step") === "confirm" ? "confirm" : "create";
   const initialConfirmAvailable = searchParams.get("step") === "confirm";
   const initialSignUpHint = searchParams.get("signup") === "retry"
@@ -199,7 +204,7 @@ export function AuthForm({ mode }: AuthFormProps) {
         setSignUpHint("Use the OTP sent for this account creation to confirm your number before signing in.");
 
         if (!(payload.requiresConfirmation ?? true)) {
-          router.push("/sign-in?created=1");
+          router.push(`/sign-in?created=1${redirectPath ? `&redirect=${encodeURIComponent(redirectPath)}` : ""}`);
         }
 
         return;
@@ -221,7 +226,7 @@ export function AuthForm({ mode }: AuthFormProps) {
         throw new Error(payload.error ?? "Sign-in failed.");
       }
 
-      router.push(payload.redirectTo);
+      router.push(redirectPath || payload.redirectTo);
       router.refresh();
     } catch (error) {
       setErrorMessage(
@@ -315,7 +320,7 @@ export function AuthForm({ mode }: AuthFormProps) {
         throw new Error(payload.error ?? "Confirmation failed.");
       }
 
-      router.push("/sign-in?confirmed=1");
+      router.push(`/sign-in?confirmed=1${redirectPath ? `&redirect=${encodeURIComponent(redirectPath)}` : ""}`);
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Confirmation failed.",

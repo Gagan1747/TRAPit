@@ -251,6 +251,10 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
     scheduledTests: (parsed.scheduledTests ?? []).map((test) => ({
       ...test,
       branding: normalizeWorkspaceBranding(test.branding),
+      inviteJoinMode: test.inviteJoinMode ?? "approval-required",
+      participantGroupIds: dedupe(test.participantGroupIds ?? []),
+      participantIds: dedupe(test.participantIds ?? []),
+      shareCode: test.shareCode?.trim() || null,
       title: test.title?.trim() || "Scheduled test",
     })),
     workspaceBranding: normalizeWorkspaceBranding(parsed.workspaceBranding),
@@ -1790,6 +1794,8 @@ export async function createScheduledTest(input: {
   branding?: WorkspaceBranding | null;
   createdBy: string | null;
   durationMinutes: number;
+  generateInviteLink?: boolean;
+  inviteJoinMode?: ScheduledTest["inviteJoinMode"];
   participantGroupIds: string[];
   participantIds: string[];
   poolId: string;
@@ -1818,6 +1824,12 @@ export async function createScheduledTest(input: {
     throw new Error("Choose at least one participant or group.");
   }
 
+  const participantGroupIds = dedupe(input.participantGroupIds);
+
+  if (input.generateInviteLink && participantGroupIds.length !== 1) {
+    throw new Error("Invite links can be generated only when exactly one group is selected.");
+  }
+
   const timestamp = new Date().toISOString();
   const title = input.title?.trim() || `${pool.name} test`;
   const scheduledTest: ScheduledTest = {
@@ -1826,7 +1838,8 @@ export async function createScheduledTest(input: {
     createdBy: input.createdBy,
     durationMinutes: input.durationMinutes,
     id: createEntityId("test"),
-    participantGroupIds: dedupe(input.participantGroupIds),
+    inviteJoinMode: input.inviteJoinMode ?? "approval-required",
+    participantGroupIds,
     participantIds: dedupe(input.participantIds),
     poolId: input.poolId,
     questionCount: input.questionCount,
@@ -1836,6 +1849,9 @@ export async function createScheduledTest(input: {
       [input.poolId, input.startsAt, resolvedParticipantIdentifiers.join(",")].join(":"),
     ),
     resolvedParticipantIdentifiers,
+    shareCode: input.generateInviteLink
+      ? `TRAPIT-TEST-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
+      : null,
     startsAt: input.startsAt,
     status: new Date(input.startsAt).getTime() > Date.now() ? "scheduled" : "live",
     title,
@@ -1853,6 +1869,8 @@ export async function updateScheduledTest(input: {
   branding?: WorkspaceBranding | null;
   createdBy: string | null;
   durationMinutes: number;
+  generateInviteLink?: boolean;
+  inviteJoinMode?: ScheduledTest["inviteJoinMode"];
   participantGroupIds: string[];
   participantIds: string[];
   poolId: string;
@@ -1887,6 +1905,12 @@ export async function updateScheduledTest(input: {
     throw new Error("Choose at least one participant or group.");
   }
 
+  const participantGroupIds = dedupe(input.participantGroupIds);
+
+  if (input.generateInviteLink && participantGroupIds.length !== 1) {
+    throw new Error("Invite links can be generated only when exactly one group is selected.");
+  }
+
   const timestamp = new Date().toISOString();
   const title = input.title?.trim() || `${pool.name} test`;
 
@@ -1896,7 +1920,8 @@ export async function updateScheduledTest(input: {
           ...scheduledTest,
           branding: normalizeWorkspaceBranding(input.branding) ?? scheduledTest.branding ?? null,
           durationMinutes: input.durationMinutes,
-          participantGroupIds: dedupe(input.participantGroupIds),
+          inviteJoinMode: input.inviteJoinMode ?? scheduledTest.inviteJoinMode ?? "approval-required",
+          participantGroupIds,
           participantIds: dedupe(input.participantIds),
           poolId: input.poolId,
           questionCount: input.questionCount,
@@ -1906,6 +1931,9 @@ export async function updateScheduledTest(input: {
             [input.poolId, input.startsAt, resolvedParticipantIdentifiers.join(","), scheduledTest.id].join(":"),
           ),
           resolvedParticipantIdentifiers,
+          shareCode: input.generateInviteLink
+            ? scheduledTest.shareCode ?? `TRAPIT-TEST-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
+            : null,
           startsAt: input.startsAt,
           status: new Date(input.startsAt).getTime() > Date.now() ? "scheduled" : "live",
           title,
@@ -2540,6 +2568,164 @@ export async function getUserTestReview(testId: string, identifier: string) {
     submittedAt: attempt?.completedAt ?? null,
     testId: scheduledTest.id,
     testTitle: scheduledTest.title,
+  };
+}
+
+export async function getScheduledTestInviteByShareCode(
+  shareCode: string,
+  viewerIdentifier?: string | null,
+) {
+  const state = await readStore();
+  const normalizedShareCode = shareCode.trim().toUpperCase();
+  const scheduledTest = hydrateScheduledTests(state).find(
+    (entry) => entry.shareCode?.trim().toUpperCase() === normalizedShareCode,
+  );
+
+  if (!scheduledTest) {
+    throw new Error("This test invite link is invalid or no longer available.");
+  }
+
+  if (scheduledTest.participantGroupIds.length !== 1) {
+    throw new Error("This test invite is not linked to exactly one group.");
+  }
+
+  const group = state.participantGroups.find((entry) => entry.id === scheduledTest.participantGroupIds[0]);
+
+  if (!group) {
+    throw new Error("The group for this test invite could not be found.");
+  }
+
+  const normalizedViewerIdentifier = viewerIdentifier?.trim()
+    ? normalizeParticipantIdentifier(viewerIdentifier)
+    : null;
+  const participantMap = getParticipantMap(state);
+  const isGroupMember = normalizedViewerIdentifier
+    ? group.participantIds.some((participantId) => {
+        const participant = participantMap.get(participantId);
+
+        return participant
+          ? identifiersMatch(participant.identifier, normalizedViewerIdentifier)
+          : false;
+      })
+    : false;
+  const latestRequest = normalizedViewerIdentifier
+    ? state.groupJoinRequests.find(
+        (request) =>
+          request.adminGroupId === group.id
+          && identifiersMatch(request.requesterId, normalizedViewerIdentifier),
+      ) ?? null
+    : null;
+
+  return {
+    access: {
+      canRequestAccess: Boolean(normalizedViewerIdentifier) && !isGroupMember && latestRequest?.status !== "pending",
+      isGroupMember,
+      requestStatus: isGroupMember ? "accepted" : latestRequest?.status ?? null,
+    },
+    group: {
+      description: group.description,
+      id: group.id,
+      name: group.name,
+      ownerIdentifier: group.ownerIdentifier,
+    },
+    test: {
+      durationMinutes: scheduledTest.durationMinutes,
+      id: scheduledTest.id,
+      inviteJoinMode: scheduledTest.inviteJoinMode,
+      questionCount: scheduledTest.questionCount,
+      shareCode: scheduledTest.shareCode,
+      startsAt: scheduledTest.startsAt,
+      status: scheduledTest.status,
+      title: scheduledTest.title,
+    },
+  };
+}
+
+async function addParticipantToGroup(state: TestingWorkspaceState, input: {
+  groupId: string;
+  participantIdentifier: string;
+  participantLabel: string;
+}) {
+  const group = state.participantGroups.find((entry) => entry.id === input.groupId);
+
+  if (!group) {
+    throw new Error("The selected group could not be found.");
+  }
+
+  const normalizedParticipantIdentifier = normalizeParticipantIdentifier(input.participantIdentifier);
+  const participantMap = getParticipantMap(state);
+  const isExistingMember = group.participantIds.some((participantId) => {
+    const participant = participantMap.get(participantId);
+
+    return participant ? identifiersMatch(participant.identifier, normalizedParticipantIdentifier) : false;
+  });
+
+  if (isExistingMember) {
+    return { group, joined: false };
+  }
+
+  const participant = ensureParticipantProfile(state, {
+    identifier: normalizedParticipantIdentifier,
+    label: input.participantLabel,
+  });
+  const timestamp = new Date().toISOString();
+
+  state.participantGroups = state.participantGroups.map((entry) =>
+    entry.id === group.id
+      ? {
+          ...entry,
+          participantIds: dedupe([...entry.participantIds, participant.id]),
+          updatedAt: timestamp,
+        }
+      : entry,
+  );
+
+  state.groupJoinRequests = state.groupJoinRequests.map((entry) =>
+    entry.adminGroupId === group.id && identifiersMatch(entry.requesterId, normalizedParticipantIdentifier) && entry.status === "pending"
+      ? {
+          ...entry,
+          resolvedAt: timestamp,
+          status: "accepted",
+        }
+      : entry,
+  );
+
+  return { group, joined: true };
+}
+
+export async function requestScheduledTestAccessByShareCode(input: {
+  requesterId: string;
+  requesterLabel: string;
+  shareCode: string;
+}) {
+  const state = await readStore();
+  const invite = await getScheduledTestInviteByShareCode(input.shareCode, input.requesterId);
+
+  if (invite.access.isGroupMember) {
+    throw new Error("You are already part of this group.");
+  }
+
+  if (invite.test.inviteJoinMode === "automatic") {
+    await addParticipantToGroup(state, {
+      groupId: invite.group.id,
+      participantIdentifier: input.requesterId,
+      participantLabel: input.requesterLabel,
+    });
+    await writeStore(state);
+
+    return {
+      mode: "automatic" as const,
+    };
+  }
+
+  await createGroupJoinRequest({
+    adminGroupId: invite.group.id,
+    requesterId: input.requesterId,
+    requesterLabel: input.requesterLabel,
+  });
+
+  return {
+    mode: "approval-required" as const,
   };
 }
 

@@ -875,6 +875,7 @@ export function AdminQuestionWorkspace({
   const [pollScheduleEndsAtInput, setPollScheduleEndsAtInput] = useState(createDefaultPollEndTime());
   const [pollScheduleTitle, setPollScheduleTitle] = useState("");
   const [scheduledPolls, setScheduledPolls] = useState<ScheduledPoll[]>([]);
+  const [testQrCodes, setTestQrCodes] = useState<Record<string, string>>({});
   const [poolFeedback, setPoolFeedback] = useState<string | null>(null);
   const [poolName, setPoolName] = useState("");
   const [poolShareSearch, setPoolShareSearch] = useState("");
@@ -892,6 +893,8 @@ export function AdminQuestionWorkspace({
   const [editingSelfTestId, setEditingSelfTestId] = useState<string | null>(null);
   const [scheduleDurationMinutes, setScheduleDurationMinutes] = useState("30");
   const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
+  const [scheduleGenerateInviteLink, setScheduleGenerateInviteLink] = useState(false);
+  const [scheduleInviteJoinMode, setScheduleInviteJoinMode] = useState<"approval-required" | "automatic">("approval-required");
   const [scheduleParticipantGroupIds, setScheduleParticipantGroupIds] = useState<string[]>([]);
   const [schedulePoolId, setSchedulePoolId] = useState("");
   const [scheduleQuestionCount, setScheduleQuestionCount] = useState("1");
@@ -1044,6 +1047,35 @@ export function AdminQuestionWorkspace({
   }, [scheduledPolls]);
 
   useEffect(() => {
+    let isMounted = true;
+    const testsWithQrCodes = scheduledTests.filter((test) => test.shareCode);
+
+    if (!testsWithQrCodes.length) {
+      setTestQrCodes({});
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    void Promise.all(
+      testsWithQrCodes.map(async (test) => [
+        test.id,
+        await QRCode.toDataURL(getTestAccessUrl(test.shareCode ?? ""), { margin: 1, width: 180 }),
+      ] as const),
+    ).then((entries) => {
+      if (!isMounted) {
+        return;
+      }
+
+      setTestQrCodes(Object.fromEntries(entries));
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [scheduledTests]);
+
+  useEffect(() => {
     const activeParticipantTest = participantTests.find((test) => test.id === activeParticipantTestId) ?? null;
 
     if (!activeParticipantTest || !participantStartedAt) {
@@ -1083,6 +1115,18 @@ export function AdminQuestionWorkspace({
     return `${window.location.origin}/poll/${shareCode}`;
   }
 
+  function getTestAccessUrl(shareCode: string) {
+    if (!shareCode.trim()) {
+      return "";
+    }
+
+    if (typeof window === "undefined") {
+      return `/test/${shareCode}`;
+    }
+
+    return `${window.location.origin}/test/${shareCode}`;
+  }
+
   function resetPollScheduleForm() {
     setEditingScheduledPollId(null);
     setPollScheduleAnonymous(false);
@@ -1099,6 +1143,8 @@ export function AdminQuestionWorkspace({
   function resetScheduledTestForm() {
     setEditingScheduledTestId(null);
     setScheduleDurationMinutes("30");
+    setScheduleGenerateInviteLink(false);
+    setScheduleInviteJoinMode("approval-required");
     setScheduleParticipantGroupIds([]);
     setScheduleQuestionCount("1");
     setScheduleStartMode("now");
@@ -1135,6 +1181,8 @@ export function AdminQuestionWorkspace({
     setSchedulePoolId(test.poolId);
     setScheduleQuestionCount(String(test.questionCount));
     setScheduleDurationMinutes(String(test.durationMinutes));
+    setScheduleGenerateInviteLink(Boolean(test.shareCode));
+    setScheduleInviteJoinMode(test.inviteJoinMode ?? "approval-required");
     setScheduleParticipantGroupIds([...test.participantGroupIds]);
     setScheduleStartMode("later");
     setScheduleStartsAtInput(toDateTimeInputValue(test.startsAt));
@@ -2273,6 +2321,11 @@ export function AdminQuestionWorkspace({
       return;
     }
 
+    if (scheduleGenerateInviteLink && scheduleParticipantGroupIds.length !== 1) {
+      setScheduleFeedback("Invite links require exactly one selected group.");
+      return;
+    }
+
     if (
       scheduleStartMode === "later" &&
       (!scheduleStartsAtInput || Number.isNaN(new Date(scheduleStartsAtInput).getTime()))
@@ -2287,6 +2340,8 @@ export function AdminQuestionWorkspace({
           body: JSON.stringify({
             branding: normalizeBrandingInput(workspaceBranding),
             durationMinutes,
+            generateInviteLink: scheduleGenerateInviteLink,
+            inviteJoinMode: scheduleInviteJoinMode,
             participantGroupIds: scheduleParticipantGroupIds,
             participantIds: [],
             poolId: schedulePoolId,
@@ -4245,6 +4300,44 @@ export function AdminQuestionWorkspace({
             </div>
           </div>
 
+          <div className="field">
+            <label className="role-option">
+              <input
+                checked={scheduleGenerateInviteLink}
+                type="checkbox"
+                onChange={(event) => setScheduleGenerateInviteLink(event.target.checked)}
+              />
+              <span>Create invite link and QR code for this test</span>
+            </label>
+            <p className="muted-text">Invite links work only when exactly one group is selected.</p>
+          </div>
+
+          {scheduleGenerateInviteLink ? (
+            <div className="field">
+              <label>When someone registers through this invite</label>
+              <div className="selection-grid">
+                <label className="role-option">
+                  <input
+                    checked={scheduleInviteJoinMode === "approval-required"}
+                    name="schedule-invite-join-mode"
+                    type="radio"
+                    onChange={() => setScheduleInviteJoinMode("approval-required")}
+                  />
+                  <span>Require creator approval before adding to the group</span>
+                </label>
+                <label className="role-option">
+                  <input
+                    checked={scheduleInviteJoinMode === "automatic"}
+                    name="schedule-invite-join-mode"
+                    type="radio"
+                    onChange={() => setScheduleInviteJoinMode("automatic")}
+                  />
+                  <span>Add automatically to the group after registration and sign-in</span>
+                </label>
+              </div>
+            </div>
+          ) : null}
+
           {scheduleFeedback ? <p className="muted-text">{scheduleFeedback}</p> : null}
           <div className="inline-actions">
             <button className="button" disabled={isMutating} type="button" onClick={handleScheduleTest}>
@@ -4968,6 +5061,34 @@ export function AdminQuestionWorkspace({
                       <p className="muted-text">Starts: {formatShortDateTime(test.startsAt)}</p>
                       <p className="muted-text">Duration: {test.durationMinutes} min</p>
                       <p className="muted-text">Questions: {test.questionCount}</p>
+                      {scheduledTest?.shareCode ? (
+                        <p className="muted-text">
+                          Invite approval: {scheduledTest.inviteJoinMode === "automatic" ? "Automatic group addition" : "Creator approval required"}
+                        </p>
+                      ) : null}
+                      {scheduledTest?.shareCode ? <p className="muted-text">Access code: {scheduledTest.shareCode}</p> : null}
+                      {scheduledTest?.shareCode ? (
+                        <p className="muted-text">
+                          URL: <a href={getTestAccessUrl(scheduledTest.shareCode)} target="_blank" rel="noreferrer">{getTestAccessUrl(scheduledTest.shareCode)}</a>
+                        </p>
+                      ) : null}
+                      {scheduledTest?.shareCode ? (
+                        <div className="form-stack">
+                          <div className="inline-actions">
+                            <a
+                              className="button-secondary small-button"
+                              href={getTestAccessUrl(scheduledTest.shareCode)}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              Open invite page
+                            </a>
+                          </div>
+                          {testQrCodes[scheduledTest.id] ? (
+                            <img alt={`QR code for ${scheduledTest.title}`} height={180} src={testQrCodes[scheduledTest.id]} width={180} />
+                          ) : null}
+                        </div>
+                      ) : null}
 
                       {scheduledTest ? (
                         <div className="form-stack">

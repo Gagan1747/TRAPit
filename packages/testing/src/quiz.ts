@@ -133,18 +133,22 @@ export type GroupJoinRequest = {
 
 export type ScheduledTestStatus = "scheduled" | "live" | "completed";
 
+export type ScheduledTestInviteJoinMode = "approval-required" | "automatic";
+
 export type ScheduledTest = {
   branding?: WorkspaceBranding | null;
   createdAt: string;
   createdBy: string | null;
   durationMinutes: number;
   id: string;
+  inviteJoinMode: ScheduledTestInviteJoinMode;
   participantGroupIds: string[];
   participantIds: string[];
   poolId: string;
   questionIds: string[];
   questionCount: number;
   resolvedParticipantIdentifiers: string[];
+  shareCode: string | null;
   startsAt: string;
   status: ScheduledTestStatus;
   title: string;
