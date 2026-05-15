@@ -4050,28 +4050,26 @@ export function AdminQuestionWorkspace({
               />
               <span>Create invite link for this group</span>
             </label>
-            {groupGenerateInviteLink ? (
-              <div className="selection-grid">
-                <label className="role-option">
-                  <input
-                    checked={groupInviteJoinMode === "approval-required"}
-                    name="group-invite-join-mode"
-                    type="radio"
-                    onChange={() => setGroupInviteJoinMode("approval-required")}
-                  />
-                  <span>Approval required</span>
-                </label>
-                <label className="role-option">
-                  <input
-                    checked={groupInviteJoinMode === "automatic"}
-                    name="group-invite-join-mode"
-                    type="radio"
-                    onChange={() => setGroupInviteJoinMode("automatic")}
-                  />
-                  <span>Open for all</span>
-                </label>
-              </div>
-            ) : null}
+            <div className="selection-grid">
+              <label className="role-option">
+                <input
+                  checked={groupInviteJoinMode === "approval-required"}
+                  name="group-invite-join-mode"
+                  type="radio"
+                  onChange={() => setGroupInviteJoinMode("approval-required")}
+                />
+                <span>Approval required</span>
+              </label>
+              <label className="role-option">
+                <input
+                  checked={groupInviteJoinMode === "automatic"}
+                  name="group-invite-join-mode"
+                  type="radio"
+                  onChange={() => setGroupInviteJoinMode("automatic")}
+                />
+                <span>Open for all</span>
+              </label>
+            </div>
             <p className="muted-text">
               {groupGenerateInviteLink
                 ? groupInviteJoinMode === "automatic"
@@ -4174,46 +4172,44 @@ export function AdminQuestionWorkspace({
                               />
                               <span>Create invite link for this group</span>
                             </label>
-                            {editingGroupDraft.generateInviteLink ? (
-                              <div className="selection-grid">
-                                <label className="role-option">
-                                  <input
-                                    checked={editingGroupDraft.inviteJoinMode === "approval-required"}
-                                    name={`edit-group-invite-mode-${group.id}`}
-                                    type="radio"
-                                    onChange={() =>
-                                      setEditingGroupDraft((currentDraft) =>
-                                        currentDraft
-                                          ? {
-                                              ...currentDraft,
-                                              inviteJoinMode: "approval-required",
-                                            }
-                                          : currentDraft,
-                                      )
-                                    }
-                                  />
-                                  <span>Approval required</span>
-                                </label>
-                                <label className="role-option">
-                                  <input
-                                    checked={editingGroupDraft.inviteJoinMode === "automatic"}
-                                    name={`edit-group-invite-mode-${group.id}`}
-                                    type="radio"
-                                    onChange={() =>
-                                      setEditingGroupDraft((currentDraft) =>
-                                        currentDraft
-                                          ? {
-                                              ...currentDraft,
-                                              inviteJoinMode: "automatic",
-                                            }
-                                          : currentDraft,
-                                      )
-                                    }
-                                  />
-                                  <span>Open for all</span>
-                                </label>
-                              </div>
-                            ) : null}
+                            <div className="selection-grid">
+                              <label className="role-option">
+                                <input
+                                  checked={editingGroupDraft.inviteJoinMode === "approval-required"}
+                                  name={`edit-group-invite-mode-${group.id}`}
+                                  type="radio"
+                                  onChange={() =>
+                                    setEditingGroupDraft((currentDraft) =>
+                                      currentDraft
+                                        ? {
+                                            ...currentDraft,
+                                            inviteJoinMode: "approval-required",
+                                          }
+                                        : currentDraft,
+                                    )
+                                  }
+                                />
+                                <span>Approval required</span>
+                              </label>
+                              <label className="role-option">
+                                <input
+                                  checked={editingGroupDraft.inviteJoinMode === "automatic"}
+                                  name={`edit-group-invite-mode-${group.id}`}
+                                  type="radio"
+                                  onChange={() =>
+                                    setEditingGroupDraft((currentDraft) =>
+                                      currentDraft
+                                        ? {
+                                            ...currentDraft,
+                                            inviteJoinMode: "automatic",
+                                          }
+                                        : currentDraft,
+                                    )
+                                  }
+                                />
+                                <span>Open for all</span>
+                              </label>
+                            </div>
                           </div>
                           <ParticipantSearchPicker
                             emptyMessage="No participants selected for this group yet."
