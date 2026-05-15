@@ -5,6 +5,7 @@ import { LocalDateTimeText } from "../../components/local-date-time-text";
 import { SignOutButton } from "../../components/sign-out-button";
 import { UserTestWorkspace } from "../../components/user-test-workspace";
 import { isWebAuthConfigured } from "../../lib/auth-config";
+import { formatPhoneNumberForDisplay } from "../../lib/privacy";
 import { getPreviousWebSignIn, requireWebSession } from "../../lib/session";
 import { isSuperAdminIdentifier } from "../../lib/workspace-actor";
 
@@ -30,7 +31,7 @@ export default async function UserPage({
             <h1 className="hero-title">{displayName} dashboard</h1>
             <p className="hero-text">
               {authConfigured
-                ? `Signed in with ${sessionIdentifier ?? "user"}${categoryLabel ? ` as ${categoryLabel}` : ""}`
+                ? `Signed in with ${formatPhoneNumberForDisplay(sessionIdentifier ?? "user", { showFullPhoneNumber: isSuperAdmin })}${categoryLabel ? ` as ${categoryLabel}` : ""}`
                 : "Auth setup pending. User area is open for feature work."}
             </p>
             <p className="hero-text">

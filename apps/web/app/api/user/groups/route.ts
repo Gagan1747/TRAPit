@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 
 import { getUserActor } from "../../../../lib/user-api";
 import {
-  createGroupJoinRequest,
   listGroupJoinRequestsForUser,
+  listParticipantGroups,
+  listParticipantGroupsForOwner,
+  requestParticipantGroupAccess,
   resolveGroupInvitationForUser,
   searchParticipantGroupsByOwner,
 } from "../../../../lib/testing-store";
@@ -73,15 +75,19 @@ export async function POST(request: Request) {
   }
 
   try {
-    const requestEntry = await createGroupJoinRequest({
-      adminGroupId: body.adminGroupId,
-      adminLabel: null,
+    const result = await requestParticipantGroupAccess({
+      groupId: body.adminGroupId,
       requesterId: actor.identifier,
       requesterLabel: actor.displayName ?? actor.identifier,
     });
-    const groupJoinRequests = await listGroupJoinRequestsForUser(actor.identifier);
+    const [groupJoinRequests, participantGroups] = await Promise.all([
+      listGroupJoinRequestsForUser(actor.identifier),
+      actor.identifier
+        ? listParticipantGroupsForOwner(actor.identifier, { includeUnowned: true })
+        : listParticipantGroups(),
+    ]);
 
-    return NextResponse.json({ groupJoinRequests, request: requestEntry });
+    return NextResponse.json({ groupJoinRequests, mode: result.mode, participantGroups });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to submit the request." },

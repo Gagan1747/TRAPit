@@ -207,8 +207,10 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
     pollAttempts: parsed.pollAttempts ?? [],
     participantGroups: (parsed.participantGroups ?? []).map((group) => ({
       ...group,
+      inviteJoinMode: group.inviteJoinMode ?? "approval-required",
       ownerIdentifier: group.ownerIdentifier?.trim() || null,
       participantIds: dedupe(group.participantIds ?? []),
+      shareCode: group.shareCode?.trim() || null,
     })),
     participants: parsed.participants ?? [],
     pollQuestions: (parsed.pollQuestions ?? []).map((question) => ({
@@ -1482,6 +1484,8 @@ export async function searchParticipantGroupsByOwner(ownerIdentifier: string) {
 
 export async function createGroup(input: {
   description?: string;
+  generateInviteLink?: boolean;
+  inviteJoinMode?: "approval-required" | "automatic";
   name: string;
   ownerLabel?: string | null;
   ownerIdentifier: string | null;
@@ -1491,9 +1495,13 @@ export async function createGroup(input: {
   const shouldCreateInvites = Boolean(input.ownerIdentifier);
   const group = createParticipantGroup({
     description: input.description,
+    inviteJoinMode: input.inviteJoinMode,
     name: input.name,
     ownerIdentifier: input.ownerIdentifier,
     participantIds: shouldCreateInvites ? [] : input.participantIds,
+    shareCode: input.generateInviteLink
+      ? `TRAPIT-GROUP-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
+      : null,
   });
 
   if (shouldCreateInvites && input.ownerIdentifier) {
@@ -1514,7 +1522,9 @@ export async function createGroup(input: {
 }
 
 export async function updateGroup(input: {
+  generateInviteLink?: boolean;
   groupId: string;
+  inviteJoinMode?: "approval-required" | "automatic";
   name: string;
   ownerLabel?: string | null;
   ownerIdentifier: string | null;
@@ -1560,9 +1570,13 @@ export async function updateGroup(input: {
     group.id === input.groupId
       ? {
           ...group,
+          inviteJoinMode: input.inviteJoinMode ?? group.inviteJoinMode,
           name: input.name.trim(),
           ownerIdentifier: group.ownerIdentifier ?? input.ownerIdentifier,
           participantIds: nextParticipantIds,
+          shareCode: input.generateInviteLink
+            ? group.shareCode ?? `TRAPIT-GROUP-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
+            : null,
           updatedAt: timestamp,
         }
       : group,
@@ -1644,6 +1658,142 @@ export async function createGroupJoinRequest(input: {
   await writeStore(state);
 
   return request;
+}
+
+export async function requestParticipantGroupAccess(input: {
+  groupId: string;
+  requesterId: string;
+  requesterLabel: string;
+}) {
+  const state = await readStore();
+  const group = state.participantGroups.find((entry) => entry.id === input.groupId);
+
+  if (!group) {
+    throw new Error("Group not found.");
+  }
+
+  const normalizedRequesterId = normalizeParticipantIdentifier(input.requesterId);
+  const participantMap = getParticipantMap(state);
+  const isExistingMember = group.participantIds.some((participantId) => {
+    const participant = participantMap.get(participantId);
+
+    return participant ? identifiersMatch(participant.identifier, normalizedRequesterId) : false;
+  });
+
+  if (isExistingMember) {
+    throw new Error("You are already part of this group.");
+  }
+
+  if (group.inviteJoinMode === "automatic") {
+    await addParticipantToGroup(state, {
+      groupId: group.id,
+      participantIdentifier: normalizedRequesterId,
+      participantLabel: input.requesterLabel,
+    });
+    await writeStore(state);
+
+    return {
+      mode: "automatic" as const,
+    };
+  }
+
+  await createGroupJoinRequest({
+    adminGroupId: group.id,
+    requesterId: normalizedRequesterId,
+    requesterLabel: input.requesterLabel,
+  });
+
+  return {
+    mode: "approval-required" as const,
+  };
+}
+
+export async function getParticipantGroupInviteByShareCode(
+  shareCode: string,
+  viewerIdentifier?: string | null,
+) {
+  const state = await readStore();
+  const normalizedShareCode = shareCode.trim().toUpperCase();
+  const group = state.participantGroups.find(
+    (entry) => entry.shareCode?.trim().toUpperCase() === normalizedShareCode,
+  );
+
+  if (!group) {
+    throw new Error("This group invite link is invalid or no longer available.");
+  }
+
+  const normalizedViewerIdentifier = viewerIdentifier?.trim()
+    ? normalizeParticipantIdentifier(viewerIdentifier)
+    : null;
+  const participantMap = getParticipantMap(state);
+  const isGroupMember = normalizedViewerIdentifier
+    ? group.participantIds.some((participantId) => {
+        const participant = participantMap.get(participantId);
+
+        return participant
+          ? identifiersMatch(participant.identifier, normalizedViewerIdentifier)
+          : false;
+      })
+    : false;
+  const latestRequest = normalizedViewerIdentifier
+    ? state.groupJoinRequests.find(
+        (request) =>
+          request.adminGroupId === group.id
+          && identifiersMatch(request.requesterId, normalizedViewerIdentifier),
+      ) ?? null
+    : null;
+
+  return {
+    access: {
+      canRequestAccess: Boolean(normalizedViewerIdentifier) && !isGroupMember && latestRequest?.status !== "pending",
+      isGroupMember,
+      requestStatus: isGroupMember ? "accepted" : latestRequest?.status ?? null,
+    },
+    group: {
+      description: group.description,
+      id: group.id,
+      inviteJoinMode: group.inviteJoinMode,
+      name: group.name,
+      ownerIdentifier: group.ownerIdentifier,
+      shareCode: group.shareCode,
+    },
+  };
+}
+
+export async function requestParticipantGroupAccessByShareCode(input: {
+  requesterId: string;
+  requesterLabel: string;
+  shareCode: string;
+}) {
+  const state = await readStore();
+  const invite = await getParticipantGroupInviteByShareCode(input.shareCode, input.requesterId);
+
+  if (invite.access.isGroupMember) {
+    throw new Error("You are already part of this group.");
+  }
+
+  if (invite.group.inviteJoinMode === "automatic") {
+    await addParticipantToGroup(state, {
+      groupId: invite.group.id,
+      participantIdentifier: input.requesterId,
+      participantLabel: input.requesterLabel,
+    });
+    await writeStore(state);
+
+    return {
+      mode: "automatic" as const,
+    };
+  }
+
+  await createGroupJoinRequest({
+    adminGroupId: invite.group.id,
+    requesterId: input.requesterId,
+    requesterLabel: input.requesterLabel,
+  });
+
+  return {
+    mode: "approval-required" as const,
+  };
 }
 
 export async function resolveGroupJoinRequest(input: {

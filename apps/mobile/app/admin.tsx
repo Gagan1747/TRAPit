@@ -6,10 +6,12 @@ import { isMobileAuthConfigured } from "../src/auth/auth-config";
 import { useAuth } from "../src/auth/auth-context";
 import { MobileAdminQuestionWorkspace } from "../src/components/mobile-admin-question-workspace";
 import { MobileCategoryApprovalPanel } from "../src/components/mobile-category-panels";
+import { formatPhoneNumberForDisplay, isSuperAdminSession } from "../src/lib/privacy";
 
 export default function AdminScreen() {
   const { isLoading, session, signOut } = useAuth();
   const authConfigured = isMobileAuthConfigured();
+  const isSuperAdmin = session ? isSuperAdminSession(session) : false;
 
   if (isLoading) {
     return null;
@@ -35,7 +37,9 @@ export default function AdminScreen() {
             Run the workspace, and if you are the super admin, clear upgrade approvals from the same mobile dashboard.
           </Text>
           <Text style={styles.copy}>
-            {authConfigured ? `Signed in as ${session ? getSessionIdentifier(session) ?? "admin" : "admin"}` : "Auth setup pending. Admin space is open for feature work."}
+            {authConfigured
+              ? `Signed in as ${formatPhoneNumberForDisplay(session ? getSessionIdentifier(session) ?? "admin" : "admin", { showFullPhoneNumber: isSuperAdmin })}`
+              : "Auth setup pending. Admin space is open for feature work."}
           </Text>
           {authConfigured ? (
             <Text style={styles.signOut} onPress={() => void signOut()}>
@@ -44,7 +48,7 @@ export default function AdminScreen() {
           ) : null}
         </View>
         {session ? <MobileCategoryApprovalPanel session={session} /> : null}
-        <MobileAdminQuestionWorkspace currentAdminIdentifier={session ? getSessionIdentifier(session) : null} />
+        <MobileAdminQuestionWorkspace currentAdminIdentifier={session ? getSessionIdentifier(session) : null} isSuperAdmin={isSuperAdmin} />
       </ScrollView>
     </SafeAreaView>
   );

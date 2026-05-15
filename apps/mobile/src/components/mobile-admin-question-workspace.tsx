@@ -2,6 +2,7 @@ import { validateQuestionDraft, type PollQuestionDraft, type PollParticipantType
 import { useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
+import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { useQuestionBank } from "../testing/question-bank-context";
 import { MobileCollapsibleSection } from "./mobile-collapsible-section";
 
@@ -75,6 +76,7 @@ type AdminMenuGroup = "groups" | "poll" | "test";
 
 type MobileAdminQuestionWorkspaceProps = {
   currentAdminIdentifier: string | null;
+  isSuperAdmin: boolean;
 };
 
 const statusPriority: Record<ScheduledTest["status"], number> = {
@@ -83,7 +85,7 @@ const statusPriority: Record<ScheduledTest["status"], number> = {
   completed: 2,
 };
 
-export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileAdminQuestionWorkspaceProps) {
+export function MobileAdminQuestionWorkspace({ currentAdminIdentifier, isSuperAdmin }: MobileAdminQuestionWorkspaceProps) {
   const {
     createGroup,
     createPollQuestions,
@@ -992,7 +994,7 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier }: MobileA
             <View key={group.id} style={styles.itemCard}>
               <Text style={styles.cardTitle}>{group.name}</Text>
               <Text style={styles.metaText}>{group.participantIds.length} current member{group.participantIds.length === 1 ? "" : "s"}</Text>
-              <Text style={styles.metaText}>Owner: {group.ownerIdentifier ?? "Unknown"}</Text>
+              <Text style={styles.metaText}>Owner: {formatPhoneNumberForDisplay(group.ownerIdentifier ?? "Unknown", { showFullPhoneNumber: isSuperAdmin })}</Text>
               <Pressable style={styles.primaryButton} onPress={() => handleRequestGroup(group.id)} disabled={Boolean(latestRequest && latestRequest.status !== "rejected")}><Text style={styles.primaryButtonText}>{latestRequest ? latestRequest.status === "pending" ? "Request pending" : latestRequest.status === "accepted" ? "Request accepted" : "Request sent" : "Request access"}</Text></Pressable>
             </View>
           );

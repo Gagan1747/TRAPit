@@ -7,6 +7,7 @@ import { useAuth } from "../src/auth/auth-context";
 import { MobileCategoryMembershipPanel } from "../src/components/mobile-category-panels";
 import { MobileRestrictedUserDashboardWorkspace } from "../src/components/mobile-restricted-user-dashboard-workspace";
 import { MobileUserTestWorkspace } from "../src/components/mobile-user-test-workspace";
+import { formatPhoneNumberForDisplay, isSuperAdminSession } from "../src/lib/privacy";
 
 export default function UserScreen() {
   const { isLoading, session, signOut } = useAuth();
@@ -28,6 +29,7 @@ export default function UserScreen() {
 
   const currentIdentifier = session ? getSessionIdentifier(session) : null;
   const categoryLabel = session?.userCategory ? normalUserCategoryLabels[session.userCategory].replace(/ users$/i, " user") : null;
+  const isSuperAdmin = session ? isSuperAdminSession(session) : false;
   const showRestrictedDashboard = !session || session.role === "user";
 
   return (
@@ -41,7 +43,7 @@ export default function UserScreen() {
           </Text>
           <Text style={styles.copy}>
             {authConfigured
-              ? `Signed in with ${session ? getSessionIdentifier(session) ?? "user" : "user"}${categoryLabel ? ` as ${categoryLabel}` : ""}`
+              ? `Signed in with ${formatPhoneNumberForDisplay(session ? getSessionIdentifier(session) ?? "user" : "user", { showFullPhoneNumber: isSuperAdmin })}${categoryLabel ? ` as ${categoryLabel}` : ""}`
               : "Auth setup pending. User space is open for feature work."}
           </Text>
           {authConfigured ? (

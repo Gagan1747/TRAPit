@@ -13,6 +13,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { formatShortDateTime } from "../lib/date-format";
+import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 
 type AvailableTest = {
@@ -312,7 +313,7 @@ export function UserTestWorkspace({
     setIsSendingGroupRequest(groupId);
 
     try {
-      const payload = await readJson<{ groupJoinRequests: GroupJoinRequest[] }>(
+      const payload = await readJson<{ groupJoinRequests: GroupJoinRequest[]; mode: "approval-required" | "automatic"; participantGroups: ParticipantGroup[] }>(
         await fetch("/api/user/groups", {
           body: JSON.stringify({ adminGroupId: groupId }),
           headers: {
@@ -323,7 +324,15 @@ export function UserTestWorkspace({
       );
 
       setGroupJoinRequests(payload.groupJoinRequests);
-      setGroupSearchFeedback("Request sent to the admin for review.");
+      setGroupSearchResults(payload.participantGroups);
+      setGroupSearchFeedback(
+        payload.mode === "automatic"
+          ? "You were added to the group immediately."
+          : "Request sent to the admin for review.",
+      );
+      if (payload.mode === "automatic") {
+        await loadDashboard(identifierRef.current);
+      }
     } catch (error) {
       setGroupSearchFeedback(
         error instanceof Error ? error.message : "Unable to send the group request.",
@@ -587,7 +596,7 @@ export function UserTestWorkspace({
                         {request.requestType === "admin-invite" ? (
                           <>
                             <p className="muted-text">Invited by {request.adminLabel}</p>
-                            <p className="muted-text">Contact: {request.adminIdentifier}</p>
+                            <p className="muted-text">Contact: {formatPhoneNumberForDisplay(request.adminIdentifier)}</p>
                             <p className="muted-text">Invitation sent {formatShortDateTime(request.requestedAt)}</p>
                           </>
                         ) : (

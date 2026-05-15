@@ -249,7 +249,13 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       resolvedAt: request.resolvedAt ?? null,
       status: request.status ?? "pending",
     })),
-    participantGroups: parsed.participantGroups ?? [],
+    participantGroups: (parsed.participantGroups ?? []).map((group) => ({
+      ...group,
+      inviteJoinMode: group.inviteJoinMode ?? "approval-required",
+      ownerIdentifier: group.ownerIdentifier?.trim() || null,
+      participantIds: dedupe(group.participantIds ?? []),
+      shareCode: group.shareCode?.trim() || null,
+    })),
     participants: parsed.participants ?? [],
     pollAttempts: parsed.pollAttempts ?? [],
     pollQuestions: (parsed.pollQuestions ?? []).map((question) => ({
@@ -575,8 +581,10 @@ export function QuestionBankProvider({ children }: { children: React.ReactNode }
     const nextGroup: ParticipantGroup = {
       ...existingGroup,
       description: input.description?.trim() ?? existingGroup.description,
+      inviteJoinMode: existingGroup.inviteJoinMode,
       name: input.name.trim(),
       participantIds,
+      shareCode: existingGroup.shareCode,
       updatedAt: timestamp,
     };
 

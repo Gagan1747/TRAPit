@@ -29,12 +29,16 @@ type ParticipantBody =
     }
   | {
       description?: string;
+      generateInviteLink?: boolean;
+      inviteJoinMode?: "approval-required" | "automatic";
       mode?: "create-group";
       name?: string;
       participantIds?: string[];
     }
   | {
+      generateInviteLink?: boolean;
       groupId?: string;
+      inviteJoinMode?: "approval-required" | "automatic";
       mode?: "update-group";
       name?: string;
       participantIds?: string[];
@@ -108,6 +112,8 @@ export async function POST(request: Request) {
 
       const participantGroups = await createGroup({
         description: body.description,
+        generateInviteLink: body.generateInviteLink,
+        inviteJoinMode: body.inviteJoinMode,
         name: body.name,
         ownerLabel: actor.displayName,
         ownerIdentifier: actor.identifier,
@@ -135,7 +141,9 @@ export async function POST(request: Request) {
       }
 
       const participantGroups = await updateGroup({
+        generateInviteLink: body.generateInviteLink,
         groupId: body.groupId,
+        inviteJoinMode: body.inviteJoinMode,
         name: body.name,
         ownerLabel: actor.displayName,
         ownerIdentifier: actor.identifier,

@@ -31,6 +31,7 @@ import { useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
+import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 import { type NotificationBellItem } from "./notification-bell";
 
@@ -422,8 +423,11 @@ type EditableQuestionDraft = {
 };
 
 type EditableGroupDraft = {
+  generateInviteLink: boolean;
+  inviteJoinMode: "approval-required" | "automatic";
   name: string;
   participantIds: string[];
+  shareCode: string | null;
 };
 
 const adminTestStatusPriority: Record<ScheduledTest["status"], number> = {
@@ -439,6 +443,7 @@ type ParticipantSearchPickerProps = {
   searchPlaceholder: string;
   selectedIds: string[];
   selectionLabel: string;
+  showFullPhoneNumbers?: boolean;
   onChange: (participantIds: string[]) => void;
 };
 
@@ -584,25 +589,32 @@ function participantIdentifiersMatch(left: string, right: string) {
 function getManagedUserOptionLabel(user: {
   displayName: string | null;
   identifier: string;
-}) {
-  return user.displayName ? `${user.displayName} - ${user.identifier}` : user.identifier;
+}, showFullPhoneNumbers = false) {
+  const identifier = formatPhoneNumberForDisplay(user.identifier, { showFullPhoneNumber: showFullPhoneNumbers });
+
+  return user.displayName ? `${user.displayName} - ${identifier}` : identifier;
 }
 
 function formatParticipantName(
   identifier: string,
   participants: ParticipantProfile[],
+  showFullPhoneNumbers = false,
 ) {
   const participant = participants.find(
     (entry) => participantIdentifiersMatch(entry.identifier, identifier),
   );
 
+  const maskedIdentifier = formatPhoneNumberForDisplay(identifier, { showFullPhoneNumber: showFullPhoneNumbers });
+
   if (!participant) {
-    return identifier;
+    return maskedIdentifier;
   }
 
+  const participantIdentifier = formatPhoneNumberForDisplay(participant.identifier, { showFullPhoneNumber: showFullPhoneNumbers });
+
   return participant.label && participant.label !== participant.identifier
-    ? `${participant.label} (${participant.identifier})`
-    : participant.label || participant.identifier;
+    ? `${participant.label} (${participantIdentifier})`
+    : participant.label || participantIdentifier;
 }
 
 function normalizeDuplicateQuestionValue(value: string) {
@@ -665,8 +677,9 @@ function formatResultParticipantName(
   identifier: string,
   participantName: string | undefined,
   participants: ParticipantProfile[],
+  showFullPhoneNumbers = false,
 ) {
-  const fallbackName = formatParticipantName(identifier, participants);
+  const fallbackName = formatParticipantName(identifier, participants, showFullPhoneNumbers);
 
   return participantName?.trim()
     ? `${participantName.trim()} (${fallbackName})`
@@ -691,11 +704,13 @@ function matchesParticipantSearch(participant: ParticipantProfile, query: string
   );
 }
 
-function getParticipantSecondaryText(participant: ParticipantProfile) {
+function getParticipantSecondaryText(participant: ParticipantProfile, showFullPhoneNumbers = false) {
   const label = participant.label.trim();
   const identifier = participant.identifier.trim();
 
-  return label && label !== identifier ? identifier : null;
+  return label && label !== identifier
+    ? formatPhoneNumberForDisplay(identifier, { showFullPhoneNumber: showFullPhoneNumbers })
+    : null;
 }
 
 function ParticipantSearchPicker({
@@ -705,6 +720,7 @@ function ParticipantSearchPicker({
   searchPlaceholder,
   selectedIds,
   selectionLabel,
+  showFullPhoneNumbers,
   onChange,
 }: ParticipantSearchPickerProps) {
   const [searchQuery, setSearchQuery] = useState("");
@@ -749,8 +765,8 @@ function ParticipantSearchPicker({
                 onClick={() => addParticipant(participant.id)}
               >
                 <span>{participant.label}</span>
-                {getParticipantSecondaryText(participant) ? (
-                  <span className="muted-text">{getParticipantSecondaryText(participant)}</span>
+                {getParticipantSecondaryText(participant, showFullPhoneNumbers) ? (
+                  <span className="muted-text">{getParticipantSecondaryText(participant, showFullPhoneNumbers)}</span>
                 ) : null}
               </button>
             ))}
@@ -774,8 +790,8 @@ function ParticipantSearchPicker({
               onClick={() => removeParticipant(participant.id)}
             >
               <span>{participant.label}</span>
-              {getParticipantSecondaryText(participant) ? (
-                <span className="muted-text">{getParticipantSecondaryText(participant)}</span>
+              {getParticipantSecondaryText(participant, showFullPhoneNumbers) ? (
+                <span className="muted-text">{getParticipantSecondaryText(participant, showFullPhoneNumbers)}</span>
               ) : null}
               <span className="muted-text">Remove</span>
             </button>
@@ -820,6 +836,8 @@ export function AdminQuestionWorkspace({
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [groupFeedback, setGroupFeedback] = useState<string | null>(null);
+  const [groupGenerateInviteLink, setGroupGenerateInviteLink] = useState(false);
+  const [groupInviteJoinMode, setGroupInviteJoinMode] = useState<"approval-required" | "automatic">("approval-required");
   const [groupJoinRequests, setGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
   const [groupSearchFeedback, setGroupSearchFeedback] = useState<string | null>(null);
   const [groupSearchPhoneNumber, setGroupSearchPhoneNumber] = useState("");
@@ -1125,6 +1143,18 @@ export function AdminQuestionWorkspace({
     }
 
     return `${window.location.origin}/test/${shareCode}`;
+  }
+
+  function getGroupAccessUrl(shareCode: string) {
+    if (!shareCode.trim()) {
+      return "";
+    }
+
+    if (typeof window === "undefined") {
+      return `/group/${shareCode}`;
+    }
+
+    return `${window.location.origin}/group/${shareCode}`;
   }
 
   function resetPollScheduleForm() {
@@ -1988,7 +2018,7 @@ export function AdminQuestionWorkspace({
       return;
     }
 
-    if (!selectedGroupParticipantIds.length) {
+    if (!selectedGroupParticipantIds.length && !groupGenerateInviteLink) {
       setGroupFeedback("Select at least one participant for the group or class.");
       return;
     }
@@ -1997,6 +2027,8 @@ export function AdminQuestionWorkspace({
       await readJson<ParticipantsResponse>(
         await fetch("/api/admin/participants", {
           body: JSON.stringify({
+            generateInviteLink: groupGenerateInviteLink,
+            inviteJoinMode: groupInviteJoinMode,
             mode: "create-group",
             name: groupName,
             participantIds: selectedGroupParticipantIds,
@@ -2008,7 +2040,13 @@ export function AdminQuestionWorkspace({
         }),
       );
 
-      setGroupFeedback("Group or class created. Selected users will receive addition requests.");
+      setGroupFeedback(
+        groupGenerateInviteLink
+          ? "Group created. Share the invite link with users so they can join based on this group setting."
+          : "Group or class created. Selected users will receive addition requests.",
+      );
+      setGroupGenerateInviteLink(false);
+      setGroupInviteJoinMode("approval-required");
       setGroupName("");
       setSelectedGroupParticipantIds([]);
     }).catch((error) => {
@@ -2253,8 +2291,11 @@ export function AdminQuestionWorkspace({
   function handleStartEditingGroup(group: ParticipantGroup) {
     setEditingGroupId(group.id);
     setEditingGroupDraft({
+      generateInviteLink: Boolean(group.shareCode),
+      inviteJoinMode: group.inviteJoinMode,
       name: group.name,
       participantIds: [...group.participantIds],
+      shareCode: group.shareCode,
     });
     setGroupFeedback(null);
   }
@@ -2278,7 +2319,9 @@ export function AdminQuestionWorkspace({
       await readJson<ParticipantsResponse>(
         await fetch("/api/admin/participants", {
           body: JSON.stringify({
+            generateInviteLink: editingGroupDraft.generateInviteLink,
             groupId: editingGroupId,
+            inviteJoinMode: editingGroupDraft.inviteJoinMode,
             mode: "update-group",
             name: editingGroupDraft.name,
             participantIds: editingGroupDraft.participantIds,
@@ -2290,7 +2333,11 @@ export function AdminQuestionWorkspace({
         }),
       );
 
-      setGroupFeedback("Group updated. New users will receive addition requests.");
+      setGroupFeedback(
+        editingGroupDraft.generateInviteLink
+          ? "Group updated. Share the invite link with users so they can join based on this group setting."
+          : "Group updated. New users will receive addition requests.",
+      );
       setEditingGroupId(null);
       setEditingGroupDraft(null);
     }).catch((error) => {
@@ -3278,7 +3325,7 @@ export function AdminQuestionWorkspace({
                       setCategorySearchQuery(nextValue);
 
                       const matchedUser = categoryManagement?.managedUsers.find((user) => {
-                        const optionLabel = getManagedUserOptionLabel(user).toLowerCase();
+                        const optionLabel = getManagedUserOptionLabel(user, isSuperAdmin).toLowerCase();
                         const normalizedValue = nextValue.trim().toLowerCase();
 
                         return optionLabel === normalizedValue || user.identifier.toLowerCase() === normalizedValue;
@@ -3292,11 +3339,11 @@ export function AdminQuestionWorkspace({
                   />
                   <datalist id="category-user-options">
                     {filteredManagedUsers.map((user) => (
-                      <option key={user.identifier} value={getManagedUserOptionLabel(user)} />
+                      <option key={user.identifier} value={getManagedUserOptionLabel(user, isSuperAdmin)} />
                     ))}
                   </datalist>
                   {selectedManagedUser ? (
-                    <p className="muted-text">Selected user: {selectedManagedUser.identifier}</p>
+                    <p className="muted-text">Selected user: {formatPhoneNumberForDisplay(selectedManagedUser.identifier, { showFullPhoneNumber: isSuperAdmin })}</p>
                   ) : null}
                 </div>
                 <div className="field compact-field">
@@ -3665,7 +3712,7 @@ export function AdminQuestionWorkspace({
                         type="button"
                         onClick={() => handleTogglePoolShareIdentifier(identifier)}
                       >
-                        {formatParticipantName(identifier, participants)}
+                        {formatParticipantName(identifier, participants, isSuperAdmin)}
                         {selectedQuestionBankPool.canManage ? " Remove" : ""}
                       </button>
                     ))}
@@ -3702,7 +3749,7 @@ export function AdminQuestionWorkspace({
                               type="button"
                               onClick={() => handleTogglePoolShareIdentifier(participant.identifier)}
                             >
-                              {formatParticipantName(participant.identifier, participants)}
+                              {formatParticipantName(participant.identifier, participants, isSuperAdmin)}
                             </button>
                           );
                         })
@@ -3991,8 +4038,48 @@ export function AdminQuestionWorkspace({
             searchPlaceholder="Search participants by phone number"
             selectedIds={selectedGroupParticipantIds}
             selectionLabel="Select participants"
+            showFullPhoneNumbers={isSuperAdmin}
             onChange={setSelectedGroupParticipantIds}
           />
+          <div className="question-card nested-card form-stack">
+            <label className="role-option">
+              <input
+                checked={groupGenerateInviteLink}
+                type="checkbox"
+                onChange={(event) => setGroupGenerateInviteLink(event.target.checked)}
+              />
+              <span>Create invite link for this group</span>
+            </label>
+            {groupGenerateInviteLink ? (
+              <div className="selection-grid">
+                <label className="role-option">
+                  <input
+                    checked={groupInviteJoinMode === "approval-required"}
+                    name="group-invite-join-mode"
+                    type="radio"
+                    onChange={() => setGroupInviteJoinMode("approval-required")}
+                  />
+                  <span>Approval required</span>
+                </label>
+                <label className="role-option">
+                  <input
+                    checked={groupInviteJoinMode === "automatic"}
+                    name="group-invite-join-mode"
+                    type="radio"
+                    onChange={() => setGroupInviteJoinMode("automatic")}
+                  />
+                  <span>Open for all</span>
+                </label>
+              </div>
+            ) : null}
+            <p className="muted-text">
+              {groupGenerateInviteLink
+                ? groupInviteJoinMode === "automatic"
+                  ? "Anyone who signs in from the link will join this group automatically."
+                  : "Anyone who signs in from the link will need creator approval before joining this group."
+                : "Without an invite link, only the selected participants can be invited into this group right now."}
+            </p>
+          </div>
           {groupFeedback ? <p className="muted-text">{groupFeedback}</p> : null}
           <div className="inline-actions">
             <button className="button" disabled={isMutating} type="button" onClick={handleCreateGroup}>
@@ -4026,6 +4113,9 @@ export function AdminQuestionWorkspace({
                     <div className="question-head">
                       <strong>{group.name}</strong>
                       <div className="inline-actions">
+                        <span className="status-chip success">
+                          {group.inviteJoinMode === "automatic" ? "Open for all" : "Approval required"}
+                        </span>
                         <span className="status-chip success">{group.participantIds.length} members</span>
                         {requestsForGroup.length ? (
                           <span className="status-chip success">
@@ -4066,6 +4156,65 @@ export function AdminQuestionWorkspace({
                           />
                         </div>
                         <div className="field">
+                          <div className="question-card nested-card form-stack">
+                            <label className="role-option">
+                              <input
+                                checked={editingGroupDraft.generateInviteLink}
+                                type="checkbox"
+                                onChange={(event) =>
+                                  setEditingGroupDraft((currentDraft) =>
+                                    currentDraft
+                                      ? {
+                                          ...currentDraft,
+                                          generateInviteLink: event.target.checked,
+                                        }
+                                      : currentDraft,
+                                  )
+                                }
+                              />
+                              <span>Create invite link for this group</span>
+                            </label>
+                            {editingGroupDraft.generateInviteLink ? (
+                              <div className="selection-grid">
+                                <label className="role-option">
+                                  <input
+                                    checked={editingGroupDraft.inviteJoinMode === "approval-required"}
+                                    name={`edit-group-invite-mode-${group.id}`}
+                                    type="radio"
+                                    onChange={() =>
+                                      setEditingGroupDraft((currentDraft) =>
+                                        currentDraft
+                                          ? {
+                                              ...currentDraft,
+                                              inviteJoinMode: "approval-required",
+                                            }
+                                          : currentDraft,
+                                      )
+                                    }
+                                  />
+                                  <span>Approval required</span>
+                                </label>
+                                <label className="role-option">
+                                  <input
+                                    checked={editingGroupDraft.inviteJoinMode === "automatic"}
+                                    name={`edit-group-invite-mode-${group.id}`}
+                                    type="radio"
+                                    onChange={() =>
+                                      setEditingGroupDraft((currentDraft) =>
+                                        currentDraft
+                                          ? {
+                                              ...currentDraft,
+                                              inviteJoinMode: "automatic",
+                                            }
+                                          : currentDraft,
+                                      )
+                                    }
+                                  />
+                                  <span>Open for all</span>
+                                </label>
+                              </div>
+                            ) : null}
+                          </div>
                           <ParticipantSearchPicker
                             emptyMessage="No participants selected for this group yet."
                             inputId={`edit-group-search-${group.id}`}
@@ -4073,6 +4222,7 @@ export function AdminQuestionWorkspace({
                             searchPlaceholder="Search and add participants"
                             selectedIds={editingGroupDraft.participantIds}
                             selectionLabel="Manage participants"
+                            showFullPhoneNumbers={isSuperAdmin}
                             onChange={(participantIds) =>
                               setEditingGroupDraft((currentDraft) =>
                                 currentDraft
@@ -4107,23 +4257,40 @@ export function AdminQuestionWorkspace({
                         </div>
                       </div>
                     ) : (
-                      <div className="selection-grid">
-                        {group.participantIds.length ? (
-                          group.participantIds.map((participantId) => {
-                            const participant = participants.find((entry) => entry.id === participantId);
+                      <div className="form-stack">
+                        {group.shareCode ? (
+                          <div className="form-stack">
+                            <p className="muted-text">Access code: {group.shareCode}</p>
+                            <p className="muted-text">URL: <a href={getGroupAccessUrl(group.shareCode)} target="_blank" rel="noreferrer">{getGroupAccessUrl(group.shareCode)}</a></p>
+                            <div className="inline-actions">
+                              <button
+                                className="button-secondary small-button"
+                                type="button"
+                                onClick={() => void copyTextToClipboard(getGroupAccessUrl(group.shareCode ?? ""))}
+                              >
+                                Copy link
+                              </button>
+                            </div>
+                          </div>
+                        ) : null}
+                        <div className="selection-grid">
+                          {group.participantIds.length ? (
+                            group.participantIds.map((participantId) => {
+                              const participant = participants.find((entry) => entry.id === participantId);
 
-                            return participant ? (
-                              <div className="role-option" key={`${group.id}-${participant.id}`}>
-                                <span>{participant.label}</span>
-                                {getParticipantSecondaryText(participant) ? (
-                                  <span className="muted-text">{getParticipantSecondaryText(participant)}</span>
-                                ) : null}
-                              </div>
-                            ) : null;
-                          })
-                        ) : (
-                          <p className="muted-text">No participants in this group yet.</p>
-                        )}
+                              return participant ? (
+                                <div className="role-option" key={`${group.id}-${participant.id}`}>
+                                  <span>{participant.label}</span>
+                                  {getParticipantSecondaryText(participant, isSuperAdmin) ? (
+                                    <span className="muted-text">{getParticipantSecondaryText(participant, isSuperAdmin)}</span>
+                                  ) : null}
+                                </div>
+                              ) : null;
+                            })
+                          ) : (
+                            <p className="muted-text">No participants in this group yet.</p>
+                          )}
+                        </div>
                       </div>
                     )}
 
@@ -4133,7 +4300,7 @@ export function AdminQuestionWorkspace({
                           <article className="request-card" key={request.id}>
                             <div>
                               <strong>{request.requesterLabel}</strong>
-                              <p className="muted-text">{request.requesterId}</p>
+                              <p className="muted-text">{formatPhoneNumberForDisplay(request.requesterId, { showFullPhoneNumber: isSuperAdmin })}</p>
                               <p className="muted-text">
                                 {request.requestType === "admin-invite"
                                   ? `Invited ${formatShortDateTime(request.requestedAt)}`
@@ -5095,7 +5262,7 @@ export function AdminQuestionWorkspace({
                         <p className="muted-text">
                           Participants: {scheduledTest.resolvedParticipantIdentifiers.length
                             ? scheduledTest.resolvedParticipantIdentifiers
-                                .map((identifier) => formatParticipantName(identifier, participants))
+                                .map((identifier) => formatParticipantName(identifier, participants, isSuperAdmin))
                                 .join(", ")
                             : "None"}
                         </p>
@@ -5122,7 +5289,7 @@ export function AdminQuestionWorkspace({
                                     {leaderboard.entries.map((entry) => (
                                       <tr key={entry.attemptId}>
                                         <td>{entry.rank}</td>
-                                        <td>{formatResultParticipantName(entry.participantId, entry.participantName, participants)}</td>
+                                        <td>{formatResultParticipantName(entry.participantId, entry.participantName, participants, isSuperAdmin)}</td>
                                         <td>{entry.correctCount}/{entry.totalCount}</td>
                                         <td>{entry.incorrectCount}</td>
                                         <td>{formatElapsedTime(entry.elapsedMs)}</td>
@@ -5133,7 +5300,7 @@ export function AdminQuestionWorkspace({
                                       <tr>
                                         <td colSpan={6}>
                                           <strong>Absent:</strong> {absentParticipants
-                                            .map((identifier) => formatParticipantName(identifier, participants))
+                                            .map((identifier) => formatParticipantName(identifier, participants, isSuperAdmin))
                                             .join(", ")}
                                         </td>
                                       </tr>

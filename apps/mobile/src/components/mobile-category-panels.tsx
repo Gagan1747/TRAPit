@@ -6,6 +6,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
+import { isSuperAdminSession } from "../lib/privacy";
 import { type MobileAuthSession } from "../auth/session";
 
 type UserCategoryUpgradeRequest = {
@@ -51,17 +52,6 @@ type SuperAdminCategoryManagementResponse = {
 
 function getApiBaseUrl() {
   return process.env.EXPO_PUBLIC_API_BASE_URL ?? "http://localhost:3000";
-}
-
-function normalizeIdentifier(value: string | null | undefined) {
-  return value?.trim().toLowerCase().replace(/[\s()-]/g, "") ?? "";
-}
-
-function isSuperAdminSession(session: MobileAuthSession) {
-  const configured = process.env.EXPO_PUBLIC_TRAPIT_SUPER_ADMIN_PHONE ?? "+919899538637";
-  const comparable = session.phoneNumber ?? session.displayIdentifier ?? session.sub;
-
-  return normalizeIdentifier(comparable) === normalizeIdentifier(configured);
 }
 
 function formatShortDate(value: string) {

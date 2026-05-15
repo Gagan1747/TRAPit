@@ -3,6 +3,7 @@ import { formatElapsedTime, type ScheduledPoll, type ScheduledTest } from "@trap
 import { useMemo, useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
+import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { useQuestionBank } from "../testing/question-bank-context";
 import { MobileCollapsibleSection } from "./mobile-collapsible-section";
 
@@ -279,7 +280,7 @@ export function MobileRestrictedUserDashboardWorkspace({ currentUserCategory, cu
             <View key={group.id} style={styles.itemCard}>
               <Text style={styles.cardTitle}>{group.name}</Text>
               <Text style={styles.metaText}>{group.participantIds.length} current member{group.participantIds.length === 1 ? "" : "s"}</Text>
-              <Text style={styles.metaText}>Owner: {group.ownerIdentifier ?? "Unknown"}</Text>
+              <Text style={styles.metaText}>Owner: {formatPhoneNumberForDisplay(group.ownerIdentifier ?? "Unknown")}</Text>
               <Pressable style={styles.primaryButton} onPress={() => handleRequestGroup(group.id)} disabled={Boolean(latestRequest && latestRequest.status !== "rejected")}>
                 <Text style={styles.primaryButtonText}>{latestRequest ? latestRequest.status === "pending" ? "Request pending" : latestRequest.status === "accepted" ? "Request accepted" : "Request sent" : "Request access"}</Text>
               </Pressable>

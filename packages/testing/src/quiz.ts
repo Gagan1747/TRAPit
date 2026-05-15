@@ -107,11 +107,15 @@ export type ParticipantGroup = {
   createdAt: string;
   description: string;
   id: string;
+  inviteJoinMode: ParticipantGroupInviteJoinMode;
   name: string;
   ownerIdentifier: string | null;
   participantIds: string[];
+  shareCode: string | null;
   updatedAt: string;
 };
+
+export type ParticipantGroupInviteJoinMode = "approval-required" | "automatic";
 
 export type GroupJoinRequestStatus = "pending" | "accepted" | "rejected";
 
@@ -566,9 +570,11 @@ export function createParticipantProfile(input: {
 
 export function createParticipantGroup(input: {
   description?: string;
+  inviteJoinMode?: ParticipantGroupInviteJoinMode;
   name: string;
   ownerIdentifier?: string | null;
   participantIds: string[];
+  shareCode?: string | null;
 }): ParticipantGroup {
   const timestamp = new Date().toISOString();
 
@@ -576,9 +582,11 @@ export function createParticipantGroup(input: {
     createdAt: timestamp,
     description: input.description?.trim() ?? "",
     id: createEntityId("group"),
+    inviteJoinMode: input.inviteJoinMode ?? "approval-required",
     name: input.name.trim(),
     ownerIdentifier: input.ownerIdentifier?.trim() || null,
     participantIds: Array.from(new Set(input.participantIds)),
+    shareCode: input.shareCode?.trim() || null,
     updatedAt: timestamp,
   };
 }
