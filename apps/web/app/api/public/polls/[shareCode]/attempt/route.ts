@@ -52,10 +52,17 @@ export async function POST(
     startedAt?: string;
   };
   const userId = actor?.identifier ?? body.guestId?.trim() ?? "";
+  const requiresParticipantName = Boolean(actor?.isRegistered);
 
-  if (!body.startedAt || !body.completedAt || !body.answers || !body.participantName?.trim() || !userId) {
+  if (
+    !body.startedAt
+    || !body.completedAt
+    || !body.answers
+    || !userId
+    || (requiresParticipantName && !body.participantName?.trim())
+  ) {
     return NextResponse.json(
-      { error: "Started time, completed time, participant name, guest session, and answers are required." },
+      { error: "Started time, completed time, guest session, and answers are required. Registered users must also provide a name." },
       { status: 400 },
     );
   }

@@ -5707,6 +5707,18 @@ export function AdminQuestionWorkspace({
                             <p className="eyebrow">Results</p>
                             <p className="muted-text">{pollResultsCopy}</p>
                           </div>
+                          {resolvedPoll.shareCode ? (
+                            <div className="inline-actions">
+                              <a
+                                className="button-secondary small-button"
+                                href={getPollAccessUrl(resolvedPoll.shareCode)}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Open poll page
+                              </a>
+                            </div>
+                          ) : null}
                           {isOpenPollExpanded ? (
                             <div className="form-stack">
                               <p className="muted-text">Starts: {formatShortDateTime(resolvedPoll.startsAt)}</p>
@@ -5722,16 +5734,6 @@ export function AdminQuestionWorkspace({
                               ) : null}
                               {resolvedPoll.shareCode ? (
                                 <div className="form-stack">
-                                  <div className="inline-actions">
-                                    <a
-                                      className="button-secondary small-button"
-                                      href={getPollAccessUrl(resolvedPoll.shareCode)}
-                                      target="_blank"
-                                      rel="noreferrer"
-                                    >
-                                      Open poll page
-                                    </a>
-                                  </div>
                                   {pollQrCodes[resolvedPoll.id] ? (
                                     <img alt={`QR code for ${resolvedPoll.title}`} height={180} src={pollQrCodes[resolvedPoll.id]} width={180} />
                                   ) : null}
