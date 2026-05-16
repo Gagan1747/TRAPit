@@ -229,179 +229,179 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
   return (
     <main className="page-shell">
       <section className="panel hero-copy">
-        <div className="compact-head">
-          <div>
-            <h1 className="hero-title">{payload?.poll.title ?? "Open poll"}</h1>
-            {payload?.actor.isRegistered ? (
-              <p className="hero-text">
-                {`Signed in as ${payload.actor.displayName ?? payload.actor.identifier ?? "participant"}`}
-              </p>
-            ) : null}
-            {payload?.creator.displayName || payload?.creator.maskedIdentifier ? (
-              <p className="muted-text">
-                Poll by {payload.creator.displayName ?? "TRAPit admin"}
-                {payload.creator.maskedIdentifier ? ` (${payload.creator.maskedIdentifier})` : ""}
-              </p>
-            ) : null}
-          </div>
-        </div>
-
         {isLoading ? <p className="muted-text">Loading poll...</p> : null}
         {!isLoading && feedback ? <p className="muted-text">{feedback}</p> : null}
 
         {payload ? (
           <div className="form-stack">
-            <div className="question-card">
-              {payload.poll.branding?.imageDataUrl || payload.poll.branding?.instituteName ? (
-                <div className="assessment-branding">
-                  {payload.poll.branding.imageDataUrl ? (
-                    <img alt="Institute branding" className="assessment-branding-image" src={payload.poll.branding.imageDataUrl} />
-                  ) : null}
-                  {payload.poll.branding.instituteName ? (
-                    <div>
-                      <p className="eyebrow">Institute</p>
-                      <strong>{payload.poll.branding.instituteName}</strong>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              <div className="question-head">
-                <strong>{payload.poll.title}</strong>
-                <div className="inline-actions">
-                  <span className={`status-chip ${payload.poll.status === "live" ? "success" : "warning"}`}>
-                    {payload.poll.status}
-                  </span>
-                  <button
-                    aria-expanded={isDetailsExpanded}
-                    className="button-secondary small-button"
-                    type="button"
-                    onClick={() => setIsDetailsExpanded((currentValue) => !currentValue)}
-                  >
-                    {isDetailsExpanded ? "-" : "+"}
-                  </button>
-                </div>
-              </div>
-              {isDetailsExpanded ? (
-                <div className="form-stack">
-                  {payload.actor.isRegistered ? (
-                    <p className="muted-text">Starts: {formatShortDateTime(payload.poll.startsAt)}</p>
-                  ) : null}
-                  <p className="muted-text">Ends: {formatShortDateTime(payload.poll.endsAt)}</p>
-                  <p className="muted-text">Questions: {payload.questions.length}</p>
-                  <p className="muted-text">Response mode: Anonymous only</p>
-                  {typeof payload.totalResponses === "number" ? (
-                    <p className="muted-text">Responses so far: {payload.totalResponses}</p>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-
             {isDetailsExpanded ? (
-              payload.poll.status === "live" && !payload.hasSubmitted ? (
-                <div className="form-stack">
-                  {payload.actor.isRegistered ? (
-                    <div className="field">
-                      <label htmlFor="public-poll-name">Your name</label>
-                      <input
-                        id="public-poll-name"
-                        value={participantName}
-                        onChange={(event) => setParticipantName(event.target.value)}
-                      />
+              <div className="form-stack">
+                <div className="compact-head">
+                  <div>
+                    <h1 className="hero-title">{payload.poll.title}</h1>
+                    {payload.actor.isRegistered ? (
+                      <p className="hero-text">
+                        {`Signed in as ${payload.actor.displayName ?? payload.actor.identifier ?? "participant"}`}
+                      </p>
+                    ) : null}
+                    {payload.creator.displayName || payload.creator.maskedIdentifier ? (
+                      <p className="muted-text">
+                        Poll by {payload.creator.displayName ?? "TRAPit admin"}
+                        {payload.creator.maskedIdentifier ? ` (${payload.creator.maskedIdentifier})` : ""}
+                      </p>
+                    ) : null}
+                  </div>
+                </div>
+
+                <div className="question-card">
+                  {payload.poll.branding?.imageDataUrl || payload.poll.branding?.instituteName ? (
+                    <div className="assessment-branding">
+                      {payload.poll.branding.imageDataUrl ? (
+                        <img alt="Institute branding" className="assessment-branding-image" src={payload.poll.branding.imageDataUrl} />
+                      ) : null}
+                      {payload.poll.branding.instituteName ? (
+                        <div>
+                          <p className="eyebrow">Institute</p>
+                          <strong>{payload.poll.branding.instituteName}</strong>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
-
-                  <article className="question-card runner-summary-card">
-                    <div className="question-head">
-                      <strong>{payload.poll.title}</strong>
-                      <span className="status-chip success">
-                        Question {Math.min(currentQuestionIndex + 1, payload.questions.length)} of {payload.questions.length}
-                      </span>
-                    </div>
-                    <p className="muted-text">Each response moves you straight to the next question. Use the navigation buttons to review or skip.</p>
-                    <p className="muted-text">Answered {answeredCount} of {payload.questions.length}</p>
-                  </article>
-
-                  {activeQuestion ? (
-                    <article className="question-card" key={activeQuestion.id}>
-                      <div className="question-head">
-                        <strong>{activeQuestion.prompt}</strong>
-                        {activeQuestion.topic ? <span className="status-chip warning">{activeQuestion.topic}</span> : null}
-                      </div>
-                      <p className="muted-text">
-                        Question {currentQuestionIndex + 1} of {payload.questions.length}
-                      </p>
-                      <div className="selection-grid">
-                        {activeQuestion.options.map((option, optionIndex) => (
-                          <label className="role-option" key={`${activeQuestion.id}-${optionIndex}`}>
-                            <input
-                              checked={answers[activeQuestion.id] === optionIndex}
-                              name={`poll-question-${activeQuestion.id}`}
-                              type="radio"
-                              onChange={() => handleSelectAnswer(activeQuestion.id, optionIndex)}
-                            />
-                            <span>{option}</span>
-                          </label>
-                        ))}
-                      </div>
-                      <div className="inline-actions">
-                        <button
-                          className="button-secondary"
-                          disabled={currentQuestionIndex === 0}
-                          type="button"
-                          onClick={goToPreviousQuestion}
-                        >
-                          Previous question
-                        </button>
-                        <button className="button-secondary" type="button" onClick={goToNextQuestion}>
-                          Next question
-                        </button>
-                      </div>
-                    </article>
-                  ) : (
-                    <article className="question-card">
-                      <div className="question-head">
-                        <strong>Ready to submit</strong>
-                        <span className="status-chip success">{answeredCount}/{payload.questions.length} answered</span>
-                      </div>
-                      <p className="muted-text">Review earlier questions if needed, then submit your poll response.</p>
-                      <div className="inline-actions">
-                        <button
-                          className="button-secondary"
-                          disabled={payload.questions.length === 0}
-                          type="button"
-                          onClick={goToPreviousQuestion}
-                        >
-                          Review previous question
-                        </button>
-                        <button className="button" disabled={isSubmitting} type="button" onClick={() => void submitPoll()}>
-                          {isSubmitting ? "Submitting..." : "Submit poll"}
-                        </button>
-                      </div>
-                    </article>
-                  )}
+                  <div className="question-head">
+                    <strong>{payload.poll.title}</strong>
+                    <span className={`status-chip ${payload.poll.status === "live" ? "success" : "warning"}`}>
+                      {payload.poll.status}
+                    </span>
+                  </div>
+                  <div className="form-stack">
+                    {payload.actor.isRegistered ? (
+                      <p className="muted-text">Starts: {formatShortDateTime(payload.poll.startsAt)}</p>
+                    ) : null}
+                    <p className="muted-text">Ends: {formatShortDateTime(payload.poll.endsAt)}</p>
+                    <p className="muted-text">Questions: {payload.questions.length}</p>
+                    <p className="muted-text">Response mode: Anonymous only</p>
+                    {typeof payload.totalResponses === "number" ? (
+                      <p className="muted-text">Responses so far: {payload.totalResponses}</p>
+                    ) : null}
+                  </div>
                 </div>
-              ) : payload.hasSubmitted ? (
-                <p className="muted-text">Your response has already been recorded for this poll.</p>
-              ) : payload.poll.status === "scheduled" ? (
-                <p className="muted-text">This poll has not started yet.</p>
-              ) : (
-                <p className="muted-text">This poll is no longer accepting responses.</p>
-              )
+
+                {payload.poll.status === "live" && !payload.hasSubmitted ? (
+                  <div className="form-stack">
+                    {payload.actor.isRegistered ? (
+                      <div className="field">
+                        <label htmlFor="public-poll-name">Your name</label>
+                        <input
+                          id="public-poll-name"
+                          value={participantName}
+                          onChange={(event) => setParticipantName(event.target.value)}
+                        />
+                      </div>
+                    ) : null}
+
+                    <article className="question-card runner-summary-card">
+                      <div className="question-head">
+                        <strong>{payload.poll.title}</strong>
+                        <span className="status-chip success">
+                          Question {Math.min(currentQuestionIndex + 1, payload.questions.length)} of {payload.questions.length}
+                        </span>
+                      </div>
+                      <p className="muted-text">Each response moves you straight to the next question. Use the navigation buttons to review or skip.</p>
+                      <p className="muted-text">Answered {answeredCount} of {payload.questions.length}</p>
+                    </article>
+
+                    {activeQuestion ? (
+                      <article className="question-card" key={activeQuestion.id}>
+                        <div className="question-head">
+                          <strong>{activeQuestion.prompt}</strong>
+                          {activeQuestion.topic ? <span className="status-chip warning">{activeQuestion.topic}</span> : null}
+                        </div>
+                        <p className="muted-text">
+                          Question {currentQuestionIndex + 1} of {payload.questions.length}
+                        </p>
+                        <div className="selection-grid">
+                          {activeQuestion.options.map((option, optionIndex) => (
+                            <label className="role-option" key={`${activeQuestion.id}-${optionIndex}`}>
+                              <input
+                                checked={answers[activeQuestion.id] === optionIndex}
+                                name={`poll-question-${activeQuestion.id}`}
+                                type="radio"
+                                onChange={() => handleSelectAnswer(activeQuestion.id, optionIndex)}
+                              />
+                              <span>{option}</span>
+                            </label>
+                          ))}
+                        </div>
+                        <div className="inline-actions">
+                          <button
+                            className="button-secondary"
+                            disabled={currentQuestionIndex === 0}
+                            type="button"
+                            onClick={goToPreviousQuestion}
+                          >
+                            Previous question
+                          </button>
+                          <button className="button-secondary" type="button" onClick={goToNextQuestion}>
+                            Next question
+                          </button>
+                        </div>
+                      </article>
+                    ) : (
+                      <article className="question-card">
+                        <div className="question-head">
+                          <strong>Ready to submit</strong>
+                          <span className="status-chip success">{answeredCount}/{payload.questions.length} answered</span>
+                        </div>
+                        <p className="muted-text">Review earlier questions if needed, then submit your poll response.</p>
+                        <div className="inline-actions">
+                          <button
+                            className="button-secondary"
+                            disabled={payload.questions.length === 0}
+                            type="button"
+                            onClick={goToPreviousQuestion}
+                          >
+                            Review previous question
+                          </button>
+                          <button className="button" disabled={isSubmitting} type="button" onClick={() => void submitPoll()}>
+                            {isSubmitting ? "Submitting..." : "Submit poll"}
+                          </button>
+                        </div>
+                      </article>
+                    )}
+                  </div>
+                ) : payload.hasSubmitted ? (
+                  <p className="muted-text">Your response has already been recorded for this poll.</p>
+                ) : payload.poll.status === "scheduled" ? (
+                  <p className="muted-text">This poll has not started yet.</p>
+                ) : (
+                  <p className="muted-text">This poll is no longer accepting responses.</p>
+                )}
+              </div>
             ) : null}
 
             <div className="form-stack">
-              <div>
-                <p className="eyebrow">Results</p>
-                {!payload.canViewResults && payload.hasSubmitted && !payload.actor.isRegistered ? (
-                  <p className="muted-text">
-                    Your anonymous response was recorded. Results are only shown to the poll creator and registered participants who responded.
-                  </p>
-                ) : !payload.canViewResults && payload.actor.isRegistered ? (
-                  <p className="muted-text">
-                    Results become visible here after you submit as a registered participant, or immediately if you are the poll creator.
-                  </p>
-                ) : null}
+              <div className="question-head">
+                <div>
+                  <p className="eyebrow">Results</p>
+                </div>
+                <button
+                  aria-expanded={isDetailsExpanded}
+                  className="button-secondary small-button"
+                  type="button"
+                  onClick={() => setIsDetailsExpanded((currentValue) => !currentValue)}
+                >
+                  {isDetailsExpanded ? "-" : "+"}
+                </button>
               </div>
+              {!payload.canViewResults && payload.hasSubmitted && !payload.actor.isRegistered ? (
+                <p className="muted-text">
+                  Your anonymous response was recorded. Results are only shown to the poll creator and registered participants who responded.
+                </p>
+              ) : !payload.canViewResults && payload.actor.isRegistered ? (
+                <p className="muted-text">
+                  Results become visible here after you submit as a registered participant, or immediately if you are the poll creator.
+                </p>
+              ) : null}
               {payload.canViewResults ? (
                 <div className="question-list">
                   {payload.summary.map((question) => (
