@@ -19,6 +19,7 @@ type PollBody =
   | {
       anonymous?: boolean;
       branding?: WorkspaceBranding | null;
+      drafts?: PollQuestionDraft[];
       endsAt?: string;
       generateQrCode?: boolean;
       mode?: "schedule-poll";
@@ -31,6 +32,7 @@ type PollBody =
   | {
       anonymous?: boolean;
       branding?: WorkspaceBranding | null;
+      drafts?: PollQuestionDraft[];
       endsAt?: string;
       generateQrCode?: boolean;
       mode?: "update-poll";
@@ -92,7 +94,10 @@ export async function POST(request: Request) {
     }
 
     if (body.mode === "schedule-poll") {
-      if (!("questionIds" in body) || !Array.isArray(body.questionIds) || !body.questionIds.length) {
+      const typedDrafts = ("drafts" in body && Array.isArray(body.drafts) ? body.drafts : []).filter(Boolean);
+      const selectedQuestionIds = ("questionIds" in body && Array.isArray(body.questionIds) ? body.questionIds : []).filter(Boolean);
+
+      if (!selectedQuestionIds.length && !typedDrafts.length) {
         return NextResponse.json({ error: "Select at least one poll question." }, { status: 400 });
       }
 
@@ -112,6 +117,17 @@ export async function POST(request: Request) {
         assertCanSchedulePoll(actor.userCategory, body.participantType ?? "registered");
       }
 
+      const resolvedCreatedQuestionIds = typedDrafts.length
+        ? await (async () => {
+            const existingQuestionIds = new Set((await listPollQuestions(actor.sub)).map((question) => question.id));
+            const nextPollQuestions = await createPollQuestions(typedDrafts, actor.sub);
+
+            return nextPollQuestions
+              .filter((question) => !existingQuestionIds.has(question.id))
+              .map((question) => question.id);
+          })()
+        : [];
+
       const scheduledPolls = await createScheduledPoll({
         anonymous: Boolean(body.anonymous),
         branding: body.branding ?? null,
@@ -122,7 +138,7 @@ export async function POST(request: Request) {
         generateQrCode: Boolean(body.generateQrCode),
         participantGroupIds: body.participantGroupIds ?? [],
         participantType: body.participantType ?? "registered",
-        questionIds: body.questionIds,
+        questionIds: [...selectedQuestionIds, ...resolvedCreatedQuestionIds],
         startsAt: body.startsAt,
         title: body.title,
       });
@@ -135,7 +151,10 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Poll id is required." }, { status: 400 });
       }
 
-      if (!("questionIds" in body) || !Array.isArray(body.questionIds) || !body.questionIds.length) {
+      const typedDrafts = ("drafts" in body && Array.isArray(body.drafts) ? body.drafts : []).filter(Boolean);
+      const selectedQuestionIds = ("questionIds" in body && Array.isArray(body.questionIds) ? body.questionIds : []).filter(Boolean);
+
+      if (!selectedQuestionIds.length && !typedDrafts.length) {
         return NextResponse.json({ error: "Select at least one poll question." }, { status: 400 });
       }
 
@@ -155,6 +174,17 @@ export async function POST(request: Request) {
         assertCanSchedulePoll(actor.userCategory, body.participantType ?? "registered");
       }
 
+      const resolvedCreatedQuestionIds = typedDrafts.length
+        ? await (async () => {
+            const existingQuestionIds = new Set((await listPollQuestions(actor.sub)).map((question) => question.id));
+            const nextPollQuestions = await createPollQuestions(typedDrafts, actor.sub);
+
+            return nextPollQuestions
+              .filter((question) => !existingQuestionIds.has(question.id))
+              .map((question) => question.id);
+          })()
+        : [];
+
       const scheduledPolls = await updateScheduledPoll({
         anonymous: Boolean(body.anonymous),
         branding: body.branding ?? null,
@@ -166,7 +196,7 @@ export async function POST(request: Request) {
         participantGroupIds: body.participantGroupIds ?? [],
         participantType: body.participantType ?? "registered",
         pollId: body.pollId,
-        questionIds: body.questionIds,
+        questionIds: [...selectedQuestionIds, ...resolvedCreatedQuestionIds],
         startsAt: body.startsAt,
         title: body.title,
       });

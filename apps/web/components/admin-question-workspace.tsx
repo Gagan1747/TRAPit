@@ -12,9 +12,11 @@ import {
   type GroupJoinRequest,
   type ObjectiveQuestion,
   type PollBulkImportPreview,
+  type PollQuestionDraft,
   type PersistentPollQuestion,
   type PollParticipantType,
   type ScheduledPoll,
+  validatePollQuestionDraft,
   validateQuestionDraft,
   type BulkImportPreview,
   type ParticipantGroup,
@@ -429,6 +431,16 @@ type EditableGroupDraft = {
   participantIds: string[];
   shareCode: string | null;
 };
+
+type EditablePollScheduleDraft = PollQuestionDraft;
+
+function createEmptyPollScheduleDraft(): EditablePollScheduleDraft {
+  return {
+    options: ["", ""],
+    prompt: "",
+    topic: "",
+  };
+}
 
 const adminTestStatusPriority: Record<ScheduledTest["status"], number> = {
   live: 0,
@@ -887,6 +899,7 @@ export function AdminQuestionWorkspace({
   const [pollScheduleGenerateQrCode, setPollScheduleGenerateQrCode] = useState(true);
   const [pollScheduleGroupIds, setPollScheduleGroupIds] = useState<string[]>([]);
   const [pollScheduleParticipantType, setPollScheduleParticipantType] = useState<PollParticipantType>("registered");
+  const [pollScheduleTypedDrafts, setPollScheduleTypedDrafts] = useState<EditablePollScheduleDraft[]>([]);
   const [pollScheduleQuestionIds, setPollScheduleQuestionIds] = useState<string[]>([]);
   const [pollScheduleStartNow, setPollScheduleStartNow] = useState(true);
   const [pollScheduleStartsAtInput, setPollScheduleStartsAtInput] = useState(createDefaultScheduleTime());
@@ -906,6 +919,7 @@ export function AdminQuestionWorkspace({
   const [reviewByTestId, setReviewByTestId] = useState<Record<string, AdminTestReviewResponse>>({});
   const [reviewLoadingByTestId, setReviewLoadingByTestId] = useState<Record<string, boolean>>({});
   const [resultsMode, setResultsMode] = useState<AdminResultsMode>("tests");
+  const [expandedOpenPollResultIds, setExpandedOpenPollResultIds] = useState<string[]>([]);
   const [openMenuGroup, setOpenMenuGroup] = useState<AdminMenuGroup | null>(null);
   const [editingScheduledTestId, setEditingScheduledTestId] = useState<string | null>(null);
   const [editingSelfTestId, setEditingSelfTestId] = useState<string | null>(null);
@@ -1163,6 +1177,7 @@ export function AdminQuestionWorkspace({
     setPollScheduleGenerateQrCode(true);
     setPollScheduleGroupIds([]);
     setPollScheduleParticipantType("registered");
+    setPollScheduleTypedDrafts([]);
     setPollScheduleQuestionIds([]);
     setPollScheduleStartNow(true);
     setPollScheduleStartsAtInput(createDefaultScheduleTime());
@@ -1197,6 +1212,7 @@ export function AdminQuestionWorkspace({
     setPollScheduleAnonymous(poll.participantType === "open" ? true : poll.anonymous);
     setPollScheduleGenerateQrCode(poll.participantType === "open");
     setPollScheduleGroupIds([...poll.participantGroupIds]);
+    setPollScheduleTypedDrafts([]);
     setPollScheduleQuestionIds([...poll.questionIds]);
     setPollScheduleStartNow(false);
     setPollScheduleStartsAtInput(toDateTimeInputValue(poll.startsAt));
@@ -2214,15 +2230,27 @@ export function AdminQuestionWorkspace({
       ? new Date().toISOString()
       : new Date(pollScheduleStartsAtInput).toISOString();
     const endsAt = new Date(pollScheduleEndsAtInput).toISOString();
+    const typedDrafts = pollScheduleTypedDrafts.filter((draft) =>
+      draft.prompt.trim() || draft.topic.trim() || draft.options.some((option) => option.trim()),
+    );
 
-    if (!pollQuestions.length) {
+    if (!pollQuestions.length && !typedDrafts.length) {
       setPollFeedback("Add poll questions before scheduling a poll.");
       return;
     }
 
-    if (!pollScheduleQuestionIds.length) {
+    if (!pollScheduleQuestionIds.length && !typedDrafts.length) {
       setPollFeedback("Select at least one poll question.");
       return;
+    }
+
+    for (const draft of typedDrafts) {
+      const validationError = validatePollQuestionDraft(draft);
+
+      if (validationError) {
+        setPollFeedback(validationError);
+        return;
+      }
     }
 
     if (
@@ -2250,12 +2278,15 @@ export function AdminQuestionWorkspace({
 
     const selectedQuestions = pollQuestions.filter((question) => pollScheduleQuestionIds.includes(question.id));
     const selectedTopics = Array.from(
-      new Set(selectedQuestions.map((question) => question.topic.trim()).filter(Boolean)),
+      new Set([
+        ...selectedQuestions.map((question) => question.topic.trim()),
+        ...typedDrafts.map((draft) => draft.topic.trim()),
+      ].filter(Boolean)),
     );
     const title = pollScheduleTitle.trim()
       || (selectedTopics.length === 1
         ? selectedTopics[0]
-        : `${pollScheduleQuestionIds.length} question poll`);
+        : `${pollScheduleQuestionIds.length + typedDrafts.length} question poll`);
 
     void mutateWorkspace(async () => {
       await readJson<PollsResponse>(
@@ -2266,6 +2297,7 @@ export function AdminQuestionWorkspace({
             endsAt,
             generateQrCode: pollScheduleParticipantType === "open",
             mode: editingScheduledPollId ? "update-poll" : "schedule-poll",
+            drafts: typedDrafts,
             participantGroupIds:
               pollScheduleParticipantType === "registered" ? pollScheduleGroupIds : [],
             participantType: pollScheduleParticipantType,
@@ -2286,6 +2318,29 @@ export function AdminQuestionWorkspace({
     }).catch((error) => {
       handleWorkspaceActionError(error, "Unable to save the poll.", setPollFeedback);
     });
+  }
+
+  function handleAddTypedPollScheduleDraft() {
+    setPollScheduleTypedDrafts((currentDrafts) => [...currentDrafts, createEmptyPollScheduleDraft()]);
+  }
+
+  function handleUpdateTypedPollScheduleDraft(
+    draftIndex: number,
+    updater: (draft: EditablePollScheduleDraft) => EditablePollScheduleDraft,
+  ) {
+    setPollScheduleTypedDrafts((currentDrafts) =>
+      currentDrafts.map((draft, currentIndex) => (currentIndex === draftIndex ? updater(draft) : draft)),
+    );
+  }
+
+  function handleRemoveTypedPollScheduleDraft(draftIndex: number) {
+    setPollScheduleTypedDrafts((currentDrafts) =>
+      currentDrafts.filter((_, currentIndex) => currentIndex !== draftIndex),
+    );
+  }
+
+  function toggleOpenPollResultDetails(pollId: string) {
+    setExpandedOpenPollResultIds((currentIds) => toggleArrayValue(currentIds, pollId));
   }
 
   function handleStartEditingGroup(group: ParticipantGroup) {
@@ -4846,6 +4901,113 @@ export function AdminQuestionWorkspace({
               </div>
             </div>
 
+            <div className="field form-stack">
+              <div className="question-head">
+                <strong>Type additional poll questions</strong>
+                <button className="button-secondary small-button" type="button" onClick={handleAddTypedPollScheduleDraft}>
+                  Add question
+                </button>
+              </div>
+              {pollScheduleTypedDrafts.length ? (
+                <div className="question-list">
+                  {pollScheduleTypedDrafts.map((draft, draftIndex) => (
+                    <article className="question-card nested-card form-stack" key={`typed-poll-draft-${draftIndex}`}>
+                      <div className="question-head">
+                        <strong>Typed question {draftIndex + 1}</strong>
+                        <button
+                          className="button-secondary small-button"
+                          type="button"
+                          onClick={() => handleRemoveTypedPollScheduleDraft(draftIndex)}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <div className="field compact-field">
+                        <label htmlFor={`typed-poll-topic-${draftIndex}`}>Topic</label>
+                        <input
+                          id={`typed-poll-topic-${draftIndex}`}
+                          placeholder="Parent feedback"
+                          value={draft.topic}
+                          onChange={(event) =>
+                            handleUpdateTypedPollScheduleDraft(draftIndex, (currentDraft) => ({
+                              ...currentDraft,
+                              topic: event.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="field compact-field">
+                        <label htmlFor={`typed-poll-prompt-${draftIndex}`}>Question</label>
+                        <input
+                          id={`typed-poll-prompt-${draftIndex}`}
+                          placeholder="How satisfied are you with the event?"
+                          value={draft.prompt}
+                          onChange={(event) =>
+                            handleUpdateTypedPollScheduleDraft(draftIndex, (currentDraft) => ({
+                              ...currentDraft,
+                              prompt: event.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="form-stack">
+                        {draft.options.map((option, optionIndex) => (
+                          <div className="field compact-field" key={`typed-poll-option-${draftIndex}-${optionIndex}`}>
+                            <label htmlFor={`typed-poll-option-${draftIndex}-${optionIndex}`}>Option {optionIndex + 1}</label>
+                            <div className="inline-actions">
+                              <input
+                                id={`typed-poll-option-${draftIndex}-${optionIndex}`}
+                                placeholder={`Option ${optionIndex + 1}`}
+                                value={option}
+                                onChange={(event) =>
+                                  handleUpdateTypedPollScheduleDraft(draftIndex, (currentDraft) => ({
+                                    ...currentDraft,
+                                    options: currentDraft.options.map((currentOption, currentIndex) =>
+                                      currentIndex === optionIndex ? event.target.value : currentOption,
+                                    ),
+                                  }))
+                                }
+                              />
+                              {draft.options.length > 2 ? (
+                                <button
+                                  className="button-secondary small-button"
+                                  type="button"
+                                  onClick={() =>
+                                    handleUpdateTypedPollScheduleDraft(draftIndex, (currentDraft) => ({
+                                      ...currentDraft,
+                                      options: currentDraft.options.filter((_, currentIndex) => currentIndex !== optionIndex),
+                                    }))
+                                  }
+                                >
+                                  Remove option
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
+                        <div className="inline-actions">
+                          <button
+                            className="button-secondary small-button"
+                            type="button"
+                            onClick={() =>
+                              handleUpdateTypedPollScheduleDraft(draftIndex, (currentDraft) => ({
+                                ...currentDraft,
+                                options: [...currentDraft.options, ""],
+                              }))
+                            }
+                          >
+                            Add option
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted-text">Use Add question if you want to type new poll questions while scheduling.</p>
+              )}
+            </div>
+
             <div className="field">
               <label>Participant type</label>
               <div className="selection-grid">
@@ -5509,6 +5671,79 @@ export function AdminQuestionWorkspace({
                     : poll.hasAdminScope
                       ? "Created as admin"
                       : "Available as participant";
+                const pollResultsCopy = poll.scheduledPoll
+                  ? resolvedPoll.status === "completed"
+                    ? "Poll response summaries will appear here when poll participation is recorded."
+                    : resolvedPoll.status === "live"
+                      ? "This poll is live. Response summaries will populate here as participants submit."
+                      : "This poll has not opened yet."
+                  : "This poll is available in your participant scope.";
+                const isOpenPoll = resolvedPoll.participantType === "open";
+                const isOpenPollExpanded = expandedOpenPollResultIds.includes(resolvedPoll.id);
+
+                if (isOpenPoll) {
+                  return (
+                    <article className="question-card result-card" key={`merged-poll-${poll.id}`}>
+                      <div className="result-card-body">
+                        <div className="question-head">
+                          <strong>{resolvedPoll.title}</strong>
+                          <div className="inline-actions">
+                            <span className="status-chip success">{scopeLabel}</span>
+                            <span className={`status-chip ${resolvedPoll.status === "live" ? "success" : "warning"}`}>
+                              {resolvedPoll.status}
+                            </span>
+                            <button
+                              aria-expanded={isOpenPollExpanded}
+                              className="button-secondary small-button"
+                              type="button"
+                              onClick={() => toggleOpenPollResultDetails(resolvedPoll.id)}
+                            >
+                              {isOpenPollExpanded ? "-" : "+"}
+                            </button>
+                          </div>
+                        </div>
+                        <div className="form-stack">
+                          <div>
+                            <p className="eyebrow">Results</p>
+                            <p className="muted-text">{pollResultsCopy}</p>
+                          </div>
+                          {isOpenPollExpanded ? (
+                            <div className="form-stack">
+                              <p className="muted-text">Starts: {formatShortDateTime(resolvedPoll.startsAt)}</p>
+                              <p className="muted-text">Ends: {formatShortDateTime(resolvedPoll.endsAt)}</p>
+                              <p className="muted-text">Questions: {resolvedPoll.questionIds.length}</p>
+                              <p className="muted-text">Participant type: Open to all</p>
+                              <p className="muted-text">Anonymity: {resolvedPoll.anonymous ? "Anonymous" : "Named"}</p>
+                              {resolvedPoll.shareCode ? <p className="muted-text">Access code: {resolvedPoll.shareCode}</p> : null}
+                              {resolvedPoll.shareCode ? (
+                                <p className="muted-text">
+                                  URL: <a href={getPollAccessUrl(resolvedPoll.shareCode)} target="_blank" rel="noreferrer">{getPollAccessUrl(resolvedPoll.shareCode)}</a>
+                                </p>
+                              ) : null}
+                              {resolvedPoll.shareCode ? (
+                                <div className="form-stack">
+                                  <div className="inline-actions">
+                                    <a
+                                      className="button-secondary small-button"
+                                      href={getPollAccessUrl(resolvedPoll.shareCode)}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                    >
+                                      Open poll page
+                                    </a>
+                                  </div>
+                                  {pollQrCodes[resolvedPoll.id] ? (
+                                    <img alt={`QR code for ${resolvedPoll.title}`} height={180} src={pollQrCodes[resolvedPoll.id]} width={180} />
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </article>
+                  );
+                }
 
                 return (
                   <details className="question-card result-card" key={`merged-poll-${poll.id}`}>
@@ -5568,17 +5803,7 @@ export function AdminQuestionWorkspace({
                           ) : null}
                         </div>
                       ) : null}
-                      {poll.scheduledPoll ? (
-                        resolvedPoll.status === "completed" ? (
-                          <p className="muted-text">Poll response summaries will appear here when poll participation is recorded.</p>
-                        ) : resolvedPoll.status === "live" ? (
-                          <p className="muted-text">This poll is live. Response summaries will populate here as participants submit.</p>
-                        ) : (
-                          <p className="muted-text">This poll has not opened yet.</p>
-                        )
-                      ) : (
-                        <p className="muted-text">This poll is available in your participant scope.</p>
-                      )}
+                      <p className="muted-text">{pollResultsCopy}</p>
                     </div>
                   </details>
                 );

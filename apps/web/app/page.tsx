@@ -10,7 +10,7 @@ export default function HomePage() {
       title="Tests made easier"
       description={
         authConfigured
-          ? "Sign in or create an account to continue. TRAPit will route you based on your Cognito access."
+          ? "Tests and Polls made easier"
           : "Authentication is paused for now, so you can work directly on the user and admin experiences."
       }
       showHeroLinks={false}

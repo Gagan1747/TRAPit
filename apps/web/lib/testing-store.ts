@@ -679,6 +679,11 @@ function resolveParticipantIdentifiers(
 function hydrateScheduledTests(state: TestingWorkspaceState) {
   return state.scheduledTests.map((scheduledTest) => ({
     ...scheduledTest,
+    resolvedParticipantIdentifiers: resolveParticipantIdentifiers(
+      state,
+      dedupe(scheduledTest.participantIds),
+      dedupe(scheduledTest.participantGroupIds),
+    ),
     status: resolveScheduledTestStatus(scheduledTest, state.attempts, scheduledTest.id),
   }));
 }
