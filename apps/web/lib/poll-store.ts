@@ -532,11 +532,7 @@ export async function recordPollAttemptInBackend(input: {
     throw new Error("This poll is no longer available.");
   }
 
-  const participantName = input.participantName?.trim();
-
-  if (!participantName) {
-    throw new Error("Participant name is required before starting the poll.");
-  }
+  const participantName = input.participantName?.trim() || undefined;
 
   for (const question of questions) {
     const answer = input.answers[question.id];

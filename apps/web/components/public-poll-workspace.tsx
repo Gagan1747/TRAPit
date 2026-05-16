@@ -339,7 +339,7 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
 
             {isDetailsExpanded ? (
               <div className="form-stack">
-                <div className="compact-head">
+                <div className="question-head">
                   <div>
                     <h1 className="hero-title">{payload.poll.title}</h1>
                     {payload.actor.isRegistered ? (
@@ -354,6 +354,14 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
                       </p>
                     ) : null}
                   </div>
+                  <button
+                    aria-expanded={isDetailsExpanded}
+                    className="button-secondary small-button"
+                    type="button"
+                    onClick={() => setIsDetailsExpanded(false)}
+                  >
+                    -
+                  </button>
                 </div>
 
                 <div className="question-card">
