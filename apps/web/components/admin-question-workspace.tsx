@@ -920,6 +920,7 @@ export function AdminQuestionWorkspace({
   const [reviewLoadingByTestId, setReviewLoadingByTestId] = useState<Record<string, boolean>>({});
   const [resultsMode, setResultsMode] = useState<AdminResultsMode>("tests");
   const [expandedOpenPollResultIds, setExpandedOpenPollResultIds] = useState<string[]>([]);
+  const [collapsedTestResultIds, setCollapsedTestResultIds] = useState<string[]>([]);
   const [openMenuGroup, setOpenMenuGroup] = useState<AdminMenuGroup | null>(null);
   const [editingScheduledTestId, setEditingScheduledTestId] = useState<string | null>(null);
   const [editingSelfTestId, setEditingSelfTestId] = useState<string | null>(null);
@@ -2341,6 +2342,10 @@ export function AdminQuestionWorkspace({
 
   function toggleOpenPollResultDetails(pollId: string) {
     setExpandedOpenPollResultIds((currentIds) => toggleArrayValue(currentIds, pollId));
+  }
+
+  function toggleTestResultCollapse(testId: string) {
+    setCollapsedTestResultIds((currentIds) => toggleArrayValue(currentIds, testId));
   }
 
   function handleStartEditingGroup(group: ParticipantGroup) {
@@ -5344,23 +5349,29 @@ export function AdminQuestionWorkspace({
                 const summaryRank = typeof participantHistoryEntry?.rank === "number"
                   ? participantHistoryEntry.rank
                   : null;
+                const scheduledTestShareCode = scheduledTest?.shareCode ?? null;
+                const scheduledTestAccessUrl = scheduledTestShareCode
+                  ? getTestAccessUrl(scheduledTestShareCode)
+                  : null;
+                const showScheduledTestAccessDetails = Boolean(scheduledTestAccessUrl)
+                  && scheduledTest?.status !== "completed";
+                const showScheduledParticipantList = Boolean(scheduledTest) && !leaderboard;
+                const isTestResultCollapsed = collapsedTestResultIds.includes(test.id);
 
                 return (
-                  <details className="question-card result-card" key={`merged-test-${test.id}`}>
-                    <summary className="result-card-summary">
-                      <div className="result-card-summary-main">
-                        <strong>{test.title}</strong>
-                        {summaryRank !== null ? <span className="result-card-summary-meta">Rank {summaryRank}</span> : null}
-                        <span className="result-card-summary-meta">{formatShortDateTime(test.startsAt)}</span>
-                      </div>
-                      <span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>
-                        {test.status}
-                      </span>
-                    </summary>
+                  <article className="question-card result-card" key={`merged-test-${test.id}`}>
                     <div className="result-card-body">
                       <div className="question-head">
                         <strong>{test.title}</strong>
                         <div className="inline-actions">
+                          <button
+                            aria-expanded={!isTestResultCollapsed}
+                            className="button-secondary small-button"
+                            type="button"
+                            onClick={() => toggleTestResultCollapse(test.id)}
+                          >
+                            {isTestResultCollapsed ? "+" : "-"}
+                          </button>
                           {scheduledTest && scheduledTest.status === "scheduled" ? (
                             <button
                               className="button-secondary small-button"
@@ -5374,62 +5385,72 @@ export function AdminQuestionWorkspace({
                               Edit test
                             </button>
                           ) : null}
-                          <span className="status-chip success">{scopeLabel}</span>
-                          <span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>
-                            {test.status}
-                          </span>
-                        </div>
-                      </div>
-                      <p className="muted-text">
-                        Pool: {pools.find((pool) => pool.id === test.poolId)?.name ?? "Unknown pool"}
-                      </p>
-                      <p className="muted-text">Starts: {formatShortDateTime(test.startsAt)}</p>
-                      <p className="muted-text">Duration: {test.durationMinutes} min</p>
-                      <p className="muted-text">Questions: {test.questionCount}</p>
-                      {scheduledTest?.shareCode ? (
-                        <p className="muted-text">
-                          Invite approval: {scheduledTest.inviteJoinMode === "automatic" ? "Automatic group addition" : "Creator approval required"}
-                        </p>
-                      ) : null}
-                      {scheduledTest?.shareCode ? <p className="muted-text">Access code: {scheduledTest.shareCode}</p> : null}
-                      {scheduledTest?.shareCode ? (
-                        <p className="muted-text">
-                          URL: <a href={getTestAccessUrl(scheduledTest.shareCode)} target="_blank" rel="noreferrer">{getTestAccessUrl(scheduledTest.shareCode)}</a>
-                        </p>
-                      ) : null}
-                      {scheduledTest?.shareCode ? (
-                        <div className="form-stack">
-                          <div className="inline-actions">
-                            <a
-                              className="button-secondary small-button"
-                              href={getTestAccessUrl(scheduledTest.shareCode)}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              Open invite page
-                            </a>
-                          </div>
-                          {testQrCodes[scheduledTest.id] ? (
-                            <img alt={`QR code for ${scheduledTest.title}`} height={180} src={testQrCodes[scheduledTest.id]} width={180} />
+                          {!isTestResultCollapsed ? <span className="status-chip success">{scopeLabel}</span> : null}
+                          {!isTestResultCollapsed ? (
+                            <span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>
+                              {test.status}
+                            </span>
                           ) : null}
                         </div>
+                      </div>
+                      {!isTestResultCollapsed ? (
+                        <>
+                          <p className="muted-text">
+                            Pool: {pools.find((pool) => pool.id === test.poolId)?.name ?? "Unknown pool"}
+                          </p>
+                          <p className="muted-text">Starts: {formatShortDateTime(test.startsAt)}</p>
+                          <p className="muted-text">Duration: {test.durationMinutes} min</p>
+                          <p className="muted-text">Questions: {test.questionCount}</p>
+                          {showScheduledTestAccessDetails ? (
+                            <p className="muted-text">
+                              Invite approval: {scheduledTest?.inviteJoinMode === "automatic" ? "Automatic group addition" : "Creator approval required"}
+                            </p>
+                          ) : null}
+                          {showScheduledTestAccessDetails ? <p className="muted-text">Access code: {scheduledTestShareCode}</p> : null}
+                          {showScheduledTestAccessDetails ? (
+                            <p className="muted-text">
+                              URL: <a href={scheduledTestAccessUrl ?? undefined} target="_blank" rel="noreferrer">{scheduledTestAccessUrl}</a>
+                            </p>
+                          ) : null}
+                          {showScheduledTestAccessDetails ? (
+                            <div className="form-stack">
+                              <div className="inline-actions">
+                                <a
+                                  className="button-secondary small-button"
+                                  href={scheduledTestAccessUrl ?? undefined}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  Open invite page
+                                </a>
+                              </div>
+                              {scheduledTest && testQrCodes[scheduledTest.id] ? (
+                                <img alt={`QR code for ${scheduledTest.title}`} height={180} src={testQrCodes[scheduledTest.id]} width={180} />
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </>
                       ) : null}
 
                       {scheduledTest ? (
                         <div className="form-stack">
-                        <p className="muted-text">
-                          Participants: {scheduledTest.resolvedParticipantIdentifiers.length
-                            ? scheduledTest.resolvedParticipantIdentifiers
-                                .map((identifier) => formatParticipantName(identifier, participants, isSuperAdmin))
-                                .join(", ")
-                            : "None"}
-                        </p>
+                        {!isTestResultCollapsed && showScheduledParticipantList ? (
+                          <p className="muted-text">
+                            Participants: {scheduledTest.resolvedParticipantIdentifiers.length
+                              ? scheduledTest.resolvedParticipantIdentifiers
+                                  .map((identifier) => formatParticipantName(identifier, participants, isSuperAdmin))
+                                  .join(", ")
+                              : "None"}
+                          </p>
+                        ) : null}
 
                         {leaderboard ? (
                           <>
-                            <p className="muted-text">
-                              Submitted: {leaderboard.submittedCount}/{leaderboard.assignedParticipantCount}
-                            </p>
+                            {!isTestResultCollapsed ? (
+                              <p className="muted-text">
+                                Submitted: {leaderboard.submittedCount}/{leaderboard.assignedParticipantCount}
+                              </p>
+                            ) : null}
                             {leaderboard.entries.length ? (
                               <div className="leaderboard-table-wrap">
                                 <table className="leaderboard-table">
@@ -5470,7 +5491,7 @@ export function AdminQuestionWorkspace({
                               <p className="muted-text">No submissions were recorded before this test closed.</p>
                             )}
                           </>
-                        ) : attemptsForTest.length ? (
+                        ) : !isTestResultCollapsed && attemptsForTest.length ? (
                           <div className="question-list">
                             {attemptsForTest.map((entry) => (
                               <article className="question-card nested-card" key={entry.attemptId}>
@@ -5484,15 +5505,15 @@ export function AdminQuestionWorkspace({
                               </article>
                             ))}
                           </div>
-                        ) : scheduledTest.status === "scheduled" ? (
+                        ) : !isTestResultCollapsed && scheduledTest.status === "scheduled" ? (
                           <p className="muted-text">This test has not started yet.</p>
-                        ) : scheduledTest.status === "live" ? (
+                        ) : !isTestResultCollapsed && scheduledTest.status === "live" ? (
                           <p className="muted-text">This test is live. Results will update here as participants submit.</p>
-                        ) : (
+                        ) : !isTestResultCollapsed ? (
                           <p className="muted-text">No submissions were recorded before this test closed.</p>
-                        )}
+                        ) : null}
 
-                        {scheduledTest.status === "completed" ? (
+                        {!isTestResultCollapsed && scheduledTest.status === "completed" ? (
                           <div className="form-stack">
                             <div className="inline-actions">
                               <button
@@ -5538,7 +5559,7 @@ export function AdminQuestionWorkspace({
                       </div>
                     ) : null}
 
-                    {participantTest ? (
+                    {!isTestResultCollapsed && participantTest ? (
                       <div className="form-stack">
                         {participantHistoryEntry ? (
                           participantHistoryEntry.status === "missed" ? (
@@ -5647,7 +5668,7 @@ export function AdminQuestionWorkspace({
                       </div>
                     ) : null}
                     </div>
-                  </details>
+                  </article>
                 );
               })}
               </div>
@@ -5680,6 +5701,12 @@ export function AdminQuestionWorkspace({
                   : "This poll is available in your participant scope.";
                 const isOpenPoll = resolvedPoll.participantType === "open";
                 const isOpenPollExpanded = expandedOpenPollResultIds.includes(resolvedPoll.id);
+                const resolvedPollShareCode = resolvedPoll.shareCode ?? null;
+                const resolvedPollAccessUrl = resolvedPollShareCode
+                  ? getPollAccessUrl(resolvedPollShareCode)
+                  : null;
+                const showResolvedPollAccessDetails = Boolean(resolvedPollAccessUrl)
+                  && resolvedPoll.status !== "completed";
 
                 if (isOpenPoll) {
                   return (
@@ -5707,11 +5734,11 @@ export function AdminQuestionWorkspace({
                             <p className="eyebrow">Results</p>
                             <p className="muted-text">{pollResultsCopy}</p>
                           </div>
-                          {resolvedPoll.shareCode ? (
+                          {showResolvedPollAccessDetails ? (
                             <div className="inline-actions">
                               <a
                                 className="button-secondary small-button"
-                                href={getPollAccessUrl(resolvedPoll.shareCode)}
+                                href={resolvedPollAccessUrl ?? undefined}
                                 target="_blank"
                                 rel="noreferrer"
                               >
@@ -5726,13 +5753,13 @@ export function AdminQuestionWorkspace({
                               <p className="muted-text">Questions: {resolvedPoll.questionIds.length}</p>
                               <p className="muted-text">Participant type: Open to all</p>
                               <p className="muted-text">Anonymity: {resolvedPoll.anonymous ? "Anonymous" : "Named"}</p>
-                              {resolvedPoll.shareCode ? <p className="muted-text">Access code: {resolvedPoll.shareCode}</p> : null}
-                              {resolvedPoll.shareCode ? (
+                              {showResolvedPollAccessDetails ? <p className="muted-text">Access code: {resolvedPollShareCode}</p> : null}
+                              {showResolvedPollAccessDetails ? (
                                 <p className="muted-text">
-                                  URL: <a href={getPollAccessUrl(resolvedPoll.shareCode)} target="_blank" rel="noreferrer">{getPollAccessUrl(resolvedPoll.shareCode)}</a>
+                                  URL: <a href={resolvedPollAccessUrl ?? undefined} target="_blank" rel="noreferrer">{resolvedPollAccessUrl}</a>
                                 </p>
                               ) : null}
-                              {resolvedPoll.shareCode ? (
+                              {showResolvedPollAccessDetails ? (
                                 <div className="form-stack">
                                   {pollQrCodes[resolvedPoll.id] ? (
                                     <img alt={`QR code for ${resolvedPoll.title}`} height={180} src={pollQrCodes[resolvedPoll.id]} width={180} />
@@ -5782,18 +5809,18 @@ export function AdminQuestionWorkspace({
                             : "None"}
                         </p>
                       ) : null}
-                      {resolvedPoll.shareCode ? <p className="muted-text">Access code: {resolvedPoll.shareCode}</p> : null}
-                      {resolvedPoll.shareCode ? (
+                      {showResolvedPollAccessDetails ? <p className="muted-text">Access code: {resolvedPollShareCode}</p> : null}
+                      {showResolvedPollAccessDetails ? (
                         <p className="muted-text">
-                          URL: <a href={getPollAccessUrl(resolvedPoll.shareCode)} target="_blank" rel="noreferrer">{getPollAccessUrl(resolvedPoll.shareCode)}</a>
+                          URL: <a href={resolvedPollAccessUrl ?? undefined} target="_blank" rel="noreferrer">{resolvedPollAccessUrl}</a>
                         </p>
                       ) : null}
-                      {resolvedPoll.shareCode ? (
+                      {showResolvedPollAccessDetails ? (
                         <div className="form-stack">
                           <div className="inline-actions">
                             <a
                               className="button-secondary small-button"
-                              href={getPollAccessUrl(resolvedPoll.shareCode)}
+                              href={resolvedPollAccessUrl ?? undefined}
                               target="_blank"
                               rel="noreferrer"
                             >

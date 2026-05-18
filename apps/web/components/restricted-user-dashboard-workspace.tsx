@@ -595,39 +595,47 @@ export function RestrictedUserDashboardWorkspace({
               ) : sortedAvailablePolls.length ? (
                 <div className="question-list">
                   {sortedAvailablePolls.map((poll) => (
-                    <article className="question-card" key={poll.id}>
-                      <div className="question-head">
-                        <strong>{poll.title}</strong>
-                        <div className="inline-actions">
-                          <span className="status-chip success">Participant</span>
-                          <span className={`status-chip ${poll.status === "live" ? "success" : "warning"}`}>
-                            {poll.status}
-                          </span>
-                        </div>
-                      </div>
-                      <p className="muted-text">Starts: {formatShortDateTime(poll.startsAt)}</p>
-                      <p className="muted-text">Ends: {formatShortDateTime(poll.endsAt)}</p>
-                      <p className="muted-text">Questions: {poll.questionIds.length}</p>
-                      <p className="muted-text">Participant type: {poll.participantType === "registered" ? "Shared with groups" : "Open to all"}</p>
-                      <p className="muted-text">Anonymity: {poll.anonymous ? "Anonymous" : "Named"}</p>
-                      {poll.shareCode ? <p className="muted-text">Access code: {poll.shareCode}</p> : null}
-                      {poll.shareCode ? (
-                        <div className="inline-actions">
-                          <a className="button-secondary small-button" href={getPollAccessPath(poll.shareCode)}>
-                            {poll.status === "live" ? "Respond to poll" : "Open poll page"}
-                          </a>
-                        </div>
-                      ) : null}
-                      {poll.status === "completed" ? (
-                        <p className="muted-text">Poll response summaries will appear here when participant poll submissions are recorded.</p>
-                      ) : poll.status === "live" ? (
-                        <p className="muted-text">
-                          {poll.shareCode ? "This poll is live now. Open the poll page to answer the questions." : "This poll is live now."}
-                        </p>
-                      ) : (
-                        <p className="muted-text">This poll has not started yet.</p>
-                      )}
-                    </article>
+                    (() => {
+                      const pollShareCode = poll.shareCode ?? null;
+                      const pollAccessPath = pollShareCode ? getPollAccessPath(pollShareCode) : null;
+                      const showPollAccessDetails = Boolean(pollAccessPath) && poll.status !== "completed";
+
+                      return (
+                        <article className="question-card" key={poll.id}>
+                          <div className="question-head">
+                            <strong>{poll.title}</strong>
+                            <div className="inline-actions">
+                              <span className="status-chip success">Participant</span>
+                              <span className={`status-chip ${poll.status === "live" ? "success" : "warning"}`}>
+                                {poll.status}
+                              </span>
+                            </div>
+                          </div>
+                          <p className="muted-text">Starts: {formatShortDateTime(poll.startsAt)}</p>
+                          <p className="muted-text">Ends: {formatShortDateTime(poll.endsAt)}</p>
+                          <p className="muted-text">Questions: {poll.questionIds.length}</p>
+                          <p className="muted-text">Participant type: {poll.participantType === "registered" ? "Shared with groups" : "Open to all"}</p>
+                          <p className="muted-text">Anonymity: {poll.anonymous ? "Anonymous" : "Named"}</p>
+                          {showPollAccessDetails ? <p className="muted-text">Access code: {pollShareCode}</p> : null}
+                          {showPollAccessDetails ? (
+                            <div className="inline-actions">
+                              <a className="button-secondary small-button" href={pollAccessPath ?? undefined}>
+                                {poll.status === "live" ? "Respond to poll" : "Open poll page"}
+                              </a>
+                            </div>
+                          ) : null}
+                          {poll.status === "completed" ? (
+                            <p className="muted-text">Poll response summaries will appear here when participant poll submissions are recorded.</p>
+                          ) : poll.status === "live" ? (
+                            <p className="muted-text">
+                              {poll.shareCode ? "This poll is live now. Open the poll page to answer the questions." : "This poll is live now."}
+                            </p>
+                          ) : (
+                            <p className="muted-text">This poll has not started yet.</p>
+                          )}
+                        </article>
+                      );
+                    })()
                   ))}
                 </div>
               ) : (
