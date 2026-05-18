@@ -5357,6 +5357,14 @@ export function AdminQuestionWorkspace({
                   && scheduledTest?.status !== "completed";
                 const showScheduledParticipantList = Boolean(scheduledTest) && !leaderboard;
                 const isTestResultCollapsed = !collapsedTestResultIds.includes(test.id);
+                const participantResultName = participantHistoryEntry
+                  ? formatResultParticipantName(
+                    participantHistoryEntry.participantId,
+                    participantHistoryEntry.participantName,
+                    participants,
+                    isSuperAdmin,
+                  )
+                  : null;
 
                 return (
                   <article className="question-card result-card" key={`merged-test-${test.id}`}>
@@ -5559,24 +5567,40 @@ export function AdminQuestionWorkspace({
                       </div>
                     ) : null}
 
+                    {participantTest && participantHistoryEntry && participantHistoryEntry.status !== "missed" ? (
+                      <div className="leaderboard-table-wrap">
+                        <table className="leaderboard-table">
+                          <thead>
+                            <tr>
+                              <th>Rank</th>
+                              <th>Participant</th>
+                              <th>Marks</th>
+                              <th>Incorrect</th>
+                              <th>Time</th>
+                              <th>Submitted</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td>{summaryRank ?? "-"}</td>
+                              <td>{participantResultName}</td>
+                              <td>{participantHistoryEntry.correctCount}/{participantHistoryEntry.totalCount}</td>
+                              <td>{participantHistoryEntry.incorrectCount}</td>
+                              <td>{formatElapsedTime(participantHistoryEntry.elapsedMs)}</td>
+                              <td>{formatShortDateTime(participantHistoryEntry.completedAt)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
+
                     {!isTestResultCollapsed && participantTest ? (
                       <div className="form-stack">
                         {participantHistoryEntry ? (
                           participantHistoryEntry.status === "missed" ? (
                             <p className="muted-text">You were assigned to this test but did not submit before it closed.</p>
                           ) : (
-                            <>
-                              <p className="muted-text">
-                                Submitted as {participantHistoryEntry.participantName?.trim() || participantHistoryEntry.participantId}
-                              </p>
-                              <p className="muted-text">
-                                Score {participantHistoryEntry.correctCount}/{participantHistoryEntry.totalCount}
-                              </p>
-                              <p className="muted-text">Time taken {formatElapsedTime(participantHistoryEntry.elapsedMs)}</p>
-                              {typeof participantHistoryEntry.rank === "number" ? (
-                                <p className="muted-text">Rank {participantHistoryEntry.rank}</p>
-                              ) : null}
-                            </>
+                            <p className="muted-text">Your submitted result is shown in the table above.</p>
                           )
                         ) : participantTest.status === "scheduled" ? (
                           <p className="muted-text">This assigned test has not opened yet.</p>
@@ -5700,7 +5724,8 @@ export function AdminQuestionWorkspace({
                       : "This poll has not opened yet."
                   : "This poll is available in your participant scope.";
                 const isOpenPoll = resolvedPoll.participantType === "open";
-                const isOpenPollExpanded = expandedOpenPollResultIds.includes(resolvedPoll.id);
+                const isCompletedOpenPoll = isOpenPoll && resolvedPoll.status === "completed";
+                const isOpenPollExpanded = !isCompletedOpenPoll && expandedOpenPollResultIds.includes(resolvedPoll.id);
                 const resolvedPollShareCode = resolvedPoll.shareCode ?? null;
                 const resolvedPollAccessUrl = resolvedPollShareCode
                   ? getPollAccessUrl(resolvedPollShareCode)
@@ -5713,6 +5738,19 @@ export function AdminQuestionWorkspace({
                   return (
                     <article className="question-card result-card" key={`merged-poll-${poll.id}`}>
                       <div className="result-card-body">
+                        {resolvedPoll.branding?.imageDataUrl || resolvedPoll.branding?.instituteName ? (
+                          <div className="assessment-branding">
+                            {resolvedPoll.branding.imageDataUrl ? (
+                              <img alt="Institute branding" className="assessment-branding-image" src={resolvedPoll.branding.imageDataUrl} />
+                            ) : null}
+                            {resolvedPoll.branding.instituteName ? (
+                              <div>
+                                <p className="eyebrow">Institute</p>
+                                <strong>{resolvedPoll.branding.instituteName}</strong>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
                         <div className="question-head">
                           <strong>{resolvedPoll.title}</strong>
                           <div className="inline-actions">
@@ -5720,20 +5758,22 @@ export function AdminQuestionWorkspace({
                             <span className={`status-chip ${resolvedPoll.status === "live" ? "success" : "warning"}`}>
                               {resolvedPoll.status}
                             </span>
-                            <button
-                              aria-expanded={isOpenPollExpanded}
-                              className="button-secondary small-button"
-                              type="button"
-                              onClick={() => toggleOpenPollResultDetails(resolvedPoll.id)}
-                            >
-                              {isOpenPollExpanded ? "-" : "+"}
-                            </button>
+                            {!isCompletedOpenPoll ? (
+                              <button
+                                aria-expanded={isOpenPollExpanded}
+                                className="button-secondary small-button"
+                                type="button"
+                                onClick={() => toggleOpenPollResultDetails(resolvedPoll.id)}
+                              >
+                                {isOpenPollExpanded ? "-" : "+"}
+                              </button>
+                            ) : null}
                           </div>
                         </div>
                         <div className="form-stack">
                           <div>
                             <p className="eyebrow">Results</p>
-                            <p className="muted-text">{pollResultsCopy}</p>
+                            {pollResultsCopy ? <p className="muted-text">{pollResultsCopy}</p> : null}
                           </div>
                           {showResolvedPollOpenAction ? (
                             <div className="inline-actions">
@@ -5745,10 +5785,10 @@ export function AdminQuestionWorkspace({
                               >
                                 Open poll page
                               </a>
-                            <div>
-                              <p className="eyebrow">Results</p>
-                              {pollResultsCopy ? <p className="muted-text">{pollResultsCopy}</p> : null}
                             </div>
+                          ) : null}
+                          {isOpenPollExpanded ? (
+                            <div className="form-stack">
                               <p className="muted-text">Starts: {formatShortDateTime(resolvedPoll.startsAt)}</p>
                               <p className="muted-text">Ends: {formatShortDateTime(resolvedPoll.endsAt)}</p>
                               <p className="muted-text">Questions: {resolvedPoll.questionIds.length}</p>
@@ -5760,11 +5800,9 @@ export function AdminQuestionWorkspace({
                                   URL: <a href={resolvedPollAccessUrl ?? undefined} target="_blank" rel="noreferrer">{resolvedPollAccessUrl}</a>
                                 </p>
                               ) : null}
-                              {showResolvedPollAccessDetails ? (
+                              {showResolvedPollAccessDetails && pollQrCodes[resolvedPoll.id] ? (
                                 <div className="form-stack">
-                                  {pollQrCodes[resolvedPoll.id] ? (
-                                    <img alt={`QR code for ${resolvedPoll.title}`} height={180} src={pollQrCodes[resolvedPoll.id]} width={180} />
-                                  ) : null}
+                                  <img alt={`QR code for ${resolvedPoll.title}`} height={180} src={pollQrCodes[resolvedPoll.id]} width={180} />
                                 </div>
                               ) : null}
                             </div>
@@ -5787,6 +5825,19 @@ export function AdminQuestionWorkspace({
                       </span>
                     </summary>
                     <div className="result-card-body">
+                      {resolvedPoll.branding?.imageDataUrl || resolvedPoll.branding?.instituteName ? (
+                        <div className="assessment-branding">
+                          {resolvedPoll.branding.imageDataUrl ? (
+                            <img alt="Institute branding" className="assessment-branding-image" src={resolvedPoll.branding.imageDataUrl} />
+                          ) : null}
+                          {resolvedPoll.branding.instituteName ? (
+                            <div>
+                              <p className="eyebrow">Institute</p>
+                              <strong>{resolvedPoll.branding.instituteName}</strong>
+                            </div>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <div className="question-head">
                         <strong>{resolvedPoll.title}</strong>
                         <div className="inline-actions">

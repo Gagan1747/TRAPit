@@ -243,6 +243,20 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
 
         {payload ? (
           <div className="form-stack">
+            {payload.poll.branding?.imageDataUrl || payload.poll.branding?.instituteName ? (
+              <div className="assessment-branding">
+                {payload.poll.branding.imageDataUrl ? (
+                  <img alt="Institute branding" className="assessment-branding-image" src={payload.poll.branding.imageDataUrl} />
+                ) : null}
+                {payload.poll.branding.instituteName ? (
+                  <div>
+                    <p className="eyebrow">Institute</p>
+                    <strong>{payload.poll.branding.instituteName}</strong>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {pollTopicLabel ? (
               <div className="question-head">
                 <div>
@@ -266,6 +280,19 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
                 ) : null}
 
                 <article className="question-card runner-summary-card">
+                  {payload.poll.branding?.imageDataUrl || payload.poll.branding?.instituteName ? (
+                    <div className="assessment-branding">
+                      {payload.poll.branding.imageDataUrl ? (
+                        <img alt="Institute branding" className="assessment-branding-image" src={payload.poll.branding.imageDataUrl} />
+                      ) : null}
+                      {payload.poll.branding.instituteName ? (
+                        <div>
+                          <p className="eyebrow">Institute</p>
+                          <strong>{payload.poll.branding.instituteName}</strong>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <div className="question-head">
                     <strong>{payload.poll.title}</strong>
                     <span className="status-chip success">
@@ -365,19 +392,6 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
                 </div>
 
                 <div className="question-card">
-                  {payload.poll.branding?.imageDataUrl || payload.poll.branding?.instituteName ? (
-                    <div className="assessment-branding">
-                      {payload.poll.branding.imageDataUrl ? (
-                        <img alt="Institute branding" className="assessment-branding-image" src={payload.poll.branding.imageDataUrl} />
-                      ) : null}
-                      {payload.poll.branding.instituteName ? (
-                        <div>
-                          <p className="eyebrow">Institute</p>
-                          <strong>{payload.poll.branding.instituteName}</strong>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
                   <div className="question-head">
                     <strong>{payload.poll.title}</strong>
                     <span className={`status-chip ${payload.poll.status === "live" ? "success" : "warning"}`}>
