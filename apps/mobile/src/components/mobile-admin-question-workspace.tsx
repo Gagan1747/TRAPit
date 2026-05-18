@@ -779,7 +779,6 @@ export function MobileAdminQuestionWorkspace({ currentAdminIdentifier, isSuperAd
                 <Text style={styles.metaText}>Participant type: {resolvedPoll.participantType === "registered" ? "Shared with groups" : "Open to all"}</Text>
                 <Text style={styles.metaText}>Anonymity: {resolvedPoll.anonymous ? "Anonymous" : "Named"}</Text>
                 {resolvedPoll.shareCode ? <Text style={styles.metaText}>Access code: {resolvedPoll.shareCode}</Text> : null}
-                <Text style={styles.metaText}>Poll response summaries will appear here when participation is recorded.</Text>
               </View>
             );
           }) : <Text style={styles.metaText}>No polls match this view yet.</Text>

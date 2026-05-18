@@ -263,7 +263,6 @@ export function MobileRestrictedUserDashboardWorkspace({ currentUserCategory, cu
               <Text style={styles.metaText}>Ends: {formatShortDateTime(poll.endsAt)}</Text>
               <Text style={styles.metaText}>Questions: {poll.questionIds.length}</Text>
               <Text style={styles.metaText}>Participant type: {poll.participantType === "registered" ? "Shared with groups" : "Open to all"}</Text>
-              <Text style={styles.metaText}>Poll response summaries will appear here when participation is recorded.</Text>
             </View>
           )) : <Text style={styles.metaText}>No polls match this view yet.</Text>
         )}

@@ -53,6 +53,7 @@ import {
   isDynamoDbPollStoreEnabled,
   listAllScheduledPollsFromBackend,
   listPollQuestionsFromBackend,
+  listRespondedOpenPollIdsForUserFromBackend,
   listScheduledPollsFromBackend,
   recordPollAttemptInBackend,
   updateScheduledPollInBackend,
@@ -2275,9 +2276,16 @@ export async function listAvailablePollsForParticipant(identifier: string): Prom
       .map((group) => group.id),
   );
   const respondedPollIds = new Set(
-    state.pollAttempts
-      .filter((attempt) => identifiersMatch(attempt.userId, normalizedIdentifier))
-      .map((attempt) => attempt.pollId),
+    isDynamoDbPollStoreEnabled()
+      ? await withPollStoreFallback(
+        () => listRespondedOpenPollIdsForUserFromBackend(normalizedIdentifier),
+        async () => state.pollAttempts
+          .filter((attempt) => identifiersMatch(attempt.userId, normalizedIdentifier))
+          .map((attempt) => attempt.pollId),
+      )
+      : state.pollAttempts
+        .filter((attempt) => identifiersMatch(attempt.userId, normalizedIdentifier))
+        .map((attempt) => attempt.pollId),
   );
 
   const scheduledPolls = isDynamoDbPollStoreEnabled()

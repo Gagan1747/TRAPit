@@ -598,7 +598,8 @@ export function RestrictedUserDashboardWorkspace({
                     (() => {
                       const pollShareCode = poll.shareCode ?? null;
                       const pollAccessPath = pollShareCode ? getPollAccessPath(pollShareCode) : null;
-                      const showPollAccessDetails = Boolean(pollAccessPath) && poll.status !== "completed";
+                      const showPollOpenAction = Boolean(pollAccessPath);
+                      const showPollAccessDetails = showPollOpenAction && poll.status !== "completed";
 
                       return (
                         <article className="question-card" key={poll.id}>
@@ -617,22 +618,20 @@ export function RestrictedUserDashboardWorkspace({
                           <p className="muted-text">Participant type: {poll.participantType === "registered" ? "Shared with groups" : "Open to all"}</p>
                           <p className="muted-text">Anonymity: {poll.anonymous ? "Anonymous" : "Named"}</p>
                           {showPollAccessDetails ? <p className="muted-text">Access code: {pollShareCode}</p> : null}
-                          {showPollAccessDetails ? (
+                          {showPollOpenAction ? (
                             <div className="inline-actions">
                               <a className="button-secondary small-button" href={pollAccessPath ?? undefined}>
                                 {poll.status === "live" ? "Respond to poll" : "Open poll page"}
                               </a>
                             </div>
                           ) : null}
-                          {poll.status === "completed" ? (
-                            <p className="muted-text">Poll response summaries will appear here when participant poll submissions are recorded.</p>
-                          ) : poll.status === "live" ? (
+                          {poll.status === "live" ? (
                             <p className="muted-text">
                               {poll.shareCode ? "This poll is live now. Open the poll page to answer the questions." : "This poll is live now."}
                             </p>
-                          ) : (
+                          ) : poll.status === "scheduled" ? (
                             <p className="muted-text">This poll has not started yet.</p>
-                          )}
+                          ) : null}
                         </article>
                       );
                     })()

@@ -215,6 +215,19 @@ async function getPollAttemptsByPollId(pollId: string) {
   return attempts;
 }
 
+export async function listRespondedOpenPollIdsForUserFromBackend(identifier: string) {
+  const normalizedIdentifier = normalizeParticipantIdentifier(identifier);
+  const attempts = await scanAllItems<PollAttempt>(getPollTables().attempts);
+
+  return Array.from(
+    new Set(
+      attempts
+        .filter((attempt) => identifiersMatch(attempt.userId, normalizedIdentifier))
+        .map((attempt) => attempt.pollId),
+    ),
+  );
+}
+
 async function findPollByShareCode(shareCode: string) {
   const normalizedShareCode = shareCode.trim().toUpperCase();
   const polls = hydrateScheduledPolls(await scanAllItems<ScheduledPoll>(getPollTables().scheduledPolls));

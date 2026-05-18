@@ -5356,7 +5356,7 @@ export function AdminQuestionWorkspace({
                 const showScheduledTestAccessDetails = Boolean(scheduledTestAccessUrl)
                   && scheduledTest?.status !== "completed";
                 const showScheduledParticipantList = Boolean(scheduledTest) && !leaderboard;
-                const isTestResultCollapsed = collapsedTestResultIds.includes(test.id);
+                const isTestResultCollapsed = !collapsedTestResultIds.includes(test.id);
 
                 return (
                   <article className="question-card result-card" key={`merged-test-${test.id}`}>
@@ -5694,7 +5694,7 @@ export function AdminQuestionWorkspace({
                       : "Available as participant";
                 const pollResultsCopy = poll.scheduledPoll
                   ? resolvedPoll.status === "completed"
-                    ? "Poll response summaries will appear here when poll participation is recorded."
+                    ? null
                     : resolvedPoll.status === "live"
                       ? "This poll is live. Response summaries will populate here as participants submit."
                       : "This poll has not opened yet."
@@ -5705,7 +5705,8 @@ export function AdminQuestionWorkspace({
                 const resolvedPollAccessUrl = resolvedPollShareCode
                   ? getPollAccessUrl(resolvedPollShareCode)
                   : null;
-                const showResolvedPollAccessDetails = Boolean(resolvedPollAccessUrl)
+                const showResolvedPollOpenAction = Boolean(resolvedPollAccessUrl);
+                const showResolvedPollAccessDetails = showResolvedPollOpenAction
                   && resolvedPoll.status !== "completed";
 
                 if (isOpenPoll) {
@@ -5734,7 +5735,7 @@ export function AdminQuestionWorkspace({
                             <p className="eyebrow">Results</p>
                             <p className="muted-text">{pollResultsCopy}</p>
                           </div>
-                          {showResolvedPollAccessDetails ? (
+                          {showResolvedPollOpenAction ? (
                             <div className="inline-actions">
                               <a
                                 className="button-secondary small-button"
@@ -5744,10 +5745,10 @@ export function AdminQuestionWorkspace({
                               >
                                 Open poll page
                               </a>
+                            <div>
+                              <p className="eyebrow">Results</p>
+                              {pollResultsCopy ? <p className="muted-text">{pollResultsCopy}</p> : null}
                             </div>
-                          ) : null}
-                          {isOpenPollExpanded ? (
-                            <div className="form-stack">
                               <p className="muted-text">Starts: {formatShortDateTime(resolvedPoll.startsAt)}</p>
                               <p className="muted-text">Ends: {formatShortDateTime(resolvedPoll.endsAt)}</p>
                               <p className="muted-text">Questions: {resolvedPoll.questionIds.length}</p>
@@ -5815,7 +5816,7 @@ export function AdminQuestionWorkspace({
                           URL: <a href={resolvedPollAccessUrl ?? undefined} target="_blank" rel="noreferrer">{resolvedPollAccessUrl}</a>
                         </p>
                       ) : null}
-                      {showResolvedPollAccessDetails ? (
+                      {showResolvedPollOpenAction ? (
                         <div className="form-stack">
                           <div className="inline-actions">
                             <a
@@ -5827,12 +5828,12 @@ export function AdminQuestionWorkspace({
                               Open poll page
                             </a>
                           </div>
-                          {pollQrCodes[resolvedPoll.id] ? (
+                          {showResolvedPollAccessDetails && pollQrCodes[resolvedPoll.id] ? (
                             <img alt={`QR code for ${resolvedPoll.title}`} height={180} src={pollQrCodes[resolvedPoll.id]} width={180} />
                           ) : null}
                         </div>
                       ) : null}
-                      <p className="muted-text">{pollResultsCopy}</p>
+                      {pollResultsCopy ? <p className="muted-text">{pollResultsCopy}</p> : null}
                     </div>
                   </details>
                 );
