@@ -49,6 +49,7 @@ import path from "node:path";
 import {
   createPollQuestionsInBackend,
   createScheduledPollInBackend,
+  getPollByIdFromBackend,
   getPollByShareCodeFromBackend,
   isDynamoDbPollStoreEnabled,
   listAllScheduledPollsFromBackend,
@@ -56,6 +57,7 @@ import {
   listRespondedOpenPollIdsForUserFromBackend,
   listScheduledPollsFromBackend,
   recordPollAttemptInBackend,
+  recordRegisteredPollAttemptInBackend,
   updateScheduledPollInBackend,
 } from "./poll-store";
 
@@ -2315,9 +2317,142 @@ export async function listAvailablePollsForParticipant(identifier: string): Prom
     });
 }
 
+function getParticipantGroupIdsForIdentifier(state: TestingWorkspaceState, normalizedIdentifier: string) {
+  const participantProfileIds = state.participants
+    .filter((participant) => identifiersMatch(participant.identifier, normalizedIdentifier))
+    .map((participant) => participant.id);
+
+  return new Set(
+    state.participantGroups
+      .filter((group) =>
+        group.participantIds.some((participantId) => participantProfileIds.includes(participantId)),
+      )
+      .map((group) => group.id),
+  );
+}
+
+function canAccessRegisteredPoll(
+  state: TestingWorkspaceState,
+  poll: ScheduledPoll,
+  normalizedIdentifier: string,
+) {
+  if (poll.participantType !== "registered") {
+    return false;
+  }
+
+  if (poll.creatorIdentifier && identifiersMatch(poll.creatorIdentifier, normalizedIdentifier)) {
+    return true;
+  }
+
+  const participantGroupIds = getParticipantGroupIdsForIdentifier(state, normalizedIdentifier);
+
+  return poll.participantGroupIds.some((groupId) => participantGroupIds.has(groupId));
+}
+
+function buildParticipantPollSummary(input: {
+  attempts: PollAttempt[];
+  identifier: string;
+  poll: ScheduledPoll;
+  questions: PersistentPollQuestion[];
+}) {
+  const normalizedIdentifier = normalizeParticipantIdentifier(input.identifier);
+  const hasSubmitted = input.attempts.some((attempt) => identifiersMatch(attempt.userId, normalizedIdentifier));
+  const isCreator = Boolean(
+    input.poll.creatorIdentifier && identifiersMatch(input.poll.creatorIdentifier, normalizedIdentifier),
+  );
+  const canViewResults = isCreator || hasSubmitted;
+  const summary = input.questions.map((question) => ({
+    optionSelectionCounts: question.options.map(
+      (_, optionIndex) =>
+        input.attempts.filter((attempt) => attempt.answers[question.id] === optionIndex).length,
+    ),
+    options: question.options,
+    prompt: question.prompt,
+    questionId: question.id,
+    topic: question.topic,
+    totalResponses: input.attempts.length,
+  }));
+
+  return {
+    canViewResults,
+    hasSubmitted,
+    poll: input.poll,
+    questions: input.questions,
+    summary: canViewResults ? summary : [],
+    totalResponses: canViewResults ? input.attempts.length : null,
+  };
+}
+
+export async function getParticipantPollById(pollId: string, identifier: string) {
+  const state = await readStore();
+  const normalizedIdentifier = normalizeParticipantIdentifier(identifier);
+
+  if (isDynamoDbPollStoreEnabled()) {
+    const scheduledPolls = await withPollStoreFallback(
+      () => listAllScheduledPollsFromBackend(),
+      async () => hydrateScheduledPolls(state),
+    );
+    const poll = scheduledPolls.find((entry) => entry.id === pollId);
+
+    if (!poll) {
+      throw new Error("The selected poll could not be found.");
+    }
+
+    if (!canAccessRegisteredPoll(state, poll, normalizedIdentifier)) {
+      throw new Error("You do not have access to this poll.");
+    }
+
+    return withPollStoreFallback(
+      () => getPollByIdFromBackend(pollId, {
+        identifier: normalizedIdentifier,
+        isRegistered: true,
+        responseUserId: normalizedIdentifier,
+      }),
+      async () => {
+        const questionMap = new Map(state.pollQuestions.map((question) => [question.id, question]));
+        const questions = poll.questionIds
+          .map((questionId) => questionMap.get(questionId))
+          .filter((question): question is PersistentPollQuestion => Boolean(question));
+        const attempts = state.pollAttempts.filter((attempt) => attempt.pollId === poll.id);
+
+        return buildParticipantPollSummary({
+          attempts,
+          identifier: normalizedIdentifier,
+          poll,
+          questions,
+        });
+      },
+    );
+  }
+
+  const poll = hydrateScheduledPolls(state).find((entry) => entry.id === pollId);
+
+  if (!poll) {
+    throw new Error("The selected poll could not be found.");
+  }
+
+  if (!canAccessRegisteredPoll(state, poll, normalizedIdentifier)) {
+    throw new Error("You do not have access to this poll.");
+  }
+
+  const questionMap = new Map(state.pollQuestions.map((question) => [question.id, question]));
+  const questions = poll.questionIds
+    .map((questionId) => questionMap.get(questionId))
+    .filter((question): question is PersistentPollQuestion => Boolean(question));
+  const attempts = state.pollAttempts.filter((attempt) => attempt.pollId === poll.id);
+
+  return buildParticipantPollSummary({
+    attempts,
+    identifier: normalizedIdentifier,
+    poll,
+    questions,
+  });
+}
+
 export async function getPollByShareCode(
   shareCode: string,
   viewer?: {
+    identifier?: string | null;
     isRegistered?: boolean;
     responseUserId?: string | null;
     sub?: string | null;
@@ -2581,6 +2716,180 @@ export async function recordPollAttempt(input: {
     completedAt: input.completedAt,
     id: createEntityId("poll-attempt"),
     participantName,
+    pollId: poll.id,
+    startedAt: input.startedAt,
+    userId: normalizedUserId,
+  };
+
+  state.pollAttempts = [attempt, ...state.pollAttempts];
+  await writeStore(state);
+
+  return attempt;
+}
+
+export async function recordParticipantPollAttempt(input: {
+  answers: Record<string, number | undefined>;
+  completedAt: string;
+  participantName?: string;
+  pollId: string;
+  startedAt: string;
+  userId: string;
+}) {
+  const state = await readStore();
+  const normalizedUserId = normalizeParticipantIdentifier(input.userId);
+
+  if (isDynamoDbPollStoreEnabled()) {
+    const scheduledPolls = await withPollStoreFallback(
+      () => listAllScheduledPollsFromBackend(),
+      async () => hydrateScheduledPolls(state),
+    );
+    const poll = scheduledPolls.find((entry) => entry.id === input.pollId);
+
+    if (!poll) {
+      throw new Error("The selected poll could not be found.");
+    }
+
+    if (!canAccessRegisteredPoll(state, poll, normalizedUserId)) {
+      throw new Error("You do not have access to this poll.");
+    }
+
+    return withPollStoreFallback(
+      () => recordRegisteredPollAttemptInBackend(input),
+      async () => {
+        if (
+          state.pollAttempts.some(
+            (attempt) => attempt.pollId === poll.id && identifiersMatch(attempt.userId, normalizedUserId),
+          )
+        ) {
+          throw new Error("This poll has already been submitted.");
+        }
+
+        const questionMap = new Map(state.pollQuestions.map((question) => [question.id, question]));
+        const questions = poll.questionIds
+          .map((questionId) => questionMap.get(questionId))
+          .filter((question): question is PersistentPollQuestion => Boolean(question));
+        const startedAtMs = new Date(input.startedAt).getTime();
+        const completedAtMs = new Date(input.completedAt).getTime();
+        const startsAtMs = new Date(poll.startsAt).getTime();
+        const endsAtMs = new Date(poll.endsAt).getTime();
+
+        if (poll.participantType !== "registered") {
+          throw new Error("This poll is available through the public poll page.");
+        }
+
+        if (poll.status === "scheduled") {
+          throw new Error("This poll is not live yet.");
+        }
+
+        if (poll.status === "completed") {
+          throw new Error("This poll is no longer available.");
+        }
+
+        if (completedAtMs < startsAtMs) {
+          throw new Error("This poll is not live yet.");
+        }
+
+        if (completedAtMs > endsAtMs) {
+          throw new Error("This poll is no longer available.");
+        }
+
+        for (const question of questions) {
+          const answer = input.answers[question.id];
+
+          if (typeof answer !== "number" || answer < 0 || answer >= question.options.length) {
+            throw new Error("Answer every poll question before submitting.");
+          }
+        }
+
+        if (Number.isNaN(startedAtMs) || Number.isNaN(completedAtMs) || completedAtMs < startedAtMs) {
+          throw new Error("The poll session timestamps are invalid.");
+        }
+
+        const attempt: PollAttempt = {
+          answers: questions.reduce<Record<string, number>>((accumulator, question) => {
+            accumulator[question.id] = input.answers[question.id] as number;
+            return accumulator;
+          }, {}),
+          completedAt: input.completedAt,
+          id: createEntityId("poll-attempt"),
+          participantName: input.participantName?.trim() || undefined,
+          pollId: poll.id,
+          startedAt: input.startedAt,
+          userId: normalizedUserId,
+        };
+
+        state.pollAttempts = [attempt, ...state.pollAttempts];
+        await writeStore(state);
+
+        return attempt;
+      },
+    );
+  }
+
+  const poll = hydrateScheduledPolls(state).find((entry) => entry.id === input.pollId);
+
+  if (!poll) {
+    throw new Error("The selected poll could not be found.");
+  }
+
+  if (!canAccessRegisteredPoll(state, poll, normalizedUserId)) {
+    throw new Error("You do not have access to this poll.");
+  }
+
+  if (poll.participantType !== "registered") {
+    throw new Error("This poll is available through the public poll page.");
+  }
+
+  if (poll.status === "scheduled") {
+    throw new Error("This poll is not live yet.");
+  }
+
+  if (poll.status === "completed") {
+    throw new Error("This poll is no longer available.");
+  }
+
+  if (
+    state.pollAttempts.some(
+      (attempt) => attempt.pollId === poll.id && identifiersMatch(attempt.userId, normalizedUserId),
+    )
+  ) {
+    throw new Error("This poll has already been submitted.");
+  }
+
+  const questionMap = new Map(state.pollQuestions.map((question) => [question.id, question]));
+  const questions = poll.questionIds
+    .map((questionId) => questionMap.get(questionId))
+    .filter((question): question is PersistentPollQuestion => Boolean(question));
+  const startedAtMs = new Date(input.startedAt).getTime();
+  const completedAtMs = new Date(input.completedAt).getTime();
+  const startsAtMs = new Date(poll.startsAt).getTime();
+  const endsAtMs = new Date(poll.endsAt).getTime();
+
+  if (completedAtMs < startsAtMs) {
+    throw new Error("This poll is not live yet.");
+  }
+
+  if (completedAtMs > endsAtMs) {
+    throw new Error("This poll is no longer available.");
+  }
+
+  for (const question of questions) {
+    const answer = input.answers[question.id];
+
+    if (typeof answer !== "number" || answer < 0 || answer >= question.options.length) {
+      throw new Error("Answer every poll question before submitting.");
+    }
+  }
+
+  if (Number.isNaN(startedAtMs) || Number.isNaN(completedAtMs) || completedAtMs < startedAtMs) {
+    throw new Error("The poll session timestamps are invalid.");
+  }
+
+  const attempt: PollAttempt = {
+    answers: input.answers,
+    completedAt: input.completedAt,
+    id: createEntityId("poll-attempt"),
+    participantName: input.participantName?.trim() || undefined,
     pollId: poll.id,
     startedAt: input.startedAt,
     userId: normalizedUserId,

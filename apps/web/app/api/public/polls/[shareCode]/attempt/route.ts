@@ -77,6 +77,7 @@ export async function POST(
       userId,
     });
     const poll = await getPollByShareCode(context.params.shareCode, {
+      identifier: actor?.identifier ?? userId,
       isRegistered: Boolean(actor?.isRegistered),
       responseUserId: userId,
       sub: actor?.sub ?? null,

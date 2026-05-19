@@ -43,6 +43,7 @@ type UpdateScheduledPollInput = CreateScheduledPollInput & {
 };
 
 type PollViewer = {
+  identifier?: string | null;
   isRegistered?: boolean;
   responseUserId?: string | null;
   sub?: string | null;
@@ -235,6 +236,13 @@ async function findPollByShareCode(shareCode: string) {
   return polls.find((poll) => poll.shareCode?.trim().toUpperCase() === normalizedShareCode) ?? null;
 }
 
+async function findPollById(pollId: string) {
+  const normalizedPollId = pollId.trim();
+  const polls = hydrateScheduledPolls(await scanAllItems<ScheduledPoll>(getPollTables().scheduledPolls));
+
+  return polls.find((poll) => poll.id === normalizedPollId) ?? null;
+}
+
 function buildPollSummary(
   poll: ScheduledPoll,
   questions: PersistentPollQuestion[],
@@ -245,7 +253,10 @@ function buildPollSummary(
   const hasSubmitted = viewerResponseUserId
     ? attempts.some((attempt) => identifiersMatch(attempt.userId, viewerResponseUserId))
     : false;
-  const isCreator = Boolean(viewer?.sub && poll.createdBy && viewer.sub === poll.createdBy);
+  const isCreator = Boolean(
+    (viewer?.sub && poll.createdBy && viewer.sub === poll.createdBy)
+    || (viewer?.identifier && poll.creatorIdentifier && identifiersMatch(poll.creatorIdentifier, viewer.identifier)),
+  );
   const canViewResults = isCreator || Boolean(viewer?.isRegistered && hasSubmitted);
   const summary: PollSummaryEntry[] = questions.map((question) => ({
     optionSelectionCounts: question.options.map(
@@ -505,6 +516,21 @@ export async function getPollByShareCodeFromBackend(shareCode: string, viewer?: 
   return buildPollSummary(poll, questions, attempts, viewer);
 }
 
+export async function getPollByIdFromBackend(pollId: string, viewer?: PollViewer) {
+  const poll = await findPollById(pollId);
+
+  if (!poll) {
+    throw new Error("The selected poll could not be found.");
+  }
+
+  const [questions, attempts] = await Promise.all([
+    getPollQuestionsByIds(poll.questionIds),
+    getPollAttemptsByPollId(poll.id),
+  ]);
+
+  return buildPollSummary(poll, questions, attempts, viewer);
+}
+
 export async function recordPollAttemptInBackend(input: {
   answers: Record<string, number | undefined>;
   completedAt: string;
@@ -522,6 +548,83 @@ export async function recordPollAttemptInBackend(input: {
 
   if (poll.participantType !== "open") {
     throw new Error("This poll is not available through a public QR code.");
+  }
+
+  if (poll.status === "scheduled") {
+    throw new Error("This poll is not live yet.");
+  }
+
+  if (poll.status === "completed") {
+    throw new Error("This poll is no longer available.");
+  }
+
+  const questions = await getPollQuestionsByIds(poll.questionIds);
+  const completedAtMs = new Date(input.completedAt).getTime();
+  const startsAtMs = new Date(poll.startsAt).getTime();
+  const endsAtMs = new Date(poll.endsAt).getTime();
+
+  if (completedAtMs < startsAtMs) {
+    throw new Error("This poll is not live yet.");
+  }
+
+  if (completedAtMs > endsAtMs) {
+    throw new Error("This poll is no longer available.");
+  }
+
+  const participantName = input.participantName?.trim() || undefined;
+
+  for (const question of questions) {
+    const answer = input.answers[question.id];
+
+    if (typeof answer !== "number" || answer < 0 || answer >= question.options.length) {
+      throw new Error("Answer every poll question before submitting.");
+    }
+  }
+
+  const attempt: PollAttempt = {
+    answers: input.answers,
+    completedAt: input.completedAt,
+    id: createEntityId("poll-attempt"),
+    participantName,
+    pollId: poll.id,
+    startedAt: input.startedAt,
+    userId: normalizedUserId,
+  };
+
+  try {
+    await getDocumentClient().send(new PutCommand({
+      ConditionExpression: "attribute_not_exists(pollId) AND attribute_not_exists(userId)",
+      Item: attempt,
+      TableName: getPollTables().attempts,
+    }));
+  } catch (error) {
+    if (error instanceof Error && error.name === "ConditionalCheckFailedException") {
+      throw new Error("This poll has already been submitted.");
+    }
+
+    throw error;
+  }
+
+  return attempt;
+}
+
+export async function recordRegisteredPollAttemptInBackend(input: {
+  answers: Record<string, number | undefined>;
+  completedAt: string;
+  participantName?: string;
+  pollId: string;
+  startedAt: string;
+  userId: string;
+}) {
+  const normalizedUserId = normalizeParticipantIdentifier(input.userId);
+  const poll = await findPollById(input.pollId);
+
+  if (!poll) {
+    throw new Error("The selected poll could not be found.");
+  }
+
+  if (poll.participantType !== "registered") {
+    throw new Error("This poll is available through the public poll page.");
   }
 
   if (poll.status === "scheduled") {

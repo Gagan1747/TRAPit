@@ -56,11 +56,21 @@ function createGuestId() {
   return `guest-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+type PollWorkspaceProps = {
+  loadPath: string;
+  storageKey: string;
+  submitPath: string;
+};
+
 type PublicPollWorkspaceProps = {
   shareCode: string;
 };
 
-export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
+type UserPollWorkspaceProps = {
+  pollId: string;
+};
+
+function PollWorkspace({ loadPath, storageKey, submitPath }: PollWorkspaceProps) {
   const [answers, setAnswers] = useState<Record<string, number | undefined>>({});
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [isDetailsExpanded, setIsDetailsExpanded] = useState(false);
@@ -93,7 +103,6 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
       return;
     }
 
-    const storageKey = `trapit-public-poll:${shareCode}:guest-id`;
     const existingGuestId = window.localStorage.getItem(storageKey);
 
     if (existingGuestId) {
@@ -104,7 +113,7 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
     const nextGuestId = createGuestId();
     window.localStorage.setItem(storageKey, nextGuestId);
     setGuestId(nextGuestId);
-  }, [shareCode]);
+  }, [storageKey]);
 
   useEffect(() => {
     let isMounted = true;
@@ -114,7 +123,7 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
 
       try {
         const nextPayload = await readJson<PublicPollResponse>(
-          await fetch(`/api/public/polls/${encodeURIComponent(shareCode)}`),
+          await fetch(loadPath),
         );
 
         if (!isMounted) {
@@ -145,7 +154,7 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
     return () => {
       isMounted = false;
     };
-  }, [shareCode]);
+  }, [loadPath]);
 
   useEffect(() => {
     if (!payload || startedAt) {
@@ -178,7 +187,7 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
 
     try {
       const nextPayload = await readJson<PublicPollResponse>(
-        await fetch(`/api/public/polls/${encodeURIComponent(shareCode)}/attempt`, {
+        await fetch(submitPath, {
           body: JSON.stringify({
             answers,
             completedAt: new Date().toISOString(),
@@ -404,7 +413,7 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
                     ) : null}
                     <p className="muted-text">Ends: {formatShortDateTime(payload.poll.endsAt)}</p>
                     <p className="muted-text">Questions: {payload.questions.length}</p>
-                    <p className="muted-text">Response mode: Anonymous only</p>
+                    <p className="muted-text">Response mode: {payload.poll.anonymous ? "Anonymous" : "Named"}</p>
                     {typeof payload.totalResponses === "number" ? (
                       <p className="muted-text">Responses so far: {payload.totalResponses}</p>
                     ) : null}
@@ -497,5 +506,29 @@ export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
         ) : null}
       </section>
     </main>
+  );
+}
+
+export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
+  const encodedShareCode = encodeURIComponent(shareCode);
+
+  return (
+    <PollWorkspace
+      loadPath={`/api/public/polls/${encodedShareCode}`}
+      storageKey={`trapit-public-poll:${shareCode}:guest-id`}
+      submitPath={`/api/public/polls/${encodedShareCode}/attempt`}
+    />
+  );
+}
+
+export function UserPollWorkspace({ pollId }: UserPollWorkspaceProps) {
+  const encodedPollId = encodeURIComponent(pollId);
+
+  return (
+    <PollWorkspace
+      loadPath={`/api/user/polls/${encodedPollId}`}
+      storageKey={`trapit-user-poll:${pollId}:session`}
+      submitPath={`/api/user/polls/${encodedPollId}/attempt`}
+    />
   );
 }

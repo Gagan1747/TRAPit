@@ -960,8 +960,10 @@ export function AdminQuestionWorkspace({
   const participantIsSubmittingRef = useRef(false);
   const toolbarMenuRef = useRef<HTMLDivElement | null>(null);
 
-  async function loadWorkspace() {
-    setIsLoading(true);
+  async function loadWorkspace(options?: { silent?: boolean }) {
+    if (!options?.silent) {
+      setIsLoading(true);
+    }
 
     try {
       const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, userDashboardPayload, pollsPayload, brandingPayload, categorySnapshotPayload, categoryManagementPayload] =
@@ -1020,13 +1022,29 @@ export function AdminQuestionWorkspace({
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to load the admin workspace.");
     } finally {
-      setIsLoading(false);
+      if (!options?.silent) {
+        setIsLoading(false);
+      }
     }
   }
 
   useEffect(() => {
     void loadWorkspace();
   }, []);
+
+  useEffect(() => {
+    if (currentActorRole !== "user" || activeParticipantTestId) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void loadWorkspace({ silent: true });
+    }, 30000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [activeParticipantTestId, currentActorRole]);
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -1146,6 +1164,14 @@ export function AdminQuestionWorkspace({
     }
 
     return `${window.location.origin}/poll/${shareCode}`;
+  }
+
+  function getRegisteredPollPath(pollId: string) {
+    if (!pollId.trim()) {
+      return "";
+    }
+
+    return `/user/poll/${encodeURIComponent(pollId)}`;
   }
 
   function getTestAccessUrl(shareCode: string) {
@@ -2779,24 +2805,45 @@ export function AdminQuestionWorkspace({
       return new Date(rightPoll.startsAt).getTime() - new Date(leftPoll.startsAt).getTime();
     });
   const notificationBaseline = previousSignInAt ? new Date(previousSignInAt).getTime() : null;
-  const liveTestsCount = sortedScheduledTests.filter((test) => test.status === "live").length;
-  const livePollsCount = sortedScheduledPolls.filter((poll) => poll.status === "live").length;
-  const upcomingTestsCount = sortedScheduledTests.filter((test) => test.status === "scheduled").length;
-  const upcomingPollsCount = sortedScheduledPolls.filter((poll) => poll.status === "scheduled").length;
+  const notificationTests = currentActorRole === "user" ? participantTests : sortedScheduledTests;
+  const notificationPolls = currentActorRole === "user" ? participantPolls : sortedScheduledPolls;
+  const liveTestsCount = notificationTests.filter((test) => test.status === "live").length;
+  const livePollsCount = notificationPolls.filter((poll) => poll.status === "live").length;
+  const upcomingTestsCount = notificationTests.filter((test) => test.status === "scheduled").length;
+  const upcomingPollsCount = notificationPolls.filter((poll) => poll.status === "scheduled").length;
   const releasedTestResultsCount = notificationBaseline === null
-    ? sortedScheduledTests.filter((test) => test.status === "completed").length
-    : sortedScheduledTests.filter(
+    ? notificationTests.filter((test) => test.status === "completed").length
+    : notificationTests.filter(
       (test) => test.status === "completed" && new Date(test.updatedAt).getTime() > notificationBaseline,
     ).length;
   const releasedPollResultsCount = notificationBaseline === null
-    ? sortedScheduledPolls.filter((poll) => poll.status === "completed").length
-    : sortedScheduledPolls.filter(
+    ? notificationPolls.filter((poll) => poll.status === "completed").length
+    : notificationPolls.filter(
       (poll) => poll.status === "completed" && new Date(poll.updatedAt).getTime() > notificationBaseline,
     ).length;
+  const pendingOutgoingGroupRequestCount = currentActorRole === "user"
+    ? outgoingGroupJoinRequests.filter((request) => request.status === "pending").length
+    : 0;
+  const acceptedOutgoingGroupRequestCount = currentActorRole === "user"
+    ? (notificationBaseline === null
+      ? outgoingGroupJoinRequests.filter((request) => request.status === "accepted").length
+      : outgoingGroupJoinRequests.filter(
+        (request) =>
+          request.status === "accepted"
+          && request.resolvedAt
+          && new Date(request.resolvedAt).getTime() > notificationBaseline,
+      ).length)
+    : 0;
   const notificationItems: NotificationBellItem[] = [
     { count: liveTestsCount + livePollsCount, label: "Live tests and polls" },
     { count: upcomingTestsCount + upcomingPollsCount, label: "Upcoming tests and polls" },
     { count: releasedTestResultsCount + releasedPollResultsCount, label: "Released results" },
+    ...(currentActorRole === "user"
+      ? [{
+        count: pendingOutgoingGroupRequestCount + acceptedOutgoingGroupRequestCount,
+        label: "Group requests and acceptances",
+      } satisfies NotificationBellItem]
+      : []),
   ];
   const brandingPreview = normalizeBrandingInput({
     imageDataUrl: brandingImageDataUrl,
@@ -2804,7 +2851,9 @@ export function AdminQuestionWorkspace({
   });
   const notificationSubtitle = notificationBaseline === null
     ? "Counts reflect the current workspace state."
-    : "Released results are measured from your previous sign in.";
+    : currentActorRole === "user"
+      ? "Released results and accepted group requests are measured from your previous sign in."
+      : "Released results are measured from your previous sign in.";
   const filteredManagedUsers = categoryManagement?.managedUsers.filter((user) => {
     const query = categorySearchQuery.trim().toLowerCase();
     const normalizedQueryCandidates = Array.from(getParticipantIdentifierCandidates(query));
@@ -3107,7 +3156,7 @@ export function AdminQuestionWorkspace({
                     </button>
                     <p className="eyebrow">Notifications</p>
                   </div>
-                  <h2 className="section-title">Admin workspace alerts</h2>
+                  <h2 className="section-title">{currentActorRole === "user" ? "Workspace alerts" : "Admin workspace alerts"}</h2>
                   <p className="muted-text notification-panel-subtitle">{notificationSubtitle}</p>
                   <div className="notification-panel-list">
                     {notificationItems.map((item) => (
@@ -5727,11 +5776,14 @@ export function AdminQuestionWorkspace({
                 const isCompletedOpenPoll = isOpenPoll && resolvedPoll.status === "completed";
                 const isOpenPollExpanded = !isCompletedOpenPoll && expandedOpenPollResultIds.includes(resolvedPoll.id);
                 const resolvedPollShareCode = resolvedPoll.shareCode ?? null;
-                const resolvedPollAccessUrl = resolvedPollShareCode
-                  ? getPollAccessUrl(resolvedPollShareCode)
-                  : null;
+                const resolvedPollAccessUrl = resolvedPoll.participantType === "registered"
+                  ? getRegisteredPollPath(resolvedPoll.id)
+                  : resolvedPollShareCode
+                    ? getPollAccessUrl(resolvedPollShareCode)
+                    : null;
                 const showResolvedPollOpenAction = Boolean(resolvedPollAccessUrl);
-                const showResolvedPollAccessDetails = showResolvedPollOpenAction
+                const showResolvedPollAccessDetails = resolvedPoll.participantType === "open"
+                  && showResolvedPollOpenAction
                   && resolvedPoll.status !== "completed";
 
                 if (isOpenPoll) {
@@ -5783,7 +5835,7 @@ export function AdminQuestionWorkspace({
                                 target="_blank"
                                 rel="noreferrer"
                               >
-                                Open poll page
+                                {resolvedPoll.status === "live" ? "Respond to poll" : "Open poll page"}
                               </a>
                             </div>
                           ) : null}
@@ -5876,7 +5928,7 @@ export function AdminQuestionWorkspace({
                               target="_blank"
                               rel="noreferrer"
                             >
-                              Open poll page
+                              {resolvedPoll.status === "live" ? "Respond to poll" : "Open poll page"}
                             </a>
                           </div>
                           {showResolvedPollAccessDetails && pollQrCodes[resolvedPoll.id] ? (

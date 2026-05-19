@@ -57,6 +57,7 @@ export async function GET(
 
   try {
     const payload = await getPollByShareCode(context.params.shareCode, {
+      identifier: actor.identifier,
       isRegistered: actor.isRegistered,
       responseUserId: actor.identifier,
       sub: actor.sub,
