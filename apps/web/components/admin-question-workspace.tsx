@@ -9,6 +9,7 @@ import {
 import {
   createPresentedQuestions,
   formatElapsedTime,
+  getScheduledTestEndTime,
   type GroupJoinRequest,
   type ObjectiveQuestion,
   type PollBulkImportPreview,
@@ -467,6 +468,16 @@ async function readJson<T>(response: Response): Promise<T> {
   }
 
   return payload;
+}
+
+function getTestReleaseTimestamp(
+  test: ScheduledTest | UserDashboardResponse["availableTests"][number],
+) {
+  if ("updatedAt" in test) {
+    return new Date(test.updatedAt).getTime();
+  }
+
+  return new Date(getScheduledTestEndTime(test)).getTime();
 }
 
 function isLimitPopupMessage(message: string) {
@@ -2814,7 +2825,7 @@ export function AdminQuestionWorkspace({
   const releasedTestResultsCount = notificationBaseline === null
     ? notificationTests.filter((test) => test.status === "completed").length
     : notificationTests.filter(
-      (test) => test.status === "completed" && new Date(test.updatedAt).getTime() > notificationBaseline,
+      (test) => test.status === "completed" && getTestReleaseTimestamp(test) > notificationBaseline,
     ).length;
   const releasedPollResultsCount = notificationBaseline === null
     ? notificationPolls.filter((poll) => poll.status === "completed").length
