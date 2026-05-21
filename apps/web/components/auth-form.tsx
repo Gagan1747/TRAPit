@@ -388,6 +388,7 @@ export function AuthForm({ mode }: AuthFormProps) {
             type="tel"
             inputMode="tel"
             placeholder="+91"
+            maxLength={5}
             disabled={!authConfigured}
             value={countryCode}
             onChange={(event) => handleCountryCodeChange(event.target.value)}
@@ -396,7 +397,7 @@ export function AuthForm({ mode }: AuthFormProps) {
             id="phone-number"
             type="tel"
             inputMode="tel"
-            placeholder="9876543210"
+            placeholder="Enter your number here"
             disabled={!authConfigured}
             value={phoneNumber}
             onChange={(event) => handlePhoneNumberChange(event.target.value)}

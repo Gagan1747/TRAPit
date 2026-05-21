@@ -3,7 +3,7 @@ function getDigitsOnly(value: string) {
 }
 
 export function sanitizeCountryCodeInput(value: string) {
-  const digits = getDigitsOnly(value);
+  const digits = getDigitsOnly(value).slice(0, 4);
 
   return digits ? `+${digits}` : "+";
 }
