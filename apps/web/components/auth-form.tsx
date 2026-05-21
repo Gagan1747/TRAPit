@@ -1,6 +1,13 @@
 "use client";
 
-import { combinePhoneNumber, sanitizeCountryCodeInput, sanitizeNationalPhoneInput } from "@trapit/auth";
+import {
+  combinePhoneNumber,
+  DEFAULT_PHONE_COUNTRY_CODE,
+  formatPhoneCountryLabel,
+  getPhoneCountryByCode,
+  PHONE_COUNTRIES,
+  sanitizeNationalPhoneInput,
+} from "@trapit/auth";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
@@ -51,7 +58,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [isPending, setIsPending] = useState(false);
   const [password, setPassword] = useState("");
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
-  const [countryCode, setCountryCode] = useState("+91");
+  const [selectedCountryCode, setSelectedCountryCode] = useState(DEFAULT_PHONE_COUNTRY_CODE);
   const [phoneNumber, setPhoneNumber] = useState("");
   const [signUpSubMode, setSignUpSubMode] = useState<SignUpSubMode>(initialSignUpSubMode);
   const [isConfirmOptionAvailable, setIsConfirmOptionAvailable] = useState(initialConfirmAvailable);
@@ -76,7 +83,8 @@ export function AuthForm({ mode }: AuthFormProps) {
             ? "Account created. Sign in after confirmation completes."
             : null;
 
-  const combinedPhoneNumber = combinePhoneNumber(countryCode, phoneNumber);
+  const selectedCountry = getPhoneCountryByCode(selectedCountryCode);
+  const combinedPhoneNumber = combinePhoneNumber(selectedCountry.dialCode, phoneNumber);
 
   function setNextSignUpSubMode(nextMode: SignUpSubMode) {
     setSignUpSubMode(nextMode);
@@ -100,14 +108,12 @@ export function AuthForm({ mode }: AuthFormProps) {
     setResendMessage(null);
   }
 
-  function handleCountryCodeChange(nextCountryCode: string) {
-    const sanitizedCountryCode = sanitizeCountryCodeInput(nextCountryCode);
-
-    if (sanitizedCountryCode === countryCode) {
+  function handleCountryChange(nextCountryCode: string) {
+    if (nextCountryCode === selectedCountryCode) {
       return;
     }
 
-    setCountryCode(sanitizedCountryCode);
+    setSelectedCountryCode(nextCountryCode);
     setPassword("");
     setIsPasswordVisible(false);
     setConfirmationCode("");
@@ -383,16 +389,18 @@ export function AuthForm({ mode }: AuthFormProps) {
       <div className="field">
         <label htmlFor="phone-number">Phone number</label>
         <div className="field-row phone-input-row">
-          <input
-            id="phone-country-code"
-            type="tel"
-            inputMode="tel"
-            placeholder="+91"
-            maxLength={5}
+          <select
+            id="phone-country"
             disabled={!authConfigured}
-            value={countryCode}
-            onChange={(event) => handleCountryCodeChange(event.target.value)}
-          />
+            value={selectedCountryCode}
+            onChange={(event) => handleCountryChange(event.target.value)}
+          >
+            {PHONE_COUNTRIES.map((country) => (
+              <option key={country.code} value={country.code}>
+                {formatPhoneCountryLabel(country)}
+              </option>
+            ))}
+          </select>
           <input
             id="phone-number"
             type="tel"

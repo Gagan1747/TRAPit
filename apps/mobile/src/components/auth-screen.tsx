@@ -1,7 +1,10 @@
 import {
   combinePhoneNumber,
+  DEFAULT_PHONE_COUNTRY_CODE,
+  formatPhoneCountryLabel,
   getMobileDashboardPath,
-  sanitizeCountryCodeInput,
+  getPhoneCountryByCode,
+  PHONE_COUNTRIES,
   sanitizeNationalPhoneInput,
 } from "@trapit/auth";
 import { Redirect, type Href, useRouter } from "expo-router";
@@ -32,14 +35,16 @@ export function AuthScreen({ mode }: AuthScreenProps) {
   const [isPending, setIsPending] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [password, setPassword] = useState("");
-  const [countryCode, setCountryCode] = useState("+91");
+  const [isCountryDropdownOpen, setIsCountryDropdownOpen] = useState(false);
+  const [selectedCountryCode, setSelectedCountryCode] = useState(DEFAULT_PHONE_COUNTRY_CODE);
   const [phoneNumber, setPhoneNumber] = useState("");
   const [signUpState, setSignUpState] = useState<{
     destination?: string | null;
     requiresConfirmation?: boolean;
     warning?: string;
   } | null>(null);
-  const combinedPhoneNumber = combinePhoneNumber(countryCode, phoneNumber);
+  const selectedCountry = getPhoneCountryByCode(selectedCountryCode);
+  const combinedPhoneNumber = combinePhoneNumber(selectedCountry.dialCode, phoneNumber);
 
   function handlePhoneNumberChange(nextPhoneNumber: string) {
     const sanitizedPhoneNumber = sanitizeNationalPhoneInput(nextPhoneNumber);
@@ -56,14 +61,13 @@ export function AuthScreen({ mode }: AuthScreenProps) {
     setErrorMessage(null);
   }
 
-  function handleCountryCodeChange(nextCountryCode: string) {
-    const sanitizedCountryCode = sanitizeCountryCodeInput(nextCountryCode);
-
-    if (sanitizedCountryCode === countryCode) {
+  function handleCountryChange(nextCountryCode: string) {
+    if (nextCountryCode === selectedCountryCode) {
       return;
     }
 
-    setCountryCode(sanitizedCountryCode);
+    setSelectedCountryCode(nextCountryCode);
+    setIsCountryDropdownOpen(false);
     setPassword("");
     setIsPasswordVisible(false);
     setConfirmationCode("");
@@ -181,24 +185,49 @@ export function AuthScreen({ mode }: AuthScreenProps) {
           ) : null}
 
           <View style={styles.field}>
+            <Text style={styles.label}>Country</Text>
+            <Pressable
+              style={styles.countryDropdownTrigger}
+              disabled={!authConfigured}
+              onPress={() => setIsCountryDropdownOpen((currentValue) => !currentValue)}
+            >
+              <Text style={styles.countryDropdownText}>{formatPhoneCountryLabel(selectedCountry)}</Text>
+              <Text style={styles.countryDropdownChevron}>{isCountryDropdownOpen ? "▲" : "▼"}</Text>
+            </Pressable>
+            {isCountryDropdownOpen ? (
+              <View style={styles.countryDropdownMenu}>
+                {PHONE_COUNTRIES.map((country) => (
+                  <Pressable
+                    key={country.code}
+                    style={[
+                      styles.countryDropdownItem,
+                      country.code === selectedCountryCode && styles.countryDropdownItemActive,
+                    ]}
+                    onPress={() => handleCountryChange(country.code)}
+                  >
+                    <Text
+                      style={[
+                        styles.countryDropdownItemText,
+                        country.code === selectedCountryCode && styles.countryDropdownItemTextActive,
+                      ]}
+                    >
+                      {formatPhoneCountryLabel(country)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.field}>
             <Text style={styles.label}>Phone number</Text>
             <View style={styles.phoneRow}>
               <TextInput
                 autoCapitalize="none"
                 keyboardType="phone-pad"
-                placeholder="+91"
+                placeholder="Enter your number here"
                 placeholderTextColor="#8e7d70"
-                style={[styles.input, styles.countryCodeInput]}
-                editable={authConfigured}
-                value={countryCode}
-                onChangeText={handleCountryCodeChange}
-              />
-              <TextInput
-                autoCapitalize="none"
-                keyboardType="phone-pad"
-                placeholder="9876543210"
-                placeholderTextColor="#8e7d70"
-                style={[styles.input, styles.phoneInput]}
+                style={styles.input}
                 editable={authConfigured}
                 value={phoneNumber}
                 onChangeText={handlePhoneNumberChange}
@@ -349,16 +378,53 @@ const styles = StyleSheet.create({
   },
   phoneRow: {
     flexDirection: "row",
-    gap: 10,
-  },
-  countryCodeInput: {
-    width: 88,
-  },
-  phoneInput: {
-    flex: 1,
   },
   passwordInput: {
     flex: 1,
+  },
+  countryDropdownTrigger: {
+    minHeight: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#d7c3af",
+    backgroundColor: "#fffaf5",
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  countryDropdownText: {
+    color: "#231712",
+    fontSize: 15,
+  },
+  countryDropdownChevron: {
+    color: "#6d5a4e",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  countryDropdownMenu: {
+    marginTop: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: "#d7c3af",
+    backgroundColor: "#fffaf5",
+    overflow: "hidden",
+  },
+  countryDropdownItem: {
+    minHeight: 44,
+    justifyContent: "center",
+    paddingHorizontal: 14,
+  },
+  countryDropdownItemActive: {
+    backgroundColor: "rgba(180, 76, 47, 0.12)",
+  },
+  countryDropdownItemText: {
+    color: "#3b2d26",
+    fontSize: 15,
+  },
+  countryDropdownItemTextActive: {
+    color: "#8e3f2c",
+    fontWeight: "700",
   },
   passwordToggle: {
     minWidth: 76,
