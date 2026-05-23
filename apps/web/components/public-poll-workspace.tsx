@@ -222,12 +222,6 @@ function PollWorkspace({ loadPath, storageKey, submitPath }: PollWorkspaceProps)
       [questionId]: optionIndex,
     }));
     setFeedback(null);
-
-    if (!payload) {
-      return;
-    }
-
-    setCurrentQuestionIndex((currentIndex) => Math.min(currentIndex + 1, payload.questions.length));
   }
 
   function goToPreviousQuestion() {
@@ -240,7 +234,7 @@ function PollWorkspace({ loadPath, storageKey, submitPath }: PollWorkspaceProps)
       return;
     }
 
-    setCurrentQuestionIndex((currentIndex) => Math.min(currentIndex + 1, payload.questions.length));
+    setCurrentQuestionIndex((currentIndex) => Math.min(currentIndex + 1, Math.max(payload.questions.length - 1, 0)));
     setFeedback(null);
   }
 
@@ -308,7 +302,7 @@ function PollWorkspace({ loadPath, storageKey, submitPath }: PollWorkspaceProps)
                       Question {Math.min(currentQuestionIndex + 1, payload.questions.length)} of {payload.questions.length}
                     </span>
                   </div>
-                  <p className="muted-text">Each response moves you straight to the next question. Use the navigation buttons to review or skip.</p>
+                  <p className="muted-text">Select an answer, then use the navigation buttons to move backward or forward before submitting.</p>
                   <p className="muted-text">Answered {answeredCount} of {payload.questions.length}</p>
                 </article>
 
@@ -335,17 +329,24 @@ function PollWorkspace({ loadPath, storageKey, submitPath }: PollWorkspaceProps)
                       ))}
                     </div>
                     <div className="inline-actions">
-                      <button
-                        className="button-secondary"
-                        disabled={currentQuestionIndex === 0}
-                        type="button"
-                        onClick={goToPreviousQuestion}
-                      >
-                        Previous question
-                      </button>
-                      <button className="button-secondary" type="button" onClick={goToNextQuestion}>
-                        Next question
-                      </button>
+                      {currentQuestionIndex > 0 ? (
+                        <button
+                          className="button-secondary"
+                          type="button"
+                          onClick={goToPreviousQuestion}
+                        >
+                          Previous question
+                        </button>
+                      ) : null}
+                      {currentQuestionIndex < payload.questions.length - 1 ? (
+                        <button className="button-secondary" type="button" onClick={goToNextQuestion}>
+                          Next question
+                        </button>
+                      ) : (
+                        <button className="button" disabled={isSubmitting} type="button" onClick={() => void submitPoll()}>
+                          {isSubmitting ? "Submitting..." : "Submit poll"}
+                        </button>
+                      )}
                     </div>
                   </article>
                 ) : (

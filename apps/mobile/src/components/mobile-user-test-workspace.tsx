@@ -176,7 +176,7 @@ export function MobileUserTestWorkspace({ currentParticipantIdentifier }: Mobile
       return;
     }
 
-    setCurrentQuestionIndex((currentIndex) => Math.min(currentIndex + 1, activeTest.questionCount));
+    setCurrentQuestionIndex((currentIndex) => Math.min(currentIndex + 1, Math.max(activeTest.questionCount - 1, 0)));
     setFeedback(null);
   }
 
@@ -247,7 +247,7 @@ export function MobileUserTestWorkspace({ currentParticipantIdentifier }: Mobile
                 <Text style={styles.countdownValue}>{formatCountdown(remainingMs)}</Text>
               </View>
               <Text style={styles.meta}>Question {Math.min(currentQuestionIndex + 1, activeTest.questionCount)} of {activeTest.questionCount}</Text>
-              <Text style={styles.meta}>Select an answer, then use the navigation buttons to review or skip before submitting.</Text>
+              <Text style={styles.meta}>Select an answer, then use the navigation buttons to move backward or forward before submitting.</Text>
             </View>
 
             {activeQuestion ? (
@@ -276,16 +276,20 @@ export function MobileUserTestWorkspace({ currentParticipantIdentifier }: Mobile
                   ))}
                 </View>
                 <View style={styles.navigationRow}>
-                  <Pressable
-                    disabled={currentQuestionIndex === 0}
-                    style={[styles.secondaryButton, currentQuestionIndex === 0 && styles.buttonDisabled]}
-                    onPress={goToPreviousQuestion}
-                  >
-                    <Text style={[styles.secondaryButtonText, currentQuestionIndex === 0 && styles.buttonTextDisabled]}>Previous question</Text>
-                  </Pressable>
-                  <Pressable style={styles.secondaryButton} onPress={goToNextQuestion}>
-                    <Text style={styles.secondaryButtonText}>Next question</Text>
-                  </Pressable>
+                  {currentQuestionIndex > 0 ? (
+                    <Pressable style={styles.secondaryButton} onPress={goToPreviousQuestion}>
+                      <Text style={styles.secondaryButtonText}>Previous question</Text>
+                    </Pressable>
+                  ) : null}
+                  {currentQuestionIndex < activeTest.questionCount - 1 ? (
+                    <Pressable style={styles.secondaryButton} onPress={goToNextQuestion}>
+                      <Text style={styles.secondaryButtonText}>Next question</Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable style={styles.primaryButton} onPress={() => void submitTest()}>
+                      <Text style={styles.primaryButtonText}>Submit test</Text>
+                    </Pressable>
+                  )}
                 </View>
               </View>
             ) : (

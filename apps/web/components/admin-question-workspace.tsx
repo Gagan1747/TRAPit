@@ -79,13 +79,6 @@ function createDefaultScheduleTime() {
   return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
 }
 
-function createDefaultPollEndTime() {
-  const date = new Date(Date.now() + 2 * 60 * 60 * 1000);
-  const timezoneOffsetMs = date.getTimezoneOffset() * 60 * 1000;
-
-  return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
-}
-
 function toDateTimeInputValue(value: string) {
   const date = new Date(value);
   const timezoneOffsetMs = date.getTimezoneOffset() * 60 * 1000;
@@ -912,9 +905,8 @@ export function AdminQuestionWorkspace({
   const [pollScheduleParticipantType, setPollScheduleParticipantType] = useState<PollParticipantType>("registered");
   const [pollScheduleTypedDrafts, setPollScheduleTypedDrafts] = useState<EditablePollScheduleDraft[]>([]);
   const [pollScheduleQuestionIds, setPollScheduleQuestionIds] = useState<string[]>([]);
-  const [pollScheduleStartNow, setPollScheduleStartNow] = useState(true);
   const [pollScheduleStartsAtInput, setPollScheduleStartsAtInput] = useState(createDefaultScheduleTime());
-  const [pollScheduleEndsAtInput, setPollScheduleEndsAtInput] = useState(createDefaultPollEndTime());
+  const [pollScheduleDurationMinutes, setPollScheduleDurationMinutes] = useState("60");
   const [pollScheduleTitle, setPollScheduleTitle] = useState("");
   const [scheduledPolls, setScheduledPolls] = useState<ScheduledPoll[]>([]);
   const [testQrCodes, setTestQrCodes] = useState<Record<string, string>>({});
@@ -942,7 +934,6 @@ export function AdminQuestionWorkspace({
   const [scheduleParticipantGroupIds, setScheduleParticipantGroupIds] = useState<string[]>([]);
   const [schedulePoolId, setSchedulePoolId] = useState("");
   const [scheduleQuestionCount, setScheduleQuestionCount] = useState("1");
-  const [scheduleStartMode, setScheduleStartMode] = useState<"later" | "now">("now");
   const [scheduleStartsAtInput, setScheduleStartsAtInput] = useState(createDefaultScheduleTime());
   const [scheduleTitle, setScheduleTitle] = useState("");
   const [scheduledTests, setScheduledTests] = useState<ScheduledTest[]>([]);
@@ -1217,9 +1208,8 @@ export function AdminQuestionWorkspace({
     setPollScheduleParticipantType("registered");
     setPollScheduleTypedDrafts([]);
     setPollScheduleQuestionIds([]);
-    setPollScheduleStartNow(true);
     setPollScheduleStartsAtInput(createDefaultScheduleTime());
-    setPollScheduleEndsAtInput(createDefaultPollEndTime());
+    setPollScheduleDurationMinutes("60");
     setPollScheduleTitle("");
   }
 
@@ -1230,7 +1220,6 @@ export function AdminQuestionWorkspace({
     setScheduleInviteJoinMode("approval-required");
     setScheduleParticipantGroupIds([]);
     setScheduleQuestionCount("1");
-    setScheduleStartMode("now");
     setScheduleStartsAtInput(createDefaultScheduleTime());
     setScheduleTitle("");
   }
@@ -1252,9 +1241,10 @@ export function AdminQuestionWorkspace({
     setPollScheduleGroupIds([...poll.participantGroupIds]);
     setPollScheduleTypedDrafts([]);
     setPollScheduleQuestionIds([...poll.questionIds]);
-    setPollScheduleStartNow(false);
     setPollScheduleStartsAtInput(toDateTimeInputValue(poll.startsAt));
-    setPollScheduleEndsAtInput(toDateTimeInputValue(poll.endsAt));
+    setPollScheduleDurationMinutes(
+      String(Math.max(1, Math.round((new Date(poll.endsAt).getTime() - new Date(poll.startsAt).getTime()) / 60000))),
+    );
     setPollScheduleTitle(poll.title);
     setPollFeedback(null);
     setOpenSection("poll-schedule");
@@ -1268,7 +1258,6 @@ export function AdminQuestionWorkspace({
     setScheduleGenerateInviteLink(Boolean(test.shareCode));
     setScheduleInviteJoinMode(test.inviteJoinMode ?? "approval-required");
     setScheduleParticipantGroupIds([...test.participantGroupIds]);
-    setScheduleStartMode("later");
     setScheduleStartsAtInput(toDateTimeInputValue(test.startsAt));
     setScheduleTitle(test.title);
     setScheduleFeedback(null);
@@ -1554,19 +1543,22 @@ export function AdminQuestionWorkspace({
     participantAnswersRef.current = nextAnswers;
     setParticipantAnswers(nextAnswers);
     setFeedback(null);
+  }
 
+  function goToPreviousParticipantQuestion() {
+    setCurrentParticipantQuestionIndex((currentIndex) => Math.max(currentIndex - 1, 0));
+    setFeedback(null);
+  }
+
+  function goToNextParticipantQuestion() {
     const activeParticipantTest = participantTests.find((test) => test.id === activeParticipantTestId) ?? null;
 
     if (!activeParticipantTest) {
       return;
     }
 
-    if (currentParticipantQuestionIndex >= activeParticipantTest.questions.length - 1) {
-      setCurrentParticipantQuestionIndex(activeParticipantTest.questions.length);
-      return;
-    }
-
-    setCurrentParticipantQuestionIndex((currentIndex) => currentIndex + 1);
+    setCurrentParticipantQuestionIndex((currentIndex) => Math.min(currentIndex + 1, Math.max(activeParticipantTest.questions.length - 1, 0)));
+    setFeedback(null);
   }
 
   function formatCountdown(value: number | null) {
@@ -2264,10 +2256,6 @@ export function AdminQuestionWorkspace({
   }
 
   function handleSchedulePoll() {
-    const startsAt = pollScheduleStartNow
-      ? new Date().toISOString()
-      : new Date(pollScheduleStartsAtInput).toISOString();
-    const endsAt = new Date(pollScheduleEndsAtInput).toISOString();
     const typedDrafts = pollScheduleTypedDrafts.filter((draft) =>
       draft.prompt.trim() || draft.topic.trim() || draft.options.some((option) => option.trim()),
     );
@@ -2291,23 +2279,20 @@ export function AdminQuestionWorkspace({
       }
     }
 
-    if (
-      !pollScheduleStartNow &&
-      (!pollScheduleStartsAtInput || Number.isNaN(new Date(pollScheduleStartsAtInput).getTime()))
-    ) {
+    if (!pollScheduleStartsAtInput || Number.isNaN(new Date(pollScheduleStartsAtInput).getTime())) {
       setPollFeedback("Choose a valid poll start date and time.");
       return;
     }
 
-    if (!pollScheduleEndsAtInput || Number.isNaN(new Date(pollScheduleEndsAtInput).getTime())) {
-      setPollFeedback("Choose a valid poll end date and time.");
+    const durationMinutes = Number(pollScheduleDurationMinutes);
+
+    if (!Number.isFinite(durationMinutes) || durationMinutes < 1) {
+      setPollFeedback("Poll duration must be at least 1 minute.");
       return;
     }
 
-    if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
-      setPollFeedback("Poll end time must be after the start time.");
-      return;
-    }
+    const startsAt = new Date(pollScheduleStartsAtInput).toISOString();
+    const endsAt = new Date(new Date(startsAt).getTime() + durationMinutes * 60 * 1000).toISOString();
 
     if (pollScheduleParticipantType === "registered" && !pollScheduleGroupIds.length) {
       setPollFeedback("Select at least one group when sharing a poll with groups.");
@@ -2450,10 +2435,6 @@ export function AdminQuestionWorkspace({
 
     const durationMinutes = Number(scheduleDurationMinutes);
     const questionCount = Number(scheduleQuestionCount);
-    const startsAt =
-      scheduleStartMode === "now"
-        ? new Date().toISOString()
-        : new Date(scheduleStartsAtInput).toISOString();
 
     if (!Number.isFinite(durationMinutes) || durationMinutes < 1) {
       setScheduleFeedback("Duration must be at least 1 minute.");
@@ -2470,13 +2451,12 @@ export function AdminQuestionWorkspace({
       return;
     }
 
-    if (
-      scheduleStartMode === "later" &&
-      (!scheduleStartsAtInput || Number.isNaN(new Date(scheduleStartsAtInput).getTime()))
-    ) {
-      setScheduleFeedback("Choose a valid future date and time.");
+    if (!scheduleStartsAtInput || Number.isNaN(new Date(scheduleStartsAtInput).getTime())) {
+      setScheduleFeedback("Choose a valid test date and time.");
       return;
     }
+
+    const startsAt = new Date(scheduleStartsAtInput).toISOString();
 
     void mutateWorkspace(async () => {
       await readJson<ScheduledTestsResponse>(
@@ -4482,24 +4462,45 @@ export function AdminQuestionWorkspace({
             />
           </div>
 
-          <div className="field">
-            <label htmlFor="schedule-pool">Question pool</label>
-            <select
-              className="select-field"
-              id="schedule-pool"
-              value={schedulePoolId}
-              onChange={(event) => setSchedulePoolId(event.target.value)}
-            >
-              <option value="">Select a pool</option>
-              {pools.map((pool) => (
-                <option key={pool.id} value={pool.id}>
-                  {pool.name}
-                </option>
-              ))}
-            </select>
+          <div className="field-row">
+            <div className="field">
+              <label htmlFor="schedule-starts-at">Test date and time</label>
+              <input
+                id="schedule-starts-at"
+                type="datetime-local"
+                value={scheduleStartsAtInput}
+                onChange={(event) => setScheduleStartsAtInput(event.target.value)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="schedule-duration">Duration in minutes</label>
+              <input
+                id="schedule-duration"
+                min={1}
+                type="number"
+                value={scheduleDurationMinutes}
+                onChange={(event) => setScheduleDurationMinutes(event.target.value)}
+              />
+            </div>
           </div>
 
           <div className="field-row">
+            <div className="field grow-field">
+              <label htmlFor="schedule-pool">Question pool</label>
+              <select
+                className="select-field"
+                id="schedule-pool"
+                value={schedulePoolId}
+                onChange={(event) => setSchedulePoolId(event.target.value)}
+              >
+                <option value="">Select a pool</option>
+                {pools.map((pool) => (
+                  <option key={pool.id} value={pool.id}>
+                    {pool.name}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="field">
               <label htmlFor="schedule-count">Number of questions</label>
               <input
@@ -4510,57 +4511,12 @@ export function AdminQuestionWorkspace({
                 onChange={(event) => setScheduleQuestionCount(event.target.value)}
               />
             </div>
-            <div className="field">
-              <label htmlFor="schedule-duration">Duration in minutes</label>
-              <input
-                min={1}
-                type="number"
-                value={scheduleDurationMinutes}
-                onChange={(event) => setScheduleDurationMinutes(event.target.value)}
-              />
-            </div>
           </div>
 
           {selectedPool ? (
             <p className="muted-text">
               Selected pool has {selectedPool.questionIds.length} question{selectedPool.questionIds.length === 1 ? "" : "s"}.
             </p>
-          ) : null}
-
-          <div className="field">
-            <label>Start mode</label>
-            <div className="selection-grid">
-              <label className="role-option">
-                <input
-                  checked={scheduleStartMode === "now"}
-                  name="schedule-start-mode"
-                  type="radio"
-                  onChange={() => setScheduleStartMode("now")}
-                />
-                <span>Start now</span>
-              </label>
-              <label className="role-option">
-                <input
-                  checked={scheduleStartMode === "later"}
-                  name="schedule-start-mode"
-                  type="radio"
-                  onChange={() => setScheduleStartMode("later")}
-                />
-                <span>Schedule for later</span>
-              </label>
-            </div>
-          </div>
-
-          {scheduleStartMode === "later" ? (
-            <div className="field">
-              <label htmlFor="schedule-starts-at">Test date and time</label>
-              <input
-                id="schedule-starts-at"
-                type="datetime-local"
-                value={scheduleStartsAtInput}
-                onChange={(event) => setScheduleStartsAtInput(event.target.value)}
-              />
-            </div>
           ) : null}
 
           <div className="field">
@@ -4912,25 +4868,10 @@ export function AdminQuestionWorkspace({
               />
             </div>
 
-            <div className="field">
-              <label>Start now</label>
-              <div className="selection-grid">
-                <label className="role-option">
-                  <input
-                    checked={pollScheduleStartNow}
-                    type="checkbox"
-                    onChange={(event) => setPollScheduleStartNow(event.target.checked)}
-                  />
-                  <span>Start now</span>
-                </label>
-              </div>
-            </div>
-
             <div className="field-row">
               <div className="field">
-                <label htmlFor="poll-starts-at">Start time</label>
+                <label htmlFor="poll-starts-at">Poll date and time</label>
                 <input
-                  disabled={pollScheduleStartNow}
                   id="poll-starts-at"
                   type="datetime-local"
                   value={pollScheduleStartsAtInput}
@@ -4938,12 +4879,13 @@ export function AdminQuestionWorkspace({
                 />
               </div>
               <div className="field">
-                <label htmlFor="poll-ends-at">End time</label>
+                <label htmlFor="poll-duration">Duration in minutes</label>
                 <input
-                  id="poll-ends-at"
-                  type="datetime-local"
-                  value={pollScheduleEndsAtInput}
-                  onChange={(event) => setPollScheduleEndsAtInput(event.target.value)}
+                  id="poll-duration"
+                  min={1}
+                  type="number"
+                  value={pollScheduleDurationMinutes}
+                  onChange={(event) => setPollScheduleDurationMinutes(event.target.value)}
                 />
               </div>
             </div>
@@ -5256,7 +5198,7 @@ export function AdminQuestionWorkspace({
                     Time left {formatCountdown(participantRemainingMs)}
                   </span>
                 </div>
-                <p className="muted-text">Each answer moves you straight to the next question.</p>
+                <p className="muted-text">Select an answer, then use the navigation buttons to move backward or forward before submitting.</p>
               </article>
 
               {activeParticipantQuestion ? (
@@ -5283,6 +5225,22 @@ export function AdminQuestionWorkspace({
                         {option}
                       </label>
                     ))}
+                  </div>
+                  <div className="inline-actions">
+                    {currentParticipantQuestionIndex > 0 ? (
+                      <button className="button-secondary" disabled={isMutating} type="button" onClick={goToPreviousParticipantQuestion}>
+                        Previous question
+                      </button>
+                    ) : null}
+                    {currentParticipantQuestionIndex < activeParticipantTest.questions.length - 1 ? (
+                      <button className="button-secondary" disabled={isMutating} type="button" onClick={goToNextParticipantQuestion}>
+                        Next question
+                      </button>
+                    ) : (
+                      <button className="button" disabled={isMutating} type="button" onClick={() => void submitParticipantTest()}>
+                        Submit test
+                      </button>
+                    )}
                   </div>
                 </article>
               ) : (

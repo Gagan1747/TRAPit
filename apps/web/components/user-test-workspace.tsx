@@ -474,7 +474,7 @@ export function UserTestWorkspace({
       return;
     }
 
-    setCurrentQuestionIndex((currentIndex) => Math.min(currentIndex + 1, activeTest.questions.length));
+    setCurrentQuestionIndex((currentIndex) => Math.min(currentIndex + 1, Math.max(activeTest.questions.length - 1, 0)));
     setFeedback(null);
   }
 
@@ -728,17 +728,24 @@ export function UserTestWorkspace({
                   ))}
                 </div>
                 <div className="inline-actions">
-                  <button
-                    className="button-secondary"
-                    disabled={currentQuestionIndex === 0}
-                    type="button"
-                    onClick={goToPreviousQuestion}
-                  >
-                    Previous question
-                  </button>
-                  <button className="button-secondary" type="button" onClick={goToNextQuestion}>
-                    Next question
-                  </button>
+                  {currentQuestionIndex > 0 ? (
+                    <button
+                      className="button-secondary"
+                      type="button"
+                      onClick={goToPreviousQuestion}
+                    >
+                      Previous question
+                    </button>
+                  ) : null}
+                  {currentQuestionIndex < activeTest.questions.length - 1 ? (
+                    <button className="button-secondary" type="button" onClick={goToNextQuestion}>
+                      Next question
+                    </button>
+                  ) : (
+                    <button className="button" disabled={isSubmitting} type="button" onClick={() => void submitTest()}>
+                      {isSubmitting ? "Submitting..." : "Submit test"}
+                    </button>
+                  )}
                 </div>
               </article>
             ) : (
