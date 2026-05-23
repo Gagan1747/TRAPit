@@ -6,6 +6,20 @@ import { useEffect, useState } from "react";
 import { formatShortDateTime } from "../lib/date-format";
 
 type PublicPollResponse = {
+  access?: {
+    canRequestAccess: boolean;
+    canRespond: boolean;
+    group: {
+      description: string;
+      id: string;
+      inviteJoinMode: "approval-required" | "automatic";
+      name: string;
+      ownerIdentifier: string | null;
+      shareCode: string | null;
+    } | null;
+    isGroupMember: boolean;
+    requestStatus: "accepted" | "pending" | "rejected" | null;
+  };
   actor: {
     displayName: string | null;
     identifier: string | null;
@@ -57,6 +71,8 @@ function createGuestId() {
 }
 
 type PollWorkspaceProps = {
+  accessRequestPath?: string;
+  invitePath?: string;
   loadPath: string;
   storageKey: string;
   submitPath: string;
@@ -70,7 +86,7 @@ type UserPollWorkspaceProps = {
   pollId: string;
 };
 
-function PollWorkspace({ loadPath, storageKey, submitPath }: PollWorkspaceProps) {
+function PollWorkspace({ accessRequestPath, invitePath = "/poll", loadPath, storageKey, submitPath }: PollWorkspaceProps) {
   const [answers, setAnswers] = useState<Record<string, number | undefined>>({});
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [isDetailsExpanded, setIsDetailsExpanded] = useState(false);
@@ -97,6 +113,9 @@ function PollWorkspace({ loadPath, storageKey, submitPath }: PollWorkspaceProps)
       ),
     ).join(", ")
     : "";
+  const requiresGroupAccess = Boolean(payload?.access?.group && !payload.access.canRespond);
+  const signInPath = `/sign-in?redirect=${encodeURIComponent(invitePath)}`;
+  const signUpPath = `/sign-up?redirect=${encodeURIComponent(invitePath)}`;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -163,6 +182,49 @@ function PollWorkspace({ loadPath, storageKey, submitPath }: PollWorkspaceProps)
 
     setStartedAt(new Date().toISOString());
   }, [payload, startedAt]);
+
+  useEffect(() => {
+    if (
+      !payload?.access?.group
+      || !payload.actor.isRegistered
+      || payload.access.canRespond
+      || payload.access.requestStatus === "pending"
+      || payload.access.group.inviteJoinMode !== "automatic"
+      || !accessRequestPath
+      || isSubmitting
+    ) {
+      return;
+    }
+
+    void requestPollAccess(true);
+  }, [accessRequestPath, isSubmitting, payload]);
+
+  async function requestPollAccess(automatic = false) {
+    if (!accessRequestPath) {
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const nextPayload = await readJson<PublicPollResponse>(
+        await fetch(accessRequestPath, {
+          method: "POST",
+        }),
+      );
+
+      setPayload(nextPayload);
+      setFeedback(
+        automatic || nextPayload.access?.canRespond
+          ? "You have been added to the group. You can respond to this poll while it remains live."
+          : "Access request sent. The group creator can approve you from the group requests list.",
+      );
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to request access to this poll.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
 
   async function submitPoll() {
     if (!payload || !startedAt) {
@@ -269,7 +331,7 @@ function PollWorkspace({ loadPath, storageKey, submitPath }: PollWorkspaceProps)
               </div>
             ) : null}
 
-            {payload.poll.status === "live" && !payload.hasSubmitted ? (
+            {payload.poll.status === "live" && !payload.hasSubmitted && !requiresGroupAccess ? (
               <div className="form-stack">
                 {payload.actor.isRegistered ? (
                   <div className="field">
@@ -370,6 +432,56 @@ function PollWorkspace({ loadPath, storageKey, submitPath }: PollWorkspaceProps)
                       </button>
                     </div>
                   </article>
+                )}
+              </div>
+            ) : null}
+
+            {requiresGroupAccess ? (
+              <div className="workspace-card form-stack">
+                <p className="eyebrow">Poll access</p>
+                <strong>{payload.access?.group?.name}</strong>
+                {payload.access?.group?.description ? <p className="muted-text">{payload.access.group.description}</p> : null}
+                {feedback ? <p className="muted-text">{feedback}</p> : null}
+                {!payload.actor.isRegistered ? (
+                  <div className="form-stack">
+                    <p className="muted-text">
+                      {payload.access?.group?.inviteJoinMode === "automatic"
+                        ? "Sign up or sign in, then return to this poll link. You will be added to the group automatically and can respond while the poll is live."
+                        : "Sign up or sign in, then request access to the group. Once approved, return to this poll link and respond while the poll is live."}
+                    </p>
+                    <div className="inline-actions">
+                      <a className="button" href={signUpPath}>Sign up</a>
+                      <a className="button-secondary" href={signInPath}>Already registered? Sign in</a>
+                    </div>
+                  </div>
+                ) : payload.access?.requestStatus === "pending" ? (
+                  <p className="muted-text">Your group access request is pending approval.</p>
+                ) : (
+                  <div className="form-stack">
+                    <p className="muted-text">
+                      {payload.access?.group?.inviteJoinMode === "automatic"
+                        ? "We are adding you to the assigned group automatically. If this message stays here, refresh once."
+                        : "Join the assigned group before responding to this poll. Once approved, come back to this link while the poll is live."}
+                    </p>
+                    <div className="inline-actions">
+                      <button
+                        className="button"
+                        disabled={!payload.access?.canRequestAccess || isSubmitting || payload.access?.group?.inviteJoinMode === "automatic"}
+                        type="button"
+                        onClick={() => void requestPollAccess()}
+                      >
+                        {isSubmitting
+                          ? payload.access?.group?.inviteJoinMode === "automatic"
+                            ? "Joining..."
+                            : "Sending request..."
+                          : payload.access?.group?.inviteJoinMode === "automatic"
+                            ? "Joining automatically"
+                            : payload.access?.requestStatus === "rejected"
+                              ? "Request access again"
+                              : "Request access"}
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
             ) : null}
@@ -512,9 +624,12 @@ function PollWorkspace({ loadPath, storageKey, submitPath }: PollWorkspaceProps)
 
 export function PublicPollWorkspace({ shareCode }: PublicPollWorkspaceProps) {
   const encodedShareCode = encodeURIComponent(shareCode);
+  const invitePath = `/poll/${encodedShareCode}`;
 
   return (
     <PollWorkspace
+      accessRequestPath={`/api/public/polls/${encodedShareCode}`}
+      invitePath={invitePath}
       loadPath={`/api/public/polls/${encodedShareCode}`}
       storageKey={`trapit-public-poll:${shareCode}:guest-id`}
       submitPath={`/api/public/polls/${encodedShareCode}/attempt`}

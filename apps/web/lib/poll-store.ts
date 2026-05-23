@@ -358,8 +358,14 @@ export async function createScheduledPollInBackend(input: CreateScheduledPollInp
     }
   }
 
-  if (input.participantType === "registered" && !dedupe(input.participantGroupIds).length) {
-    throw new Error("Select at least one group when sharing a poll with groups.");
+  const participantGroupIds = dedupe(input.participantGroupIds);
+
+  if (!participantGroupIds.length) {
+    throw new Error("Select at least one group for this poll.");
+  }
+
+  if (input.generateQrCode && input.participantType === "registered" && participantGroupIds.length !== 1) {
+    throw new Error("Group-member poll links require exactly one selected group.");
   }
 
   const startsAtMs = new Date(input.startsAt).getTime();
@@ -383,7 +389,7 @@ export async function createScheduledPollInBackend(input: CreateScheduledPollInp
     throw new Error("Poll topic is required.");
   }
 
-  const anonymous = input.participantType === "open" ? true : input.anonymous;
+  const anonymous = input.generateQrCode && input.participantType === "open" ? true : input.anonymous;
   const timestamp = new Date().toISOString();
   const scheduledPoll: ScheduledPoll = {
     anonymous,
@@ -394,10 +400,10 @@ export async function createScheduledPollInBackend(input: CreateScheduledPollInp
     creatorIdentifier: input.creatorIdentifier?.trim() || null,
     endsAt: input.endsAt,
     id: createEntityId("poll"),
-    participantGroupIds: dedupe(input.participantGroupIds),
+    participantGroupIds,
     participantType: input.participantType,
     questionIds,
-    shareCode: input.participantType === "open"
+    shareCode: input.generateQrCode
       ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
       : null,
     startsAt: input.startsAt,
@@ -448,8 +454,14 @@ export async function updateScheduledPollInBackend(input: UpdateScheduledPollInp
     }
   }
 
-  if (input.participantType === "registered" && !dedupe(input.participantGroupIds).length) {
-    throw new Error("Select at least one group when sharing a poll with groups.");
+  const participantGroupIds = dedupe(input.participantGroupIds);
+
+  if (!participantGroupIds.length) {
+    throw new Error("Select at least one group for this poll.");
+  }
+
+  if (input.generateQrCode && input.participantType === "registered" && participantGroupIds.length !== 1) {
+    throw new Error("Group-member poll links require exactly one selected group.");
   }
 
   const startsAtMs = new Date(input.startsAt).getTime();
@@ -473,7 +485,7 @@ export async function updateScheduledPollInBackend(input: UpdateScheduledPollInp
     throw new Error("Poll topic is required.");
   }
 
-  const anonymous = input.participantType === "open" ? true : input.anonymous;
+  const anonymous = input.generateQrCode && input.participantType === "open" ? true : input.anonymous;
   const nextPoll: ScheduledPoll = {
     ...existingPoll,
     anonymous,
@@ -481,10 +493,10 @@ export async function updateScheduledPollInBackend(input: UpdateScheduledPollInp
     creatorDisplayName: input.creatorDisplayName?.trim() || existingPoll.creatorDisplayName || null,
     creatorIdentifier: input.creatorIdentifier?.trim() || existingPoll.creatorIdentifier || null,
     endsAt: input.endsAt,
-    participantGroupIds: dedupe(input.participantGroupIds),
+    participantGroupIds,
     participantType: input.participantType,
     questionIds,
-    shareCode: input.participantType === "open"
+    shareCode: input.generateQrCode
       ? existingPoll.shareCode ?? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
       : null,
     startsAt: input.startsAt,
@@ -544,10 +556,6 @@ export async function recordPollAttemptInBackend(input: {
 
   if (!poll) {
     throw new Error("The selected poll could not be found.");
-  }
-
-  if (poll.participantType !== "open") {
-    throw new Error("This poll is not available through a public QR code.");
   }
 
   if (poll.status === "scheduled") {

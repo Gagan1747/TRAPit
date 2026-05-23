@@ -72,6 +72,7 @@ export async function POST(
       answers: body.answers,
       completedAt: body.completedAt,
       participantName: body.participantName,
+      isRegistered: Boolean(actor?.isRegistered),
       shareCode: context.params.shareCode,
       startedAt: body.startedAt,
       userId,

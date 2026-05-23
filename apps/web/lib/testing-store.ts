@@ -1038,8 +1038,14 @@ export async function createScheduledPoll(input: {
           ensureActorOwnsPollQuestion(state, questionId, input.createdBy);
         }
 
-        if (input.participantType === "registered" && !dedupe(input.participantGroupIds).length) {
-          throw new Error("Select at least one group when sharing a poll with groups.");
+        const participantGroupIds = dedupe(input.participantGroupIds);
+
+        if (!participantGroupIds.length) {
+          throw new Error("Select at least one group for this poll.");
+        }
+
+        if (input.generateQrCode && input.participantType === "registered" && participantGroupIds.length !== 1) {
+          throw new Error("Group-member poll links require exactly one selected group.");
         }
 
         const startsAtMs = new Date(input.startsAt).getTime();
@@ -1063,9 +1069,9 @@ export async function createScheduledPoll(input: {
           throw new Error("Poll topic is required.");
         }
 
-        const anonymous = input.participantType === "open" ? true : input.anonymous;
+        const anonymous = input.generateQrCode && input.participantType === "open" ? true : input.anonymous;
         const timestamp = new Date().toISOString();
-        const shareCode = input.participantType === "open"
+        const shareCode = input.generateQrCode
           ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
           : null;
         const scheduledPoll: ScheduledPoll = {
@@ -1077,7 +1083,7 @@ export async function createScheduledPoll(input: {
           creatorIdentifier: input.creatorIdentifier?.trim() || null,
           endsAt: input.endsAt,
           id: createEntityId("poll"),
-          participantGroupIds: dedupe(input.participantGroupIds),
+          participantGroupIds,
           participantType: input.participantType,
           questionIds,
           shareCode,
@@ -1106,8 +1112,14 @@ export async function createScheduledPoll(input: {
     ensureActorOwnsPollQuestion(state, questionId, input.createdBy);
   }
 
-  if (input.participantType === "registered" && !dedupe(input.participantGroupIds).length) {
-    throw new Error("Select at least one group when sharing a poll with groups.");
+  const participantGroupIds = dedupe(input.participantGroupIds);
+
+  if (!participantGroupIds.length) {
+    throw new Error("Select at least one group for this poll.");
+  }
+
+  if (input.generateQrCode && input.participantType === "registered" && participantGroupIds.length !== 1) {
+    throw new Error("Group-member poll links require exactly one selected group.");
   }
 
   const startsAtMs = new Date(input.startsAt).getTime();
@@ -1131,9 +1143,9 @@ export async function createScheduledPoll(input: {
     throw new Error("Poll topic is required.");
   }
 
-  const anonymous = input.participantType === "open" ? true : input.anonymous;
+  const anonymous = input.generateQrCode && input.participantType === "open" ? true : input.anonymous;
   const timestamp = new Date().toISOString();
-  const shareCode = input.participantType === "open"
+  const shareCode = input.generateQrCode
     ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
     : null;
   const scheduledPoll: ScheduledPoll = {
@@ -1145,7 +1157,7 @@ export async function createScheduledPoll(input: {
     creatorIdentifier: input.creatorIdentifier?.trim() || null,
     endsAt: input.endsAt,
     id: createEntityId("poll"),
-    participantGroupIds: dedupe(input.participantGroupIds),
+    participantGroupIds,
     participantType: input.participantType,
     questionIds,
     shareCode,
@@ -1197,8 +1209,14 @@ export async function updateScheduledPoll(input: {
           ensureActorOwnsPollQuestion(state, questionId, input.createdBy);
         }
 
-        if (input.participantType === "registered" && !dedupe(input.participantGroupIds).length) {
-          throw new Error("Select at least one group when sharing a poll with groups.");
+        const participantGroupIds = dedupe(input.participantGroupIds);
+
+        if (!participantGroupIds.length) {
+          throw new Error("Select at least one group for this poll.");
+        }
+
+        if (input.generateQrCode && input.participantType === "registered" && participantGroupIds.length !== 1) {
+          throw new Error("Group-member poll links require exactly one selected group.");
         }
 
         const startsAtMs = new Date(input.startsAt).getTime();
@@ -1217,7 +1235,7 @@ export async function updateScheduledPoll(input: {
         }
 
         const timestamp = new Date().toISOString();
-        const anonymous = input.participantType === "open" ? true : input.anonymous;
+        const anonymous = input.generateQrCode && input.participantType === "open" ? true : input.anonymous;
 
         state.scheduledPolls = state.scheduledPolls.map((poll) =>
           poll.id === input.pollId
@@ -1228,13 +1246,11 @@ export async function updateScheduledPoll(input: {
                 creatorDisplayName: input.creatorDisplayName?.trim() || poll.creatorDisplayName || null,
                 creatorIdentifier: input.creatorIdentifier?.trim() || poll.creatorIdentifier || null,
                 endsAt: input.endsAt,
-                participantGroupIds: dedupe(input.participantGroupIds),
+                participantGroupIds,
                 participantType: input.participantType,
                 questionIds,
-                shareCode: input.participantType === "open"
-                  ? poll.shareCode ?? (input.generateQrCode
-                    ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
-                    : null)
+                shareCode: input.generateQrCode
+                  ? poll.shareCode ?? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
                   : null,
                 startsAt: input.startsAt,
                 title: input.title.trim(),
@@ -1267,8 +1283,14 @@ export async function updateScheduledPoll(input: {
     ensureActorOwnsPollQuestion(state, questionId, input.createdBy);
   }
 
-  if (input.participantType === "registered" && !dedupe(input.participantGroupIds).length) {
-    throw new Error("Select at least one group when sharing a poll with groups.");
+  const participantGroupIds = dedupe(input.participantGroupIds);
+
+  if (!participantGroupIds.length) {
+    throw new Error("Select at least one group for this poll.");
+  }
+
+  if (input.generateQrCode && input.participantType === "registered" && participantGroupIds.length !== 1) {
+    throw new Error("Group-member poll links require exactly one selected group.");
   }
 
   const startsAtMs = new Date(input.startsAt).getTime();
@@ -1287,7 +1309,7 @@ export async function updateScheduledPoll(input: {
   }
 
   const timestamp = new Date().toISOString();
-  const anonymous = input.participantType === "open" ? true : input.anonymous;
+  const anonymous = input.generateQrCode && input.participantType === "open" ? true : input.anonymous;
 
   state.scheduledPolls = state.scheduledPolls.map((poll) =>
     poll.id === input.pollId
@@ -1298,13 +1320,11 @@ export async function updateScheduledPoll(input: {
           creatorDisplayName: input.creatorDisplayName?.trim() || poll.creatorDisplayName || null,
           creatorIdentifier: input.creatorIdentifier?.trim() || poll.creatorIdentifier || null,
           endsAt: input.endsAt,
-          participantGroupIds: dedupe(input.participantGroupIds),
+          participantGroupIds,
           participantType: input.participantType,
           questionIds,
-          shareCode: input.participantType === "open"
-            ? poll.shareCode ?? (input.generateQrCode
-              ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
-              : null)
+          shareCode: input.generateQrCode
+            ? poll.shareCode ?? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
             : null,
           startsAt: input.startsAt,
           title: input.title.trim(),
@@ -1804,6 +1824,67 @@ export async function requestParticipantGroupAccessByShareCode(input: {
   };
 }
 
+export async function requestScheduledPollAccessByShareCode(input: {
+  requesterId: string;
+  requesterLabel: string;
+  shareCode: string;
+}) {
+  const state = await readStore();
+  const normalizedShareCode = input.shareCode.trim().toUpperCase();
+  const poll = hydrateScheduledPolls(state).find(
+    (entry) => entry.shareCode?.trim().toUpperCase() === normalizedShareCode,
+  );
+
+  if (!poll) {
+    throw new Error("This poll link is invalid or no longer available.");
+  }
+
+  if (poll.participantType !== "registered") {
+    throw new Error("This poll link is already open for all.");
+  }
+
+  const group = getPublicPollInviteGroup(state, poll);
+
+  if (!group) {
+    throw new Error("This poll link is not linked to exactly one group.");
+  }
+
+  const normalizedRequesterId = normalizeParticipantIdentifier(input.requesterId);
+  const participantMap = getParticipantMap(state);
+  const isExistingMember = group.participantIds.some((participantId) => {
+    const participant = participantMap.get(participantId);
+
+    return participant ? identifiersMatch(participant.identifier, normalizedRequesterId) : false;
+  });
+
+  if (isExistingMember) {
+    throw new Error("You are already part of this group.");
+  }
+
+  if (group.inviteJoinMode === "automatic") {
+    await addParticipantToGroup(state, {
+      groupId: group.id,
+      participantIdentifier: input.requesterId,
+      participantLabel: input.requesterLabel,
+    });
+    await writeStore(state);
+
+    return {
+      mode: "automatic" as const,
+    };
+  }
+
+  await createGroupJoinRequest({
+    adminGroupId: group.id,
+    requesterId: input.requesterId,
+    requesterLabel: input.requesterLabel,
+  });
+
+  return {
+    mode: "approval-required" as const,
+  };
+}
+
 export async function resolveGroupJoinRequest(input: {
   adminIdentifier: string;
   decision: "accept" | "reject";
@@ -1953,7 +2034,6 @@ export async function createScheduledTest(input: {
   createdBy: string | null;
   durationMinutes: number;
   generateInviteLink?: boolean;
-  inviteJoinMode?: ScheduledTest["inviteJoinMode"];
   participantGroupIds: string[];
   participantIds: string[];
   poolId: string;
@@ -1983,9 +2063,16 @@ export async function createScheduledTest(input: {
   }
 
   const participantGroupIds = dedupe(input.participantGroupIds);
+  const inviteGroup = participantGroupIds.length === 1
+    ? state.participantGroups.find((group) => group.id === participantGroupIds[0]) ?? null
+    : null;
 
   if (input.generateInviteLink && participantGroupIds.length !== 1) {
     throw new Error("Invite links can be generated only when exactly one group is selected.");
+  }
+
+  if (input.generateInviteLink && !inviteGroup) {
+    throw new Error("The selected group could not be found.");
   }
 
   const timestamp = new Date().toISOString();
@@ -1996,7 +2083,7 @@ export async function createScheduledTest(input: {
     createdBy: input.createdBy,
     durationMinutes: input.durationMinutes,
     id: createEntityId("test"),
-    inviteJoinMode: input.inviteJoinMode ?? "approval-required",
+    inviteJoinMode: inviteGroup?.inviteJoinMode ?? "approval-required",
     participantGroupIds,
     participantIds: dedupe(input.participantIds),
     poolId: input.poolId,
@@ -2028,7 +2115,6 @@ export async function updateScheduledTest(input: {
   createdBy: string | null;
   durationMinutes: number;
   generateInviteLink?: boolean;
-  inviteJoinMode?: ScheduledTest["inviteJoinMode"];
   participantGroupIds: string[];
   participantIds: string[];
   poolId: string;
@@ -2064,9 +2150,16 @@ export async function updateScheduledTest(input: {
   }
 
   const participantGroupIds = dedupe(input.participantGroupIds);
+  const inviteGroup = participantGroupIds.length === 1
+    ? state.participantGroups.find((group) => group.id === participantGroupIds[0]) ?? null
+    : null;
 
   if (input.generateInviteLink && participantGroupIds.length !== 1) {
     throw new Error("Invite links can be generated only when exactly one group is selected.");
+  }
+
+  if (input.generateInviteLink && !inviteGroup) {
+    throw new Error("The selected group could not be found.");
   }
 
   const timestamp = new Date().toISOString();
@@ -2078,7 +2171,7 @@ export async function updateScheduledTest(input: {
           ...scheduledTest,
           branding: normalizeWorkspaceBranding(input.branding) ?? scheduledTest.branding ?? null,
           durationMinutes: input.durationMinutes,
-          inviteJoinMode: input.inviteJoinMode ?? scheduledTest.inviteJoinMode ?? "approval-required",
+          inviteJoinMode: inviteGroup?.inviteJoinMode ?? scheduledTest.inviteJoinMode ?? "approval-required",
           participantGroupIds,
           participantIds: dedupe(input.participantIds),
           poolId: input.poolId,
@@ -2299,7 +2392,7 @@ export async function listAvailablePollsForParticipant(identifier: string): Prom
 
   return scheduledPolls
     .filter((poll) => {
-      if (poll.participantType === "registered") {
+      if (poll.participantGroupIds.some((groupId) => participantGroupIds.has(groupId))) {
         return poll.participantGroupIds.some((groupId) => participantGroupIds.has(groupId));
       }
 
@@ -2331,15 +2424,11 @@ function getParticipantGroupIdsForIdentifier(state: TestingWorkspaceState, norma
   );
 }
 
-function canAccessRegisteredPoll(
+function canAccessGroupSharedPoll(
   state: TestingWorkspaceState,
   poll: ScheduledPoll,
   normalizedIdentifier: string,
 ) {
-  if (poll.participantType !== "registered") {
-    return false;
-  }
-
   if (poll.creatorIdentifier && identifiersMatch(poll.creatorIdentifier, normalizedIdentifier)) {
     return true;
   }
@@ -2347,6 +2436,86 @@ function canAccessRegisteredPoll(
   const participantGroupIds = getParticipantGroupIdsForIdentifier(state, normalizedIdentifier);
 
   return poll.participantGroupIds.some((groupId) => participantGroupIds.has(groupId));
+}
+
+function getPublicPollInviteGroup(state: TestingWorkspaceState, poll: ScheduledPoll) {
+  if (poll.participantType !== "registered" || poll.participantGroupIds.length !== 1) {
+    return null;
+  }
+
+  return state.participantGroups.find((group) => group.id === poll.participantGroupIds[0]) ?? null;
+}
+
+function getPublicPollAccess(
+  state: TestingWorkspaceState,
+  poll: ScheduledPoll,
+  viewer?: {
+    identifier?: string | null;
+    sub?: string | null;
+  },
+) {
+  const isCreator = Boolean(
+    (viewer?.sub && poll.createdBy && viewer.sub === poll.createdBy)
+    || (viewer?.identifier && poll.creatorIdentifier && identifiersMatch(poll.creatorIdentifier, viewer.identifier)),
+  );
+
+  if (poll.participantType === "open") {
+    return {
+      canRequestAccess: false,
+      canRespond: true,
+      group: null,
+      isGroupMember: false,
+      requestStatus: null,
+    };
+  }
+
+  const group = getPublicPollInviteGroup(state, poll);
+
+  if (!group) {
+    return {
+      canRequestAccess: false,
+      canRespond: isCreator,
+      group: null,
+      isGroupMember: false,
+      requestStatus: null,
+    };
+  }
+
+  const normalizedViewerIdentifier = viewer?.identifier?.trim()
+    ? normalizeParticipantIdentifier(viewer.identifier)
+    : null;
+  const participantMap = getParticipantMap(state);
+  const isGroupMember = normalizedViewerIdentifier
+    ? group.participantIds.some((participantId) => {
+        const participant = participantMap.get(participantId);
+
+        return participant
+          ? identifiersMatch(participant.identifier, normalizedViewerIdentifier)
+          : false;
+      })
+    : false;
+  const latestRequest = normalizedViewerIdentifier
+    ? state.groupJoinRequests.find(
+        (request) =>
+          request.adminGroupId === group.id
+          && identifiersMatch(request.requesterId, normalizedViewerIdentifier),
+      ) ?? null
+    : null;
+
+  return {
+    canRequestAccess: Boolean(normalizedViewerIdentifier) && !isCreator && !isGroupMember && latestRequest?.status !== "pending",
+    canRespond: isCreator || isGroupMember,
+    group: {
+      description: group.description,
+      id: group.id,
+      inviteJoinMode: group.inviteJoinMode,
+      name: group.name,
+      ownerIdentifier: group.ownerIdentifier,
+      shareCode: group.shareCode,
+    },
+    isGroupMember,
+    requestStatus: isCreator ? "accepted" : isGroupMember ? "accepted" : latestRequest?.status ?? null,
+  };
 }
 
 function buildParticipantPollSummary(input: {
@@ -2398,7 +2567,7 @@ export async function getParticipantPollById(pollId: string, identifier: string)
       throw new Error("The selected poll could not be found.");
     }
 
-    if (!canAccessRegisteredPoll(state, poll, normalizedIdentifier)) {
+    if (!canAccessGroupSharedPoll(state, poll, normalizedIdentifier)) {
       throw new Error("You do not have access to this poll.");
     }
 
@@ -2431,7 +2600,7 @@ export async function getParticipantPollById(pollId: string, identifier: string)
     throw new Error("The selected poll could not be found.");
   }
 
-  if (!canAccessRegisteredPoll(state, poll, normalizedIdentifier)) {
+  if (!canAccessGroupSharedPoll(state, poll, normalizedIdentifier)) {
     throw new Error("You do not have access to this poll.");
   }
 
@@ -2449,6 +2618,63 @@ export async function getParticipantPollById(pollId: string, identifier: string)
   });
 }
 
+function applyPublicPollAccessToPayload(
+  state: TestingWorkspaceState,
+  payload: {
+    canViewResults: boolean;
+    hasSubmitted: boolean;
+    poll: ScheduledPoll;
+    questions: PersistentPollQuestion[];
+    summary: Array<{
+      optionSelectionCounts: number[];
+      options: string[];
+      prompt: string;
+      questionId: string;
+      topic: string;
+      totalResponses: number;
+    }>;
+    totalResponses: number | null;
+  },
+  viewer?: {
+    identifier?: string | null;
+    isRegistered?: boolean;
+    responseUserId?: string | null;
+    sub?: string | null;
+  },
+) {
+  const access = getPublicPollAccess(state, payload.poll, viewer);
+  const canViewQuestions = access.canRespond || payload.hasSubmitted || payload.canViewResults || payload.poll.participantType === "open";
+
+  return {
+    ...payload,
+    access,
+    questions: canViewQuestions ? payload.questions : [],
+  };
+}
+
+function ensureCanSubmitPublicPoll(
+  state: TestingWorkspaceState,
+  poll: ScheduledPoll,
+  input: {
+    isRegistered?: boolean;
+    userId: string;
+  },
+) {
+  if (poll.participantType === "open") {
+    return;
+  }
+
+  if (!input.isRegistered) {
+    throw new Error("Sign in and join the assigned group before responding to this poll.");
+  }
+
+  const normalizedUserId = normalizeParticipantIdentifier(input.userId);
+
+  if (!canAccessGroupSharedPoll(state, poll, normalizedUserId)) {
+    throw new Error("Join the assigned group before responding to this poll.");
+  }
+}
+
 export async function getPollByShareCode(
   shareCode: string,
   viewer?: {
@@ -2458,11 +2684,11 @@ export async function getPollByShareCode(
     sub?: string | null;
   },
 ) {
-  if (isDynamoDbPollStoreEnabled()) {
-    return withPollStoreFallback(
+  const state = await readStore();
+  const payload = isDynamoDbPollStoreEnabled()
+    ? await withPollStoreFallback(
       () => getPollByShareCodeFromBackend(shareCode, viewer),
       async () => {
-        const state = await readStore();
         const normalizedShareCode = shareCode.trim().toUpperCase();
         const poll = hydrateScheduledPolls(state).find(
           (entry) => entry.shareCode?.trim().toUpperCase() === normalizedShareCode,
@@ -2483,21 +2709,17 @@ export async function getPollByShareCode(
           : false;
         const isCreator = Boolean(viewer?.sub && poll.createdBy && viewer.sub === poll.createdBy);
         const canViewResults = isCreator || Boolean(viewer?.isRegistered && hasSubmitted);
-        const summary = questions.map((question) => {
-          const optionSelectionCounts = question.options.map(
+        const summary = questions.map((question) => ({
+          optionSelectionCounts: question.options.map(
             (_, optionIndex) =>
               attempts.filter((attempt) => attempt.answers[question.id] === optionIndex).length,
-          );
-
-          return {
-            optionSelectionCounts,
-            options: question.options,
-            prompt: question.prompt,
-            questionId: question.id,
-            topic: question.topic,
-            totalResponses: attempts.length,
-          };
-        });
+          ),
+          options: question.options,
+          prompt: question.prompt,
+          questionId: question.id,
+          topic: question.topic,
+          totalResponses: attempts.length,
+        }));
 
         return {
           canViewResults,
@@ -2508,71 +2730,81 @@ export async function getPollByShareCode(
           totalResponses: attempts.length,
         };
       },
-    );
-  }
+    )
+    : await (async () => {
+      const normalizedShareCode = shareCode.trim().toUpperCase();
+      const poll = hydrateScheduledPolls(state).find(
+        (entry) => entry.shareCode?.trim().toUpperCase() === normalizedShareCode,
+      );
 
-  const state = await readStore();
-  const normalizedShareCode = shareCode.trim().toUpperCase();
-  const poll = hydrateScheduledPolls(state).find(
-    (entry) => entry.shareCode?.trim().toUpperCase() === normalizedShareCode,
-  );
+      if (!poll) {
+        throw new Error("The selected poll could not be found.");
+      }
 
-  if (!poll) {
-    throw new Error("The selected poll could not be found.");
-  }
+      const questionMap = new Map(state.pollQuestions.map((question) => [question.id, question]));
+      const questions = poll.questionIds
+        .map((questionId) => questionMap.get(questionId))
+        .filter((question): question is PersistentPollQuestion => Boolean(question));
+      const attempts = state.pollAttempts.filter((attempt) => attempt.pollId === poll.id);
+      const viewerResponseUserId = viewer?.responseUserId ?? null;
+      const hasSubmitted = viewerResponseUserId
+        ? attempts.some((attempt) => identifiersMatch(attempt.userId, viewerResponseUserId))
+        : false;
+      const isCreator = Boolean(viewer?.sub && poll.createdBy && viewer.sub === poll.createdBy);
+      const canViewResults = isCreator || Boolean(viewer?.isRegistered && hasSubmitted);
+      const summary = questions.map((question) => ({
+        optionSelectionCounts: question.options.map(
+          (_, optionIndex) =>
+            attempts.filter((attempt) => attempt.answers[question.id] === optionIndex).length,
+        ),
+        options: question.options,
+        prompt: question.prompt,
+        questionId: question.id,
+        topic: question.topic,
+        totalResponses: attempts.length,
+      }));
 
-  const questionMap = new Map(state.pollQuestions.map((question) => [question.id, question]));
-  const questions = poll.questionIds
-    .map((questionId) => questionMap.get(questionId))
-    .filter((question): question is PersistentPollQuestion => Boolean(question));
-  const attempts = state.pollAttempts.filter((attempt) => attempt.pollId === poll.id);
-  const viewerResponseUserId = viewer?.responseUserId ?? null;
-  const hasSubmitted = viewerResponseUserId
-    ? attempts.some((attempt) => identifiersMatch(attempt.userId, viewerResponseUserId))
-    : false;
-  const isCreator = Boolean(viewer?.sub && poll.createdBy && viewer.sub === poll.createdBy);
-  const canViewResults = isCreator || Boolean(viewer?.isRegistered && hasSubmitted);
-  const summary = questions.map((question) => {
-    const optionSelectionCounts = question.options.map(
-      (_, optionIndex) =>
-        attempts.filter((attempt) => attempt.answers[question.id] === optionIndex).length,
-    );
+      return {
+        canViewResults,
+        poll,
+        questions,
+        hasSubmitted,
+        summary: canViewResults ? summary : [],
+        totalResponses: attempts.length,
+      };
+    })();
 
-    return {
-      optionSelectionCounts,
-      options: question.options,
-      prompt: question.prompt,
-      questionId: question.id,
-      topic: question.topic,
-      totalResponses: attempts.length,
-    };
-  });
-
-  return {
-    canViewResults,
-    poll,
-    questions,
-    hasSubmitted,
-    summary: canViewResults ? summary : [],
-    totalResponses: attempts.length,
-  };
+  return applyPublicPollAccessToPayload(state, payload, viewer);
 }
 
 export async function recordPollAttempt(input: {
   answers: Record<string, number | undefined>;
   completedAt: string;
+  isRegistered?: boolean;
   participantName?: string;
   shareCode: string;
   startedAt: string;
   userId: string;
 }) {
   if (isDynamoDbPollStoreEnabled()) {
+    const state = await readStore();
+    const normalizedShareCode = input.shareCode.trim().toUpperCase();
+    const scheduledPolls = await withPollStoreFallback(
+      () => listAllScheduledPollsFromBackend(),
+      async () => hydrateScheduledPolls(state),
+    );
+    const poll = scheduledPolls.find((entry) => entry.shareCode?.trim().toUpperCase() === normalizedShareCode);
+
+    if (!poll) {
+      throw new Error("The selected poll could not be found.");
+    }
+
+    ensureCanSubmitPublicPoll(state, poll, input);
+
     return withPollStoreFallback(
       () => recordPollAttemptInBackend(input),
       async () => {
-        const state = await readStore();
         const normalizedUserId = normalizeParticipantIdentifier(input.userId);
-        const normalizedShareCode = input.shareCode.trim().toUpperCase();
         const poll = hydrateScheduledPolls(state).find(
           (entry) => entry.shareCode?.trim().toUpperCase() === normalizedShareCode,
         );
@@ -2581,9 +2813,7 @@ export async function recordPollAttempt(input: {
           throw new Error("The selected poll could not be found.");
         }
 
-        if (poll.participantType !== "open") {
-          throw new Error("This poll is not available through a public QR code.");
-        }
+        ensureCanSubmitPublicPoll(state, poll, input);
 
         if (poll.status === "scheduled") {
           throw new Error("This poll is not live yet.");
@@ -2664,9 +2894,7 @@ export async function recordPollAttempt(input: {
     throw new Error("The selected poll could not be found.");
   }
 
-  if (poll.participantType !== "open") {
-    throw new Error("This poll is not available through a public QR code.");
-  }
+  ensureCanSubmitPublicPoll(state, poll, input);
 
   if (poll.status === "scheduled") {
     throw new Error("This poll is not live yet.");
@@ -2749,7 +2977,7 @@ export async function recordParticipantPollAttempt(input: {
       throw new Error("The selected poll could not be found.");
     }
 
-    if (!canAccessRegisteredPoll(state, poll, normalizedUserId)) {
+    if (!canAccessGroupSharedPoll(state, poll, normalizedUserId)) {
       throw new Error("You do not have access to this poll.");
     }
 
@@ -2772,10 +3000,6 @@ export async function recordParticipantPollAttempt(input: {
         const completedAtMs = new Date(input.completedAt).getTime();
         const startsAtMs = new Date(poll.startsAt).getTime();
         const endsAtMs = new Date(poll.endsAt).getTime();
-
-        if (poll.participantType !== "registered") {
-          throw new Error("This poll is available through the public poll page.");
-        }
 
         if (poll.status === "scheduled") {
           throw new Error("This poll is not live yet.");
@@ -2832,12 +3056,8 @@ export async function recordParticipantPollAttempt(input: {
     throw new Error("The selected poll could not be found.");
   }
 
-  if (!canAccessRegisteredPoll(state, poll, normalizedUserId)) {
+  if (!canAccessGroupSharedPoll(state, poll, normalizedUserId)) {
     throw new Error("You do not have access to this poll.");
-  }
-
-  if (poll.participantType !== "registered") {
-    throw new Error("This poll is available through the public poll page.");
   }
 
   if (poll.status === "scheduled") {
@@ -3089,13 +3309,14 @@ export async function getScheduledTestInviteByShareCode(
     group: {
       description: group.description,
       id: group.id,
+      inviteJoinMode: group.inviteJoinMode,
       name: group.name,
       ownerIdentifier: group.ownerIdentifier,
     },
     test: {
       durationMinutes: scheduledTest.durationMinutes,
       id: scheduledTest.id,
-      inviteJoinMode: scheduledTest.inviteJoinMode,
+      inviteJoinMode: group.inviteJoinMode,
       questionCount: scheduledTest.questionCount,
       shareCode: scheduledTest.shareCode,
       startsAt: scheduledTest.startsAt,
@@ -3169,7 +3390,7 @@ export async function requestScheduledTestAccessByShareCode(input: {
     throw new Error("You are already part of this group.");
   }
 
-  if (invite.test.inviteJoinMode === "automatic") {
+  if (invite.group.inviteJoinMode === "automatic") {
     await addParticipantToGroup(state, {
       groupId: invite.group.id,
       participantIdentifier: input.requesterId,
