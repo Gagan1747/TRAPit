@@ -1008,10 +1008,6 @@ export function AdminQuestionWorkspace({
       setCategorySnapshot(categorySnapshotPayload);
       setCategoryManagement(categoryManagementPayload);
 
-      if (!schedulePoolId && poolsPayload.pools.length) {
-        setSchedulePoolId(poolsPayload.pools[0].id);
-      }
-
       if (!selfTestPoolId && poolsPayload.pools.length) {
         setSelfTestPoolId(poolsPayload.pools[0].id);
       }
@@ -1242,6 +1238,7 @@ export function AdminQuestionWorkspace({
 
   function resetScheduledTestForm() {
     setEditingScheduledTestId(null);
+    setSchedulePoolId("");
     setScheduleDurationMinutes("30");
     setScheduleGenerateInviteLink(false);
     setScheduleParticipantGroupIds([]);
@@ -2099,7 +2096,6 @@ export function AdminQuestionWorkspace({
 
       if (newestPool) {
         setAuthorPoolId(newestPool.id);
-        setSchedulePoolId(newestPool.id);
       }
 
       setPoolFeedback("Pool created.");
@@ -5447,16 +5443,6 @@ export function AdminQuestionWorkspace({
                           <span className="status-chip success">{scopeLabel}</span>
                         </div>
                       </div>
-                      <p className="muted-text">Test date and time: {formatShortDateTime(test.startsAt)} | Duration: {test.durationMinutes} min</p>
-                      {test.hasAdminScope ? (
-                        <p className="muted-text">Question pool: {scheduledTestPoolName} | Questions: {test.questionCount}</p>
-                      ) : test.hasParticipantScope ? (
-                        <p className="muted-text">Groups/classes: {scheduledTestGroupLabel} | Questions: {test.questionCount}</p>
-                      ) : null}
-                      {test.hasAdminScope ? (
-                        <p className="muted-text">Groups/classes: {scheduledTestGroupLabel} | Submitted responses: {submittedResponsesLabel ?? "0"}</p>
-                      ) : null}
-
                       {scheduledTest && leaderboard ? (
                         leaderboard.entries.length ? (
                           <div className="leaderboard-table-wrap">
@@ -5528,6 +5514,15 @@ export function AdminQuestionWorkspace({
 
                       {!isTestResultCollapsed ? (
                         <>
+                          <p className="muted-text">Test date and time: {formatShortDateTime(test.startsAt)} | Duration: {test.durationMinutes} min</p>
+                          {test.hasAdminScope ? (
+                            <p className="muted-text">Question pool: {scheduledTestPoolName} | Questions: {test.questionCount}</p>
+                          ) : test.hasParticipantScope ? (
+                            <p className="muted-text">Groups/classes: {scheduledTestGroupLabel} | Questions: {test.questionCount}</p>
+                          ) : null}
+                          {test.hasAdminScope ? (
+                            <p className="muted-text">Groups/classes: {scheduledTestGroupLabel} | Submitted responses: {submittedResponsesLabel ?? "0"}</p>
+                          ) : null}
                           {showScheduledTestAccessDetails ? (
                             <p className="muted-text">
                               Group join setting: {scheduledTest?.participantGroupIds.length === 1
