@@ -5481,11 +5481,11 @@ export function AdminQuestionWorkspace({
                                   type="button"
                                   onClick={() =>
                                     scheduledTestAccessUrl
-                                      ? void handleCopyLink(`scheduled-test-${scheduledTest.id}`, scheduledTestAccessUrl)
+                                      ? void handleCopyLink(`scheduled-test-${test.id}`, scheduledTestAccessUrl)
                                       : undefined
                                   }
                                 >
-                                  {copiedLinkKey === `scheduled-test-${scheduledTest.id}` ? "Copied" : "Copy link"}
+                                  {copiedLinkKey === `scheduled-test-${test.id}` ? "Copied" : "Copy link"}
                                 </button>
                               </div>
                               {scheduledTest && testQrCodes[scheduledTest.id] ? (
