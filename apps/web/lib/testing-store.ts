@@ -115,6 +115,7 @@ export type AvailableUserTest = {
   durationMinutes: number;
   hasAttempt: boolean;
   id: string;
+  participantGroupIds: string[];
   poolId: string;
   topPerformer?: {
     correctCount: number;
@@ -2319,6 +2320,7 @@ export async function listAvailableTestsForParticipant(
         attempt.testId === scheduledTest.id && identifiersMatch(attempt.userId, normalizedIdentifier),
     ),
     id: scheduledTest.id,
+    participantGroupIds: [...scheduledTest.participantGroupIds],
     poolId: scheduledTest.poolId,
     topPerformer: (() => {
       const topEntry = leaderboardByTestId.get(scheduledTest.id)?.entries[0];

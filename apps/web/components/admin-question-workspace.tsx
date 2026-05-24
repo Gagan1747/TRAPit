@@ -170,6 +170,7 @@ type UserDashboardResponse = {
     durationMinutes: number;
     hasAttempt: boolean;
     id: string;
+    participantGroupIds: string[];
     poolId: string;
     questionCount: number;
     questions: ObjectiveQuestion[];
@@ -5391,13 +5392,12 @@ export function AdminQuestionWorkspace({
                 const showScheduledParticipantList = Boolean(scheduledTest) && !leaderboard;
                 const isTestResultCollapsed = !collapsedTestResultIds.includes(test.id);
                 const scheduledTestPoolName = pools.find((pool) => pool.id === test.poolId)?.name ?? "Unknown pool";
-                const scheduledTestGroupLabel = scheduledTest
-                  ? (scheduledTest.participantGroupIds.length
-                    ? scheduledTest.participantGroupIds
+                const testGroupIds = scheduledTest?.participantGroupIds ?? participantTest?.participantGroupIds ?? [];
+                const scheduledTestGroupLabel = testGroupIds.length
+                  ? testGroupIds
                         .map((groupId) => participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group")
                         .join(", ")
-                    : "None")
-                  : "Not available";
+                  : "None";
                 const submittedResponsesLabel = scheduledTest
                   ? `${leaderboard?.submittedCount ?? 0}/${leaderboard?.assignedParticipantCount ?? scheduledTest.resolvedParticipantIdentifiers.length}`
                   : null;
