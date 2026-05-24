@@ -5205,7 +5205,7 @@ export function AdminQuestionWorkspace({
                         <button
                           className="button-secondary small-button"
                           type="button"
-                          onClick={() => void handleCopyLink(`scheduled-poll-${poll.id}`, getPollAccessUrl(poll.shareCode))}
+                          onClick={() => void handleCopyLink(`scheduled-poll-${poll.id}`, getPollAccessUrl(poll.shareCode ?? ""))}
                         >
                           {copiedLinkKey === `scheduled-poll-${poll.id}` ? "Copied" : "Copy link"}
                         </button>
