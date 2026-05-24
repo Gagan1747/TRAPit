@@ -5121,7 +5121,6 @@ export function AdminQuestionWorkspace({
                       <span>Poll link open for all</span>
                     </label>
                   </div>
-                  <p className="muted-text">Group-member poll links require exactly one selected group. Open-for-all poll links still keep this poll shared with the selected groups.</p>
                 </div>
               ) : null}
             </div>
@@ -5143,12 +5142,6 @@ export function AdminQuestionWorkspace({
                 <span>Collect responses anonymously</span>
               </label>
             </div>
-
-            {pollScheduleGenerateQrCode && pollScheduleParticipantType === "open" ? (
-              <p className="muted-text">
-                Open-for-all poll links are accessible through their URL or QR code and always collect anonymous responses, while the same poll also remains shared with the selected groups.
-              </p>
-            ) : null}
 
             {pollFeedback ? <p className="muted-text">{pollFeedback}</p> : null}
 
@@ -5384,9 +5377,6 @@ export function AdminQuestionWorkspace({
                         ),
                     )
                   : [];
-                const attemptsForTest = scheduledTest
-                  ? history.filter((entry) => entry.testId === scheduledTest.id)
-                  : [];
                 const scopeLabel =
                   test.hasAdminScope && test.hasParticipantScope
                     ? "Admin + participant"
@@ -5404,6 +5394,17 @@ export function AdminQuestionWorkspace({
                   && scheduledTest?.status !== "completed";
                 const showScheduledParticipantList = Boolean(scheduledTest) && !leaderboard;
                 const isTestResultCollapsed = !collapsedTestResultIds.includes(test.id);
+                const scheduledTestPoolName = pools.find((pool) => pool.id === test.poolId)?.name ?? "Unknown pool";
+                const scheduledTestGroupLabel = scheduledTest
+                  ? (scheduledTest.participantGroupIds.length
+                    ? scheduledTest.participantGroupIds
+                        .map((groupId) => participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group")
+                        .join(", ")
+                    : "None")
+                  : "Not available";
+                const submittedResponsesLabel = scheduledTest
+                  ? `${leaderboard?.submittedCount ?? 0}/${leaderboard?.assignedParticipantCount ?? scheduledTest.resolvedParticipantIdentifiers.length}`
+                  : null;
                 const participantResultName = participantHistoryEntry
                   ? formatResultParticipantName(
                     participantHistoryEntry.participantId,
@@ -5440,22 +5441,93 @@ export function AdminQuestionWorkspace({
                               Edit test
                             </button>
                           ) : null}
-                          {!isTestResultCollapsed ? <span className="status-chip success">{scopeLabel}</span> : null}
-                          {!isTestResultCollapsed ? (
-                            <span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>
-                              {test.status}
-                            </span>
-                          ) : null}
+                          <span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>
+                            {test.status}
+                          </span>
+                          <span className="status-chip success">{scopeLabel}</span>
                         </div>
                       </div>
+                      <p className="muted-text">Test date and time: {formatShortDateTime(test.startsAt)} | Duration: {test.durationMinutes} min</p>
+                      {test.hasAdminScope ? (
+                        <p className="muted-text">Question pool: {scheduledTestPoolName} | Questions: {test.questionCount}</p>
+                      ) : test.hasParticipantScope ? (
+                        <p className="muted-text">Groups/classes: {scheduledTestGroupLabel} | Questions: {test.questionCount}</p>
+                      ) : null}
+                      {test.hasAdminScope ? (
+                        <p className="muted-text">Groups/classes: {scheduledTestGroupLabel} | Submitted responses: {submittedResponsesLabel ?? "0"}</p>
+                      ) : null}
+
+                      {scheduledTest && leaderboard ? (
+                        leaderboard.entries.length ? (
+                          <div className="leaderboard-table-wrap">
+                            <table className="leaderboard-table">
+                              <thead>
+                                <tr>
+                                  <th>Rank</th>
+                                  <th>Participant</th>
+                                  <th>Marks</th>
+                                  <th>Incorrect</th>
+                                  <th>Time</th>
+                                  <th>Submitted</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {leaderboard.entries.map((entry) => (
+                                  <tr key={entry.attemptId}>
+                                    <td>{entry.rank}</td>
+                                    <td>{formatResultParticipantName(entry.participantId, entry.participantName, participants, isSuperAdmin)}</td>
+                                    <td>{entry.correctCount}/{entry.totalCount}</td>
+                                    <td>{entry.incorrectCount}</td>
+                                    <td>{formatElapsedTime(entry.elapsedMs)}</td>
+                                    <td>{formatShortDateTime(entry.completedAt)}</td>
+                                  </tr>
+                                ))}
+                                {absentParticipants.length ? (
+                                  <tr>
+                                    <td colSpan={6}>
+                                      <strong>Absent:</strong> {absentParticipants
+                                        .map((identifier) => formatParticipantName(identifier, participants, isSuperAdmin))
+                                        .join(", ")}
+                                    </td>
+                                  </tr>
+                                ) : null}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : scheduledTest.status === "completed" ? (
+                          <p className="muted-text">No submissions were recorded before this test closed.</p>
+                        ) : null
+                      ) : null}
+
+                      {participantTest && participantHistoryEntry && participantHistoryEntry.status !== "missed" && !scheduledTest ? (
+                        <div className="leaderboard-table-wrap">
+                          <table className="leaderboard-table">
+                            <thead>
+                              <tr>
+                                <th>Rank</th>
+                                <th>Participant</th>
+                                <th>Marks</th>
+                                <th>Incorrect</th>
+                                <th>Time</th>
+                                <th>Submitted</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr>
+                                <td>{summaryRank ?? "-"}</td>
+                                <td>{participantResultName}</td>
+                                <td>{participantHistoryEntry.correctCount}/{participantHistoryEntry.totalCount}</td>
+                                <td>{participantHistoryEntry.incorrectCount}</td>
+                                <td>{formatElapsedTime(participantHistoryEntry.elapsedMs)}</td>
+                                <td>{formatShortDateTime(participantHistoryEntry.completedAt)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : null}
+
                       {!isTestResultCollapsed ? (
                         <>
-                          <p className="muted-text">
-                            Pool: {pools.find((pool) => pool.id === test.poolId)?.name ?? "Unknown pool"}
-                          </p>
-                          <p className="muted-text">Starts: {formatShortDateTime(test.startsAt)}</p>
-                          <p className="muted-text">Duration: {test.durationMinutes} min</p>
-                          <p className="muted-text">Questions: {test.questionCount}</p>
                           {showScheduledTestAccessDetails ? (
                             <p className="muted-text">
                               Group join setting: {scheduledTest?.participantGroupIds.length === 1
@@ -5500,73 +5572,10 @@ export function AdminQuestionWorkspace({
                           </p>
                         ) : null}
 
-                        {leaderboard ? (
-                          <>
-                            {!isTestResultCollapsed ? (
-                              <p className="muted-text">
-                                Submitted: {leaderboard.submittedCount}/{leaderboard.assignedParticipantCount}
-                              </p>
-                            ) : null}
-                            {leaderboard.entries.length ? (
-                              <div className="leaderboard-table-wrap">
-                                <table className="leaderboard-table">
-                                  <thead>
-                                    <tr>
-                                      <th>Rank</th>
-                                      <th>Participant</th>
-                                      <th>Marks</th>
-                                      <th>Incorrect</th>
-                                      <th>Time</th>
-                                      <th>Submitted</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {leaderboard.entries.map((entry) => (
-                                      <tr key={entry.attemptId}>
-                                        <td>{entry.rank}</td>
-                                        <td>{formatResultParticipantName(entry.participantId, entry.participantName, participants, isSuperAdmin)}</td>
-                                        <td>{entry.correctCount}/{entry.totalCount}</td>
-                                        <td>{entry.incorrectCount}</td>
-                                        <td>{formatElapsedTime(entry.elapsedMs)}</td>
-                                        <td>{formatShortDateTime(entry.completedAt)}</td>
-                                      </tr>
-                                    ))}
-                                    {absentParticipants.length ? (
-                                      <tr>
-                                        <td colSpan={6}>
-                                          <strong>Absent:</strong> {absentParticipants
-                                            .map((identifier) => formatParticipantName(identifier, participants, isSuperAdmin))
-                                            .join(", ")}
-                                        </td>
-                                      </tr>
-                                    ) : null}
-                                  </tbody>
-                                </table>
-                              </div>
-                            ) : (
-                              <p className="muted-text">No submissions were recorded before this test closed.</p>
-                            )}
-                          </>
-                        ) : !isTestResultCollapsed && attemptsForTest.length ? (
-                          <div className="question-list">
-                            {attemptsForTest.map((entry) => (
-                              <article className="question-card nested-card" key={entry.attemptId}>
-                                <div className="question-head">
-                                  <strong>{formatResultParticipantName(entry.participantId, entry.participantName, participants)}</strong>
-                                  <span className="status-chip success">{entry.correctCount}/{entry.totalCount}</span>
-                                </div>
-                                <p className="muted-text">Incorrect: {entry.incorrectCount}</p>
-                                <p className="muted-text">Completed: {formatShortDateTime(entry.completedAt)}</p>
-                                <p className="muted-text">Elapsed time: {formatElapsedTime(entry.elapsedMs)}</p>
-                              </article>
-                            ))}
-                          </div>
-                        ) : !isTestResultCollapsed && scheduledTest.status === "scheduled" ? (
+                        {!isTestResultCollapsed && !leaderboard && scheduledTest.status === "scheduled" ? (
                           <p className="muted-text">This test has not started yet.</p>
-                        ) : !isTestResultCollapsed && scheduledTest.status === "live" ? (
+                        ) : !isTestResultCollapsed && !leaderboard && scheduledTest.status === "live" ? (
                           <p className="muted-text">This test is live. Results will appear here after the test duration is complete.</p>
-                        ) : !isTestResultCollapsed ? (
-                          <p className="muted-text">No submissions were recorded before this test closed.</p>
                         ) : null}
 
                         {!isTestResultCollapsed && scheduledTest.status === "completed" ? (
@@ -5615,41 +5624,12 @@ export function AdminQuestionWorkspace({
                       </div>
                     ) : null}
 
-                    {participantTest && participantHistoryEntry && participantHistoryEntry.status !== "missed" ? (
-                      <div className="leaderboard-table-wrap">
-                        <table className="leaderboard-table">
-                          <thead>
-                            <tr>
-                              <th>Rank</th>
-                              <th>Participant</th>
-                              <th>Marks</th>
-                              <th>Incorrect</th>
-                              <th>Time</th>
-                              <th>Submitted</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            <tr>
-                              <td>{summaryRank ?? "-"}</td>
-                              <td>{participantResultName}</td>
-                              <td>{participantHistoryEntry.correctCount}/{participantHistoryEntry.totalCount}</td>
-                              <td>{participantHistoryEntry.incorrectCount}</td>
-                              <td>{formatElapsedTime(participantHistoryEntry.elapsedMs)}</td>
-                              <td>{formatShortDateTime(participantHistoryEntry.completedAt)}</td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : null}
-
                     {!isTestResultCollapsed && participantTest ? (
                       <div className="form-stack">
                         {participantHistoryEntry ? (
                           participantHistoryEntry.status === "missed" ? (
                             <p className="muted-text">You were assigned to this test but did not submit before it closed.</p>
-                          ) : (
-                            <p className="muted-text">Your submitted result is shown in the table above.</p>
-                          )
+                          ) : null
                         ) : participantTest.status === "scheduled" ? (
                           <p className="muted-text">This assigned test has not opened yet.</p>
                         ) : participantTest.status === "live" ? (
