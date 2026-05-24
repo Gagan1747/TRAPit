@@ -2200,7 +2200,9 @@ export async function updateScheduledTest(input: {
 
 export async function listHistory(actorId: string | null = null) {
   const state = await readStore();
-  const scheduledTests = filterScheduledTestsForActor(hydrateScheduledTests(state), actorId);
+  const scheduledTests = filterScheduledTestsForActor(hydrateScheduledTests(state), actorId).filter(
+    (scheduledTest) => scheduledTest.status === "completed",
+  );
   const scheduledTestIds = new Set(scheduledTests.map((scheduledTest) => scheduledTest.id));
   const attempts = state.attempts.filter((attempt) => scheduledTestIds.has(attempt.testId));
 
@@ -2209,17 +2211,13 @@ export async function listHistory(actorId: string | null = null) {
 
 export async function listLeaderboards(actorId: string | null = null) {
   const state = await readStore();
-  const scheduledTests = filterScheduledTestsForActor(hydrateScheduledTests(state), actorId);
+  const scheduledTests = filterScheduledTestsForActor(hydrateScheduledTests(state), actorId).filter(
+    (scheduledTest) => scheduledTest.status === "completed",
+  );
   const scheduledTestIds = new Set(scheduledTests.map((scheduledTest) => scheduledTest.id));
   const attempts = state.attempts.filter((attempt) => scheduledTestIds.has(attempt.testId));
 
-  return buildTestLeaderboards(attempts, scheduledTests).filter(
-    (leaderboard) =>
-      scheduledTests.some(
-        (scheduledTest) =>
-          scheduledTest.id === leaderboard.testId && scheduledTest.status === "completed",
-      ),
-  );
+  return buildTestLeaderboards(attempts, scheduledTests);
 }
 
 export async function listStateSummary(input?: {
@@ -2298,8 +2296,13 @@ export async function listAvailableTestsForParticipant(
       identifiersMatch(participantIdentifier, normalizedIdentifier),
     ),
   );
+  const completedScheduledTests = scheduledTests.filter((scheduledTest) => scheduledTest.status === "completed");
+  const completedScheduledTestIds = new Set(completedScheduledTests.map((scheduledTest) => scheduledTest.id));
   const leaderboardByTestId = new Map(
-    buildTestLeaderboards(state.attempts, scheduledTests).map((leaderboard) => [
+    buildTestLeaderboards(
+      state.attempts.filter((attempt) => completedScheduledTestIds.has(attempt.testId)),
+      completedScheduledTests,
+    ).map((leaderboard) => [
       leaderboard.testId,
       leaderboard,
     ]),
@@ -3462,16 +3465,14 @@ export async function getAdminTestReview(testId: string, actorId: string | null 
 export async function getWorkspaceData() {
   const state = await readStore();
   const scheduledTests = hydrateScheduledTests(state);
+  const completedScheduledTests = scheduledTests.filter((scheduledTest) => scheduledTest.status === "completed");
+  const completedScheduledTestIds = new Set(completedScheduledTests.map((scheduledTest) => scheduledTest.id));
+  const completedAttempts = state.attempts.filter((attempt) => completedScheduledTestIds.has(attempt.testId));
 
   return {
     groupJoinRequests: state.groupJoinRequests,
-    leaderboards: buildTestLeaderboards(state.attempts, scheduledTests).filter((leaderboard) =>
-      scheduledTests.some(
-        (scheduledTest) =>
-          scheduledTest.id === leaderboard.testId && scheduledTest.status === "completed",
-      ),
-    ),
-    history: summarizeTestHistory(state.attempts, scheduledTests),
+    leaderboards: buildTestLeaderboards(completedAttempts, completedScheduledTests),
+    history: summarizeTestHistory(completedAttempts, completedScheduledTests),
     participantGroups: state.participantGroups,
     participants: state.participants,
     pools: state.pools,

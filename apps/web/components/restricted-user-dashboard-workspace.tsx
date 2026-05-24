@@ -471,7 +471,7 @@ export function RestrictedUserDashboardWorkspace({
                   type="button"
                   onClick={() => setResultsMode("tests")}
                 >
-                  Test results
+                  Test
                 </button>
                 <button
                   aria-pressed={resultsMode === "polls"}
@@ -479,7 +479,7 @@ export function RestrictedUserDashboardWorkspace({
                   type="button"
                   onClick={() => setResultsMode("polls")}
                 >
-                  Poll results
+                  Poll
                 </button>
               </div>
 

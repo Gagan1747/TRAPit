@@ -30,7 +30,7 @@ import {
   type TestResult,
   type WorkspaceBranding,
 } from "@trapit/testing";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
@@ -92,6 +92,18 @@ function formatMembershipCount(value: number) {
 
 function formatMembershipBoolean(value: boolean) {
   return value ? "✓" : "-";
+}
+
+function getHistoryScopeLabel(filter: AdminTestListFilter, mode: AdminResultsMode) {
+  if (filter === "admin") {
+    return mode === "tests" ? "Scheduled as admin" : "Poll created as admin";
+  }
+
+  if (filter === "participant") {
+    return mode === "tests" ? "Attended as participant" : "Poll responded as participant";
+  }
+
+  return "Both";
 }
 
 function formatMembershipQuestionsPerPool(plan: (typeof normalUserCategoryDefinitions)[NormalUserCategory]) {
@@ -374,7 +386,7 @@ type AdminWorkspaceSection =
   | "schedule"
   | "self-test";
 
-type AdminMenuGroup = "groups" | "poll" | "test";
+type AdminMenuGroup = "groups" | "home" | "poll" | "test";
 
 type AdminTestListFilter = "admin" | "both" | "participant";
 
@@ -924,6 +936,7 @@ export function AdminQuestionWorkspace({
   const [resultsMode, setResultsMode] = useState<AdminResultsMode>("tests");
   const [expandedOpenPollResultIds, setExpandedOpenPollResultIds] = useState<string[]>([]);
   const [collapsedTestResultIds, setCollapsedTestResultIds] = useState<string[]>([]);
+  const [copiedLinkKey, setCopiedLinkKey] = useState<string | null>(null);
   const [openMenuGroup, setOpenMenuGroup] = useState<AdminMenuGroup | null>(null);
   const [editingScheduledTestId, setEditingScheduledTestId] = useState<string | null>(null);
   const [editingSelfTestId, setEditingSelfTestId] = useState<string | null>(null);
@@ -959,6 +972,7 @@ export function AdminQuestionWorkspace({
   const [workspaceBranding, setWorkspaceBranding] = useState<WorkspaceBranding | null>(null);
   const participantAnswersRef = useRef<Record<string, number | undefined>>({});
   const participantIsSubmittingRef = useRef(false);
+  const copiedLinkTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toolbarMenuRef = useRef<HTMLDivElement | null>(null);
 
   async function loadWorkspace(options?: { silent?: boolean }) {
@@ -1057,6 +1071,14 @@ export function AdminQuestionWorkspace({
 
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (copiedLinkTimeoutRef.current) {
+        clearTimeout(copiedLinkTimeoutRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -1197,6 +1219,24 @@ export function AdminQuestionWorkspace({
     }
 
     return `${window.location.origin}/group/${shareCode}`;
+  }
+
+  async function handleCopyLink(linkKey: string, url: string) {
+    try {
+      await copyTextToClipboard(url);
+      setCopiedLinkKey(linkKey);
+      setFeedback("Link copied to clipboard.");
+
+      if (copiedLinkTimeoutRef.current) {
+        clearTimeout(copiedLinkTimeoutRef.current);
+      }
+
+      copiedLinkTimeoutRef.current = setTimeout(() => {
+        setCopiedLinkKey((currentKey) => (currentKey === linkKey ? null : currentKey));
+      }, 2000);
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to copy the link.");
+    }
   }
 
   function resetPollScheduleForm() {
@@ -1694,6 +1734,10 @@ export function AdminQuestionWorkspace({
   }
 
   function isMenuGroupActive(group: AdminMenuGroup) {
+    if (group === "home") {
+      return openSection === "history";
+    }
+
     if (group === "test") {
       return openSection === "author" || openSection === "question-bank" || openSection === "schedule" || openSection === "self-test";
     }
@@ -1734,6 +1778,7 @@ export function AdminQuestionWorkspace({
     label: string,
     group: AdminMenuGroup,
     items: Array<{ label: string; section: AdminWorkspaceSection }>,
+    extraContent?: ReactNode,
   ) {
     const isOpen = openMenuGroup === group;
     const isActive = isMenuGroupActive(group);
@@ -1749,7 +1794,12 @@ export function AdminQuestionWorkspace({
           <span>{label}</span>
           <span className="admin-menu-group-toggle-symbol" aria-hidden="true">{isOpen ? "▲" : "▼"}</span>
         </button>
-        {isOpen ? <div className="admin-menu-substack">{items.map((item) => renderMenuItem(item.label, item.section))}</div> : null}
+        {isOpen ? (
+          <div className="admin-menu-substack">
+            {items.map((item) => renderMenuItem(item.label, item.section))}
+            {extraContent}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -3256,9 +3306,25 @@ export function AdminQuestionWorkspace({
             </div>
           </div>
           <div className="admin-menu-stack">
-            <div className="admin-menu-group">
-              {renderMenuItem("Home", "history")}
-            </div>
+            {renderMenuGroup("Home", "home", [{ label: "Overview", section: "history" }], (
+              <div className="field compact-field">
+                <label htmlFor="home-history-scope">History scope</label>
+                <select
+                  className="select-field"
+                  id="home-history-scope"
+                  value={testListFilter}
+                  onChange={(event) => {
+                    setTestListFilter(event.target.value as AdminTestListFilter);
+                    setOpenSection("history");
+                  }}
+                >
+                  <option value="both">Both</option>
+                  <option value="admin">{resultsMode === "tests" ? "Scheduled as admin" : "Poll created as admin"}</option>
+                  <option value="participant">{resultsMode === "tests" ? "Attended as participant" : "Poll responded as participant"}</option>
+                </select>
+                <p className="muted-text">Current view: {getHistoryScopeLabel(testListFilter, resultsMode)}</p>
+              </div>
+            ))}
             {renderMenuGroup("Test", "test", [
               { label: "Add Questions", section: "author" },
               { label: "Question Pools", section: "question-bank" },
@@ -4357,15 +4423,13 @@ export function AdminQuestionWorkspace({
                       <div className="form-stack">
                         {group.shareCode ? (
                           <div className="form-stack">
-                            <p className="muted-text">Access code: {group.shareCode}</p>
-                            <p className="muted-text">URL: <a href={getGroupAccessUrl(group.shareCode)} target="_blank" rel="noreferrer">{getGroupAccessUrl(group.shareCode)}</a></p>
                             <div className="inline-actions">
                               <button
                                 className="button-secondary small-button"
                                 type="button"
-                                onClick={() => void copyTextToClipboard(getGroupAccessUrl(group.shareCode ?? ""))}
+                                onClick={() => void handleCopyLink(`group-${group.id}`, getGroupAccessUrl(group.shareCode ?? ""))}
                               >
-                                Copy link
+                                {copiedLinkKey === `group-${group.id}` ? "Copied" : "Copy link"}
                               </button>
                             </div>
                           </div>
@@ -5137,8 +5201,15 @@ export function AdminQuestionWorkspace({
                   <p className="muted-text">Poll link: {poll.shareCode ? (poll.participantType === "open" ? "Open for all" : "Group members only") : "Not created"}</p>
                   {poll.shareCode ? (
                     <div className="form-stack">
-                      <p className="muted-text">Access code: {poll.shareCode}</p>
-                      <p className="muted-text">URL: <a href={getPollAccessUrl(poll.shareCode)} target="_blank" rel="noreferrer">{getPollAccessUrl(poll.shareCode)}</a></p>
+                      <div className="inline-actions">
+                        <button
+                          className="button-secondary small-button"
+                          type="button"
+                          onClick={() => void handleCopyLink(`scheduled-poll-${poll.id}`, getPollAccessUrl(poll.shareCode))}
+                        >
+                          {copiedLinkKey === `scheduled-poll-${poll.id}` ? "Copied" : "Copy link"}
+                        </button>
+                      </div>
                       {pollQrCodes[poll.id] ? (
                         <img alt={`QR code for ${poll.title}`} height={180} src={pollQrCodes[poll.id]} width={180} />
                       ) : null}
@@ -5243,7 +5314,7 @@ export function AdminQuestionWorkspace({
                     <span className="status-chip success">{Object.keys(participantAnswers).length}/{activeParticipantTest.questionCount} answered</span>
                   </div>
                   <p className="muted-text">
-                    You have answered all questions. Submit now to see your score and ranking.
+                    You have answered all questions. Submit now to finish the test.
                   </p>
                   <div className="inline-actions">
                     <button className="button" disabled={isMutating} type="button" onClick={() => void submitParticipantTest()}>
@@ -5268,7 +5339,7 @@ export function AdminQuestionWorkspace({
               type="button"
               onClick={() => setResultsMode("tests")}
             >
-              Test results
+              Test
             </button>
             <button
               aria-pressed={resultsMode === "polls"}
@@ -5276,34 +5347,7 @@ export function AdminQuestionWorkspace({
               type="button"
               onClick={() => setResultsMode("polls")}
             >
-              Poll results
-            </button>
-          </div>
-
-          <div aria-label="Results scope" className="segmented-control segmented-control-wide" role="group">
-            <button
-              aria-pressed={testListFilter === "admin"}
-              className={`segmented-control-item${testListFilter === "admin" ? " is-active" : ""}`}
-              type="button"
-              onClick={() => setTestListFilter("admin")}
-            >
-              {resultsMode === "tests" ? "Scheduled as admin" : "Poll created as admin"}
-            </button>
-            <button
-              aria-pressed={testListFilter === "both"}
-              className={`segmented-control-item${testListFilter === "both" ? " is-active" : ""}`}
-              type="button"
-              onClick={() => setTestListFilter("both")}
-            >
-              Both
-            </button>
-            <button
-              aria-pressed={testListFilter === "participant"}
-              className={`segmented-control-item${testListFilter === "participant" ? " is-active" : ""}`}
-              type="button"
-              onClick={() => setTestListFilter("participant")}
-            >
-              {resultsMode === "tests" ? "Attended as participant" : "Poll responded as participant"}
+              Poll
             </button>
           </div>
 
@@ -5429,23 +5473,20 @@ export function AdminQuestionWorkspace({
                                 : "Based on selected groups"}
                             </p>
                           ) : null}
-                          {showScheduledTestAccessDetails ? <p className="muted-text">Access code: {scheduledTestShareCode}</p> : null}
-                          {showScheduledTestAccessDetails ? (
-                            <p className="muted-text">
-                              URL: <a href={scheduledTestAccessUrl ?? undefined} target="_blank" rel="noreferrer">{scheduledTestAccessUrl}</a>
-                            </p>
-                          ) : null}
                           {showScheduledTestAccessDetails ? (
                             <div className="form-stack">
                               <div className="inline-actions">
-                                <a
+                                <button
                                   className="button-secondary small-button"
-                                  href={scheduledTestAccessUrl ?? undefined}
-                                  target="_blank"
-                                  rel="noreferrer"
+                                  type="button"
+                                  onClick={() =>
+                                    scheduledTestAccessUrl
+                                      ? void handleCopyLink(`scheduled-test-${scheduledTest.id}`, scheduledTestAccessUrl)
+                                      : undefined
+                                  }
                                 >
-                                  Open invite page
-                                </a>
+                                  {copiedLinkKey === `scheduled-test-${scheduledTest.id}` ? "Copied" : "Copy link"}
+                                </button>
                               </div>
                               {scheduledTest && testQrCodes[scheduledTest.id] ? (
                                 <img alt={`QR code for ${scheduledTest.title}`} height={180} src={testQrCodes[scheduledTest.id]} width={180} />
@@ -5531,7 +5572,7 @@ export function AdminQuestionWorkspace({
                         ) : !isTestResultCollapsed && scheduledTest.status === "scheduled" ? (
                           <p className="muted-text">This test has not started yet.</p>
                         ) : !isTestResultCollapsed && scheduledTest.status === "live" ? (
-                          <p className="muted-text">This test is live. Results will update here as participants submit.</p>
+                          <p className="muted-text">This test is live. Results will appear here after the test duration is complete.</p>
                         ) : !isTestResultCollapsed ? (
                           <p className="muted-text">No submissions were recorded before this test closed.</p>
                         ) : null}
@@ -5812,15 +5853,24 @@ export function AdminQuestionWorkspace({
                               <p className="muted-text">Questions: {resolvedPoll.questionIds.length}</p>
                               <p className="muted-text">Poll link: Open for all</p>
                               <p className="muted-text">Anonymity: {resolvedPoll.anonymous ? "Anonymous" : "Named"}</p>
-                              {showResolvedPollAccessDetails ? <p className="muted-text">Access code: {resolvedPollShareCode}</p> : null}
                               {showResolvedPollAccessDetails ? (
-                                <p className="muted-text">
-                                  URL: <a href={resolvedPollAccessUrl ?? undefined} target="_blank" rel="noreferrer">{resolvedPollAccessUrl}</a>
-                                </p>
-                              ) : null}
-                              {showResolvedPollAccessDetails && pollQrCodes[resolvedPoll.id] ? (
                                 <div className="form-stack">
-                                  <img alt={`QR code for ${resolvedPoll.title}`} height={180} src={pollQrCodes[resolvedPoll.id]} width={180} />
+                                  <div className="inline-actions">
+                                    <button
+                                      className="button-secondary small-button"
+                                      type="button"
+                                      onClick={() =>
+                                        resolvedPollAccessUrl
+                                          ? void handleCopyLink(`open-poll-${resolvedPoll.id}`, resolvedPollAccessUrl)
+                                          : undefined
+                                      }
+                                    >
+                                      {copiedLinkKey === `open-poll-${resolvedPoll.id}` ? "Copied" : "Copy link"}
+                                    </button>
+                                  </div>
+                                  {pollQrCodes[resolvedPoll.id] ? (
+                                    <img alt={`QR code for ${resolvedPoll.title}`} height={180} src={pollQrCodes[resolvedPoll.id]} width={180} />
+                                  ) : null}
                                 </div>
                               ) : null}
                             </div>
@@ -5879,15 +5929,23 @@ export function AdminQuestionWorkspace({
                             : "None"}
                         </p>
                       ) : null}
-                      {showResolvedPollAccessDetails ? <p className="muted-text">Access code: {resolvedPollShareCode}</p> : null}
-                      {showResolvedPollAccessDetails ? (
-                        <p className="muted-text">
-                          URL: <a href={resolvedPollAccessUrl ?? undefined} target="_blank" rel="noreferrer">{resolvedPollAccessUrl}</a>
-                        </p>
-                      ) : null}
-                      {showResolvedPollOpenAction ? (
+                      {showResolvedPollOpenAction || showResolvedPollAccessDetails ? (
                         <div className="form-stack">
                           <div className="inline-actions">
+                            {showResolvedPollAccessDetails ? (
+                              <button
+                                className="button-secondary small-button"
+                                type="button"
+                                onClick={() =>
+                                  resolvedPollAccessUrl
+                                    ? void handleCopyLink(`results-poll-${resolvedPoll.id}`, resolvedPollAccessUrl)
+                                    : undefined
+                                }
+                              >
+                                {copiedLinkKey === `results-poll-${resolvedPoll.id}` ? "Copied" : "Copy link"}
+                              </button>
+                            ) : null}
+                            {showResolvedPollOpenAction ? (
                             <a
                               className="button-secondary small-button"
                               href={resolvedPollAccessUrl ?? undefined}
@@ -5896,6 +5954,7 @@ export function AdminQuestionWorkspace({
                             >
                               {resolvedPoll.status === "live" ? "Respond to poll" : "Open poll page"}
                             </a>
+                            ) : null}
                           </div>
                           {showResolvedPollAccessDetails && pollQrCodes[resolvedPoll.id] ? (
                             <img alt={`QR code for ${resolvedPoll.title}`} height={180} src={pollQrCodes[resolvedPoll.id]} width={180} />
