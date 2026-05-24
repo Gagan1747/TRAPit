@@ -94,18 +94,6 @@ function formatMembershipBoolean(value: boolean) {
   return value ? "✓" : "-";
 }
 
-function getHistoryScopeLabel(filter: AdminTestListFilter, mode: AdminResultsMode) {
-  if (filter === "admin") {
-    return mode === "tests" ? "Scheduled as admin" : "Poll created as admin";
-  }
-
-  if (filter === "participant") {
-    return mode === "tests" ? "Attended as participant" : "Poll responded as participant";
-  }
-
-  return "Both";
-}
-
 function formatMembershipQuestionsPerPool(plan: (typeof normalUserCategoryDefinitions)[NormalUserCategory]) {
   if (!plan.test.addQuestion || plan.test.maxQuestionPools <= 0 || plan.test.maxQuestionsPerPool === null) {
     return "-";
@@ -1774,6 +1762,22 @@ export function AdminQuestionWorkspace({
     );
   }
 
+  function renderHomeFilterMenuItem(label: string, filter: AdminTestListFilter) {
+    return (
+      <button
+        key={filter}
+        className={`admin-menu-item${openSection === "history" && testListFilter === filter ? " is-active" : ""}`}
+        type="button"
+        onClick={() => {
+          setTestListFilter(filter);
+          handleMenuSectionSelection("history");
+        }}
+      >
+        {label}
+      </button>
+    );
+  }
+
   function renderMenuGroup(
     label: string,
     group: AdminMenuGroup,
@@ -3306,24 +3310,12 @@ export function AdminQuestionWorkspace({
             </div>
           </div>
           <div className="admin-menu-stack">
-            {renderMenuGroup("Home", "home", [{ label: "Overview", section: "history" }], (
-              <div className="field compact-field">
-                <label htmlFor="home-history-scope">History scope</label>
-                <select
-                  className="select-field"
-                  id="home-history-scope"
-                  value={testListFilter}
-                  onChange={(event) => {
-                    setTestListFilter(event.target.value as AdminTestListFilter);
-                    setOpenSection("history");
-                  }}
-                >
-                  <option value="both">Both</option>
-                  <option value="admin">{resultsMode === "tests" ? "Scheduled as admin" : "Poll created as admin"}</option>
-                  <option value="participant">{resultsMode === "tests" ? "Attended as participant" : "Poll responded as participant"}</option>
-                </select>
-                <p className="muted-text">Current view: {getHistoryScopeLabel(testListFilter, resultsMode)}</p>
-              </div>
+            {renderMenuGroup("Home", "home", [], (
+              <>
+                {renderHomeFilterMenuItem("Scheduled as admin", "admin")}
+                {renderHomeFilterMenuItem("Both", "both")}
+                {renderHomeFilterMenuItem("Attended as participant", "participant")}
+              </>
             ))}
             {renderMenuGroup("Test", "test", [
               { label: "Add Questions", section: "author" },
