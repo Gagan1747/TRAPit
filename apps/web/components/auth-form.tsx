@@ -86,12 +86,6 @@ export function AuthForm({ mode }: AuthFormProps) {
   const selectedCountry = getPhoneCountryByCode(selectedCountryCode);
   const combinedPhoneNumber = combinePhoneNumber(selectedCountry.dialCode, phoneNumber);
 
-  function setNextSignUpSubMode(nextMode: SignUpSubMode) {
-    setSignUpSubMode(nextMode);
-    setErrorMessage(null);
-    setResendMessage(null);
-  }
-
   function handlePhoneNumberChange(nextPhoneNumber: string) {
     const sanitizedPhoneNumber = sanitizeNationalPhoneInput(nextPhoneNumber);
 
@@ -351,27 +345,6 @@ export function AuthForm({ mode }: AuthFormProps) {
         {!authConfigured ? <p className="muted-text">{getPublicWebAuthSetupMessage()}</p> : null}
       </div>
 
-      {mode === "sign-up" && isConfirmOptionAvailable ? (
-        <div aria-label="Sign up step" className="segmented-control segmented-control-wide" role="group">
-          <button
-            aria-pressed={signUpSubMode === "create"}
-            className={`segmented-control-item${signUpSubMode === "create" ? " is-active" : ""}`}
-            type="button"
-            onClick={() => setNextSignUpSubMode("create")}
-          >
-            Create account
-          </button>
-          <button
-            aria-pressed={signUpSubMode === "confirm"}
-            className={`segmented-control-item${signUpSubMode === "confirm" ? " is-active" : ""}`}
-            type="button"
-            onClick={() => setNextSignUpSubMode("confirm")}
-          >
-            Confirm account
-          </button>
-        </div>
-      ) : null}
-
       {mode === "sign-up" && signUpSubMode === "create" ? (
         <div className="field">
           <label htmlFor="full-name">Full name</label>
@@ -503,11 +476,11 @@ export function AuthForm({ mode }: AuthFormProps) {
         </a>
       ) : null}
 
-      {mode === "sign-in" ? null : (
-        <a className="button-secondary" href={signUpSubMode === "confirm" ? "/sign-in" : "/sign-up?step=confirm&signup=retry"}>
-          {signUpSubMode === "confirm" ? "Already confirmed? Sign in" : "Already tried signing up? Confirm account"}
+      {mode === "sign-up" && signUpSubMode === "confirm" ? (
+        <a className="button-secondary" href="/sign-in">
+          Already confirmed? Sign in
         </a>
-      )}
+      ) : null}
     </form>
   );
 }
