@@ -115,6 +115,7 @@ export type AvailableUserTest = {
   durationMinutes: number;
   hasAttempt: boolean;
   id: string;
+  isSelfTest: boolean;
   participantGroupIds: string[];
   poolId: string;
   topPerformer?: {
@@ -2320,6 +2321,9 @@ export async function listAvailableTestsForParticipant(
         attempt.testId === scheduledTest.id && identifiersMatch(attempt.userId, normalizedIdentifier),
     ),
     id: scheduledTest.id,
+    isSelfTest: scheduledTest.participantGroupIds.length === 0
+      && scheduledTest.resolvedParticipantIdentifiers.length === 1
+      && identifiersMatch(scheduledTest.resolvedParticipantIdentifiers[0], normalizedIdentifier),
     participantGroupIds: [...scheduledTest.participantGroupIds],
     poolId: scheduledTest.poolId,
     topPerformer: (() => {

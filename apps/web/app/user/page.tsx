@@ -31,7 +31,7 @@ export default async function UserPage({
         <div className="compact-head">
           <div>
             <h1 className="hero-title">
-              <Link className="dashboard-title-link" href="/">
+              <Link className="dashboard-title-link" href="/user">
                 {displayName} TRAPit dashboard
               </Link>
             </h1>

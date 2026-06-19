@@ -170,6 +170,7 @@ type UserDashboardResponse = {
     durationMinutes: number;
     hasAttempt: boolean;
     id: string;
+    isSelfTest: boolean;
     participantGroupIds: string[];
     poolId: string;
     questionCount: number;
@@ -1470,8 +1471,8 @@ export function AdminQuestionWorkspace({
     }
   }
 
-  function startParticipantTest(testId: string) {
-    const participantName = participantNamesByTest[testId]?.trim() ?? "";
+  function startParticipantTest(testId: string, options?: { participantName?: string }) {
+    const participantName = options?.participantName?.trim() || participantNamesByTest[testId]?.trim() || "";
 
     if (!participantName) {
       setFeedback("Enter your name before starting the test.");
@@ -5359,6 +5360,7 @@ export function AdminQuestionWorkspace({
                 {filteredMergedTests.map((test) => {
                 const scheduledTest = test.scheduledTest;
                 const participantTest = test.participantTest;
+                const isSelfTest = Boolean(participantTest?.isSelfTest || (scheduledTest && scheduledTest.participantGroupIds.length === 0 && scheduledTest.resolvedParticipantIdentifiers.length === 1));
                 const participantHistoryEntry = test.participantHistoryEntry;
                 const leaderboard = scheduledTest
                   ? leaderboards.find((entry) => entry.testId === scheduledTest.id)
@@ -5393,7 +5395,9 @@ export function AdminQuestionWorkspace({
                 const isTestResultCollapsed = !collapsedTestResultIds.includes(test.id);
                 const scheduledTestPoolName = pools.find((pool) => pool.id === test.poolId)?.name ?? "Unknown pool";
                 const testGroupIds = scheduledTest?.participantGroupIds ?? participantTest?.participantGroupIds ?? [];
-                const scheduledTestGroupLabel = testGroupIds.length
+                const scheduledTestGroupLabel = isSelfTest
+                  ? "Self test"
+                  : testGroupIds.length
                   ? testGroupIds
                         .map((groupId) => participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group")
                         .join(", ")
@@ -5557,7 +5561,7 @@ export function AdminQuestionWorkspace({
 
                       {scheduledTest ? (
                         <div className="form-stack">
-                        {!isTestResultCollapsed && showScheduledParticipantList ? (
+                        {!isTestResultCollapsed && showScheduledParticipantList && !isSelfTest ? (
                           <p className="muted-text">
                             Participants: {scheduledTest.resolvedParticipantIdentifiers.length
                               ? scheduledTest.resolvedParticipantIdentifiers
@@ -5658,26 +5662,30 @@ export function AdminQuestionWorkspace({
                           <p className="muted-text">You have submitted this test. Review opens after the test is completed and results are announced.</p>
                         ) : participantTest.status === "live" ? (
                           <>
-                            <div className="field">
-                              <label htmlFor={`participant-name-${participantTest.id}`}>Your name for this test</label>
-                              <input
-                                id={`participant-name-${participantTest.id}`}
-                                placeholder="Enter your name before starting"
-                                value={participantNamesByTest[participantTest.id] ?? ""}
-                                onChange={(event) =>
-                                  setParticipantNamesByTest((current) => ({
-                                    ...current,
-                                    [participantTest.id]: event.target.value,
-                                  }))
-                                }
-                              />
-                            </div>
+                            {participantTest.isSelfTest ? (
+                              <p className="muted-text">This self test is assigned only to your signed-in account.</p>
+                            ) : (
+                              <div className="field">
+                                <label htmlFor={`participant-name-${participantTest.id}`}>Your name for this test</label>
+                                <input
+                                  id={`participant-name-${participantTest.id}`}
+                                  placeholder="Enter your name before starting"
+                                  value={participantNamesByTest[participantTest.id] ?? ""}
+                                  onChange={(event) =>
+                                    setParticipantNamesByTest((current) => ({
+                                      ...current,
+                                      [participantTest.id]: event.target.value,
+                                    }))
+                                  }
+                                />
+                              </div>
+                            )}
                             <div className="inline-actions">
                               <button
                                 className="button"
-                                disabled={participantTest.hasAttempt || !(participantNamesByTest[participantTest.id] ?? "").trim()}
+                                disabled={participantTest.hasAttempt || (!participantTest.isSelfTest && !(participantNamesByTest[participantTest.id] ?? "").trim())}
                                 type="button"
-                                onClick={() => startParticipantTest(participantTest.id)}
+                                onClick={() => startParticipantTest(participantTest.id, participantTest.isSelfTest ? { participantName: "Self test" } : undefined)}
                               >
                                 {participantTest.hasAttempt ? "Already submitted" : "Take test"}
                               </button>
