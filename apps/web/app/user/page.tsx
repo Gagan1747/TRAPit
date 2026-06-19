@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { getSessionDisplayName, getSessionIdentifier, normalUserCategoryLabels } from "@trapit/auth";
 
 import { AdminQuestionWorkspace } from "../../components/admin-question-workspace";
@@ -28,7 +30,11 @@ export default async function UserPage({
       <section className="panel hero-copy">
         <div className="compact-head">
           <div>
-            <h1 className="hero-title">{displayName} dashboard</h1>
+            <h1 className="hero-title">
+              <Link className="dashboard-title-link" href="/">
+                {displayName} TRAPit dashboard
+              </Link>
+            </h1>
             <p className="hero-text">
               {authConfigured
                 ? `Signed in with ${formatPhoneNumberForDisplay(sessionIdentifier ?? "user", { showFullPhoneNumber: isSuperAdmin })}${categoryLabel ? ` as ${categoryLabel}` : ""}`

@@ -91,6 +91,16 @@ main {
   line-height: 0.95;
 }
 
+.dashboard-title-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.dashboard-title-link:hover,
+.dashboard-title-link:focus-visible {
+  text-decoration: underline;
+}
+
 .hero-text,
 .muted-text {
   color: var(--muted);
