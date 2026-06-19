@@ -4720,6 +4720,10 @@ export function AdminQuestionWorkspace({
             </p>
           ) : null}
 
+          <p className="muted-text">
+            Participant: your signed-in account. Self tests are not shared with groups or other participants.
+          </p>
+
           {selfTestFeedback ? <p className="muted-text">{selfTestFeedback}</p> : null}
 
           <div className="inline-actions">

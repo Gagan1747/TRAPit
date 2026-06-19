@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { getSessionDisplayName, getSessionIdentifier, normalUserCategoryLabels } from "@trapit/auth";
 
 import { AdminQuestionWorkspace } from "../../components/admin-question-workspace";
@@ -31,9 +29,9 @@ export default async function UserPage({
         <div className="compact-head">
           <div>
             <h1 className="hero-title">
-              <Link className="dashboard-title-link" href="/user">
+              <a className="dashboard-title-link" href="/user?home=both">
                 {displayName} TRAPit dashboard
-              </Link>
+              </a>
             </h1>
             <p className="hero-text">
               {authConfigured
