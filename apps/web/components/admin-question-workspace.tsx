@@ -36,7 +36,6 @@ import QRCode from "qrcode";
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
-import { type NotificationBellItem } from "./notification-bell";
 
 const AI_OCR_EXAMPLE = `Question: 5+3?
 Option A: 10
@@ -943,7 +942,7 @@ export function AdminQuestionWorkspace({
     scheduledTests: 0,
   });
   const [testListFilter, setTestListFilter] = useState<AdminTestListFilter>("both");
-  const [toolbarMenuView, setToolbarMenuView] = useState<"branding" | "menu" | "notifications" | "user-details">("menu");
+  const [toolbarMenuView, setToolbarMenuView] = useState<"branding" | "menu" | "user-details">("menu");
   const [visibleParticipantReviewTestIds, setVisibleParticipantReviewTestIds] = useState<string[]>([]);
   const [visibleReviewTestIds, setVisibleReviewTestIds] = useState<string[]>([]);
   const [workspaceBranding, setWorkspaceBranding] = useState<WorkspaceBranding | null>(null);
@@ -2747,56 +2746,10 @@ export function AdminQuestionWorkspace({
   const testToggleUpcomingCount = filteredMergedTests.filter((test) => test.status === "scheduled").length;
   const pollToggleLiveCount = filteredMergedPolls.filter((poll) => poll.status === "live").length;
   const pollToggleUpcomingCount = filteredMergedPolls.filter((poll) => poll.status === "scheduled").length;
-  const notificationBaseline = previousSignInAt ? new Date(previousSignInAt).getTime() : null;
-  const notificationTests = currentActorRole === "user" ? participantTests : sortedScheduledTests;
-  const notificationPolls = currentActorRole === "user" ? participantPolls : sortedScheduledPolls;
-  const liveTestsCount = notificationTests.filter((test) => test.status === "live").length;
-  const livePollsCount = notificationPolls.filter((poll) => poll.status === "live").length;
-  const upcomingTestsCount = notificationTests.filter((test) => test.status === "scheduled").length;
-  const upcomingPollsCount = notificationPolls.filter((poll) => poll.status === "scheduled").length;
-  const releasedTestResultsCount = notificationBaseline === null
-    ? notificationTests.filter((test) => test.status === "completed").length
-    : notificationTests.filter(
-      (test) => test.status === "completed" && getTestReleaseTimestamp(test) > notificationBaseline,
-    ).length;
-  const releasedPollResultsCount = notificationBaseline === null
-    ? notificationPolls.filter((poll) => poll.status === "completed").length
-    : notificationPolls.filter(
-      (poll) => poll.status === "completed" && new Date(poll.updatedAt).getTime() > notificationBaseline,
-    ).length;
-  const pendingOutgoingGroupRequestCount = currentActorRole === "user"
-    ? outgoingGroupJoinRequests.filter((request) => request.status === "pending").length
-    : 0;
-  const acceptedOutgoingGroupRequestCount = currentActorRole === "user"
-    ? (notificationBaseline === null
-      ? outgoingGroupJoinRequests.filter((request) => request.status === "accepted").length
-      : outgoingGroupJoinRequests.filter(
-        (request) =>
-          request.status === "accepted"
-          && request.resolvedAt
-          && new Date(request.resolvedAt).getTime() > notificationBaseline,
-      ).length)
-    : 0;
-  const notificationItems: NotificationBellItem[] = [
-    { count: liveTestsCount + livePollsCount, label: "Live tests and polls" },
-    { count: upcomingTestsCount + upcomingPollsCount, label: "Upcoming tests and polls" },
-    { count: releasedTestResultsCount + releasedPollResultsCount, label: "Released results" },
-    ...(currentActorRole === "user"
-      ? [{
-        count: pendingOutgoingGroupRequestCount + acceptedOutgoingGroupRequestCount,
-        label: "Group requests and acceptances",
-      } satisfies NotificationBellItem]
-      : []),
-  ];
   const brandingPreview = normalizeBrandingInput({
     imageDataUrl: brandingImageDataUrl,
     instituteName: brandingInstituteName,
   });
-  const notificationSubtitle = notificationBaseline === null
-    ? "Counts reflect the current workspace state."
-    : currentActorRole === "user"
-      ? "Released results and accepted group requests are measured from your previous sign in."
-      : "Released results are measured from your previous sign in.";
   const filteredManagedUsers = categoryManagement?.managedUsers.filter((user) => {
     const query = categorySearchQuery.trim().toLowerCase();
     const normalizedQueryCandidates = Array.from(getParticipantIdentifierCandidates(query));
@@ -3072,13 +3025,6 @@ export function AdminQuestionWorkspace({
                       User details
                     </button>
                   ) : null}
-                  <button
-                    className="workspace-overflow-action"
-                    type="button"
-                    onClick={() => setToolbarMenuView("notifications")}
-                  >
-                    Notifications
-                  </button>
                   {!isSuperAdmin ? (
                     <button
                       className="workspace-overflow-action"
@@ -3088,27 +3034,6 @@ export function AdminQuestionWorkspace({
                       Branding
                     </button>
                   ) : null}
-                </div>
-              ) : null}
-
-              {toolbarMenuView === "notifications" ? (
-                <div className="workspace-overflow-stack">
-                  <div className="workspace-overflow-head">
-                    <button className="button-secondary small-button" type="button" onClick={() => setToolbarMenuView("menu")}>
-                      Back
-                    </button>
-                    <p className="eyebrow">Notifications</p>
-                  </div>
-                  <h2 className="section-title">{currentActorRole === "user" ? "Workspace alerts" : "Admin workspace alerts"}</h2>
-                  <p className="muted-text notification-panel-subtitle">{notificationSubtitle}</p>
-                  <div className="notification-panel-list">
-                    {notificationItems.map((item) => (
-                      <div className="notification-panel-item" key={item.label}>
-                        <span>{item.label}</span>
-                        <strong>{item.count}</strong>
-                      </div>
-                    ))}
-                  </div>
                 </div>
               ) : null}
 
@@ -3208,7 +3133,6 @@ export function AdminQuestionWorkspace({
           </div>
           <div className="admin-menu-stack">
             {renderMenuGroup("Test", "test", [
-              { label: "Add Questions", section: "author" },
               { label: "Question Pools", section: "question-bank" },
               { label: "Schedule", section: "schedule" },
             ])}
@@ -3468,10 +3392,10 @@ export function AdminQuestionWorkspace({
 
       <CollapsibleWorkspaceSection
         eyebrow=""
-        isOpen={openSection === "author"}
+        isOpen={openSection === "author" || openSection === "question-bank"}
         sectionId="admin-author-questions"
         title="Add Questions"
-        onToggle={() => toggleSection("author")}
+        onToggle={() => toggleSection("question-bank")}
       >
         <div className="form-stack">
           <div className="field">
