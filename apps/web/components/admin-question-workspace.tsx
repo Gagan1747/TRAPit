@@ -377,7 +377,7 @@ type AdminWorkspaceSection =
   | "question-bank"
   | "schedule";
 
-type AdminMenuGroup = "groups" | "home" | "poll" | "test";
+type AdminMenuGroup = "groups" | "poll" | "test";
 
 type AdminTestListFilter = "admin" | "both" | "participant";
 
@@ -1696,10 +1696,6 @@ export function AdminQuestionWorkspace({
   }
 
   function isMenuGroupActive(group: AdminMenuGroup) {
-    if (group === "home") {
-      return openSection === "history";
-    }
-
     if (group === "test") {
       return openSection === "author" || openSection === "question-bank" || openSection === "schedule";
     }
@@ -1729,22 +1725,6 @@ export function AdminQuestionWorkspace({
           }
 
           handleMenuSectionSelection(section);
-        }}
-      >
-        {label}
-      </button>
-    );
-  }
-
-  function renderHomeFilterMenuItem(label: string, filter: AdminTestListFilter) {
-    return (
-      <button
-        key={filter}
-        className={`admin-menu-item${openSection === "history" && testListFilter === filter ? " is-active" : ""}`}
-        type="button"
-        onClick={() => {
-          setTestListFilter(filter);
-          handleMenuSectionSelection("history");
         }}
       >
         {label}
@@ -2763,6 +2743,10 @@ export function AdminQuestionWorkspace({
 
       return new Date(rightPoll.startsAt).getTime() - new Date(leftPoll.startsAt).getTime();
     });
+  const testToggleLiveCount = filteredMergedTests.filter((test) => test.status === "live").length;
+  const testToggleUpcomingCount = filteredMergedTests.filter((test) => test.status === "scheduled").length;
+  const pollToggleLiveCount = filteredMergedPolls.filter((poll) => poll.status === "live").length;
+  const pollToggleUpcomingCount = filteredMergedPolls.filter((poll) => poll.status === "scheduled").length;
   const notificationBaseline = previousSignInAt ? new Date(previousSignInAt).getTime() : null;
   const notificationTests = currentActorRole === "user" ? participantTests : sortedScheduledTests;
   const notificationPolls = currentActorRole === "user" ? participantPolls : sortedScheduledPolls;
@@ -3223,13 +3207,6 @@ export function AdminQuestionWorkspace({
             </div>
           </div>
           <div className="admin-menu-stack">
-            {renderMenuGroup("Home", "home", [], (
-              <>
-                {renderHomeFilterMenuItem("Scheduled as admin", "admin")}
-                {renderHomeFilterMenuItem("Both", "both")}
-                {renderHomeFilterMenuItem("Attended as participant", "participant")}
-              </>
-            ))}
             {renderMenuGroup("Test", "test", [
               { label: "Add Questions", section: "author" },
               { label: "Question Pools", section: "question-bank" },
@@ -5140,20 +5117,30 @@ export function AdminQuestionWorkspace({
 
           <div aria-label="Results mode" className="segmented-control" role="group">
             <button
+              aria-label={`Show tests. ${testToggleLiveCount} live, ${testToggleUpcomingCount} upcoming.`}
               aria-pressed={resultsMode === "tests"}
-              className={`segmented-control-item${resultsMode === "tests" ? " is-active" : ""}`}
+              className={`segmented-control-item has-counts${resultsMode === "tests" ? " is-active" : ""}`}
               type="button"
               onClick={() => setResultsMode("tests")}
             >
-              Test
+              <span className="segmented-control-label">Test</span>
+              <span className="segmented-counts" aria-hidden="true">
+                <span className="segmented-count-badge">Live {testToggleLiveCount}</span>
+                <span className="segmented-count-badge">Upcoming {testToggleUpcomingCount}</span>
+              </span>
             </button>
             <button
+              aria-label={`Show polls. ${pollToggleLiveCount} live, ${pollToggleUpcomingCount} upcoming.`}
               aria-pressed={resultsMode === "polls"}
-              className={`segmented-control-item${resultsMode === "polls" ? " is-active" : ""}`}
+              className={`segmented-control-item has-counts${resultsMode === "polls" ? " is-active" : ""}`}
               type="button"
               onClick={() => setResultsMode("polls")}
             >
-              Poll
+              <span className="segmented-control-label">Poll</span>
+              <span className="segmented-counts" aria-hidden="true">
+                <span className="segmented-count-badge">Live {pollToggleLiveCount}</span>
+                <span className="segmented-count-badge">Upcoming {pollToggleUpcomingCount}</span>
+              </span>
             </button>
           </div>
 

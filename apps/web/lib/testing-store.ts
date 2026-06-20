@@ -662,7 +662,7 @@ function resolveParticipantIdentifiers(
   const participantMap = getParticipantMap(state);
   const groupMap = getGroupMap(state);
   const directIdentifiers = participantIds
-    .map((participantId) => participantMap.get(participantId)?.identifier ?? "")
+    .map((participantId) => participantMap.get(participantId)?.identifier ?? participantId)
     .filter(Boolean);
   const groupIdentifiers = participantGroupIds.flatMap((groupId) => {
     const group = groupMap.get(groupId);
