@@ -134,16 +134,23 @@ function matchesUser(
   user: { identifier?: string | null; sub?: string | null },
 ) {
   const userSub = user.sub?.trim() ?? "";
+  const targetIdentifier = normalizeIdentifier(user.identifier);
 
   if (userSub) {
     if ("userSub" in record) {
-      return (record.userSub ?? "") === userSub;
+      if ((record.userSub ?? "") === userSub) {
+        return true;
+      }
+
+      return targetIdentifier ? normalizeIdentifier(record.userIdentifier) === targetIdentifier : false;
     }
 
-    return (record.requesterSub ?? "") === userSub;
-  }
+    if ((record.requesterSub ?? "") === userSub) {
+      return true;
+    }
 
-  const targetIdentifier = normalizeIdentifier(user.identifier);
+    return targetIdentifier ? normalizeIdentifier(record.requesterIdentifier) === targetIdentifier : false;
+  }
 
   if (!targetIdentifier) {
     return false;

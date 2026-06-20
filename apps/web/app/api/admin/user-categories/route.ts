@@ -35,6 +35,7 @@ async function buildManagementResponse() {
   let directoryUsers = fallbackParticipants.map((participant) => ({
     identifier: participant.identifier,
     label: participant.label,
+    sub: null as string | null,
   }));
 
   if (isWebAuthConfigured()) {
@@ -44,6 +45,7 @@ async function buildManagementResponse() {
       directoryUsers = fallbackParticipants.map((participant) => ({
         identifier: participant.identifier,
         label: participant.label,
+        sub: null,
       }));
     }
   }
@@ -59,12 +61,13 @@ async function buildManagementResponse() {
       .map((assignment) => [assignment.userIdentifier?.trim().toLowerCase() ?? "", assignment]),
   );
 
-  const knownUsers = new Map<string, { identifier: string; label: string | null }>();
+  const knownUsers = new Map<string, { identifier: string; label: string | null; sub: string | null }>();
 
   for (const user of directoryUsers) {
     knownUsers.set(user.identifier.trim().toLowerCase(), {
       identifier: user.identifier,
       label: user.label,
+      sub: user.sub,
     });
   }
 
@@ -76,6 +79,7 @@ async function buildManagementResponse() {
     knownUsers.set(request.requesterIdentifier.trim().toLowerCase(), {
       identifier: request.requesterIdentifier,
       label: request.requesterDisplayName,
+      sub: request.requesterSub,
     });
   }
 
@@ -89,6 +93,7 @@ async function buildManagementResponse() {
     knownUsers.set(normalizedIdentifier, {
       identifier: assignment.userIdentifier,
       label: knownUsers.get(normalizedIdentifier)?.label ?? null,
+      sub: knownUsers.get(normalizedIdentifier)?.sub ?? assignment.userSub,
     });
   }
 
@@ -106,7 +111,7 @@ async function buildManagementResponse() {
         expiresAt: activeAssignment?.expiresAt ?? null,
         identifier: user.identifier,
         pendingRequest,
-        userSub: activeAssignment?.userSub ?? null,
+        userSub: activeAssignment?.userSub ?? user.sub,
       };
     })
     .sort((leftUser, rightUser) => leftUser.identifier.localeCompare(rightUser.identifier));

@@ -67,6 +67,7 @@ export type CognitoTokens = {
 export type RegisteredDirectoryUser = {
   identifier: string;
   label: string;
+  sub: string | null;
 };
 
 function normalizePhoneNumber(phoneNumber: string): string {
@@ -411,7 +412,7 @@ export async function listRegisteredDirectoryUsers(): Promise<RegisteredDirector
         getAttributeValue(user.Attributes, "given_name") ||
         identifier;
 
-      users.push({ identifier, label });
+      users.push({ identifier, label, sub: getAttributeValue(user.Attributes, "sub") || null });
     }
 
     paginationToken = response.PaginationToken;
