@@ -68,6 +68,8 @@ const POLL_OCR_PROMPT = `convert the image/text to poll questions in the followi
 Example:
 ${POLL_OCR_EXAMPLE}`;
 
+const SELF_TEST_GROUP_OPTION_ID = "__self-test__";
+
 function createEmptyOptions(count: number) {
   return Array.from({ length: count }, () => "");
 }
@@ -373,8 +375,7 @@ type AdminWorkspaceSection =
   | "participants"
   | "pools"
   | "question-bank"
-  | "schedule"
-  | "self-test";
+  | "schedule";
 
 type AdminMenuGroup = "groups" | "home" | "poll" | "test";
 
@@ -519,17 +520,11 @@ function getSectionUpgradePrompt(
         };
       case "schedule":
         return {
-          featureLabel: "Scheduled tests",
-          isIncluded: currentDefinition.test.maxScheduledTestsPerMonth > 0,
-          matcher: (candidate: NormalUserCategory) => normalUserCategoryDefinitions[candidate].test.maxScheduledTestsPerMonth > 0,
-          message: "Schedule live tests for your participants.",
-        };
-      case "self-test":
-        return {
-          featureLabel: "Self tests",
-          isIncluded: currentDefinition.test.maxSelfTestsPerMonth > 0,
-          matcher: (candidate: NormalUserCategory) => normalUserCategoryDefinitions[candidate].test.maxSelfTestsPerMonth > 0,
-          message: "Run self-paced test sessions from your own question pools.",
+          featureLabel: "Scheduled and self tests",
+          isIncluded: currentDefinition.test.maxScheduledTestsPerMonth > 0 || currentDefinition.test.maxSelfTestsPerMonth > 0,
+          matcher: (candidate: NormalUserCategory) =>
+            normalUserCategoryDefinitions[candidate].test.maxScheduledTestsPerMonth > 0 || normalUserCategoryDefinitions[candidate].test.maxSelfTestsPerMonth > 0,
+          message: "Schedule tests for groups or create self tests for your signed-in account.",
         };
       case "poll-questions":
         return {
@@ -929,7 +924,6 @@ export function AdminQuestionWorkspace({
   const [copiedLinkKey, setCopiedLinkKey] = useState<string | null>(null);
   const [openMenuGroup, setOpenMenuGroup] = useState<AdminMenuGroup | null>(null);
   const [editingScheduledTestId, setEditingScheduledTestId] = useState<string | null>(null);
-  const [editingSelfTestId, setEditingSelfTestId] = useState<string | null>(null);
   const [scheduleDurationMinutes, setScheduleDurationMinutes] = useState("30");
   const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
   const [scheduleGenerateInviteLink, setScheduleGenerateInviteLink] = useState(false);
@@ -940,13 +934,6 @@ export function AdminQuestionWorkspace({
   const [scheduleTitle, setScheduleTitle] = useState("");
   const [scheduledTests, setScheduledTests] = useState<ScheduledTest[]>([]);
   const [selectedGroupParticipantIds, setSelectedGroupParticipantIds] = useState<string[]>([]);
-  const [selfTestDurationMinutes, setSelfTestDurationMinutes] = useState("30");
-  const [selfTestFeedback, setSelfTestFeedback] = useState<string | null>(null);
-  const [selfTestPoolId, setSelfTestPoolId] = useState("");
-  const [selfTestQuestionCount, setSelfTestQuestionCount] = useState("1");
-  const [selfTestStartMode, setSelfTestStartMode] = useState<"later" | "now">("now");
-  const [selfTestStartsAtInput, setSelfTestStartsAtInput] = useState(createDefaultScheduleTime());
-  const [selfTestTitle, setSelfTestTitle] = useState("");
   const [summary, setSummary] = useState<HistoryResponse["summary"]>({
     attempts: 0,
     groups: 0,
@@ -1009,10 +996,6 @@ export function AdminQuestionWorkspace({
       setSummary(historyPayload.summary);
       setCategorySnapshot(categorySnapshotPayload);
       setCategoryManagement(categoryManagementPayload);
-
-      if (!selfTestPoolId && poolsPayload.pools.length) {
-        setSelfTestPoolId(poolsPayload.pools[0].id);
-      }
 
       setSelectedQuestionBankPoolId((currentPoolId) =>
         currentPoolId && poolsPayload.pools.some((pool) => pool.id === currentPoolId)
@@ -1249,15 +1232,6 @@ export function AdminQuestionWorkspace({
     setScheduleTitle("");
   }
 
-  function resetSelfTestForm() {
-    setEditingSelfTestId(null);
-    setSelfTestDurationMinutes("30");
-    setSelfTestQuestionCount("1");
-    setSelfTestStartMode("now");
-    setSelfTestStartsAtInput(createDefaultScheduleTime());
-    setSelfTestTitle("");
-  }
-
   function handleStartEditingPoll(poll: ScheduledPoll) {
     setEditingScheduledPollId(poll.id);
     setPollScheduleParticipantType(poll.participantType);
@@ -1289,15 +1263,16 @@ export function AdminQuestionWorkspace({
   }
 
   function handleStartEditingSelfTest(test: ScheduledTest) {
-    setEditingSelfTestId(test.id);
-    setSelfTestPoolId(test.poolId);
-    setSelfTestQuestionCount(String(test.questionCount));
-    setSelfTestDurationMinutes(String(test.durationMinutes));
-    setSelfTestStartMode("later");
-    setSelfTestStartsAtInput(toDateTimeInputValue(test.startsAt));
-    setSelfTestTitle(test.title);
-    setSelfTestFeedback(null);
-    setOpenSection("self-test");
+    setEditingScheduledTestId(test.id);
+    setSchedulePoolId(test.poolId);
+    setScheduleQuestionCount(String(test.questionCount));
+    setScheduleDurationMinutes(String(test.durationMinutes));
+    setScheduleGenerateInviteLink(false);
+    setScheduleParticipantGroupIds([SELF_TEST_GROUP_OPTION_ID]);
+    setScheduleStartsAtInput(toDateTimeInputValue(test.startsAt));
+    setScheduleTitle(test.title);
+    setScheduleFeedback(null);
+    setOpenSection("schedule");
   }
 
   function updateEditableOption(index: number, value: string) {
@@ -1726,7 +1701,7 @@ export function AdminQuestionWorkspace({
     }
 
     if (group === "test") {
-      return openSection === "author" || openSection === "question-bank" || openSection === "schedule" || openSection === "self-test";
+      return openSection === "author" || openSection === "question-bank" || openSection === "schedule";
     }
 
     if (group === "poll") {
@@ -2481,6 +2456,9 @@ export function AdminQuestionWorkspace({
     });
   }
 
+  const isScheduleSelfTestSelected = scheduleParticipantGroupIds.includes(SELF_TEST_GROUP_OPTION_ID);
+  const selectedScheduleGroupIds = scheduleParticipantGroupIds.filter((groupId) => groupId !== SELF_TEST_GROUP_OPTION_ID);
+
   function handleScheduleTest() {
     if (!schedulePoolId) {
       setScheduleFeedback("Select a question pool first.");
@@ -2500,7 +2478,12 @@ export function AdminQuestionWorkspace({
       return;
     }
 
-    if (scheduleGenerateInviteLink && scheduleParticipantGroupIds.length !== 1) {
+    if (isScheduleSelfTestSelected && !currentAdminIdentifier) {
+      setScheduleFeedback("Your account needs a participant identifier before you can create a self test.");
+      return;
+    }
+
+    if (scheduleGenerateInviteLink && selectedScheduleGroupIds.length !== 1) {
       setScheduleFeedback("Invite links require exactly one selected group.");
       return;
     }
@@ -2518,9 +2501,9 @@ export function AdminQuestionWorkspace({
           body: JSON.stringify({
             branding: normalizeBrandingInput(workspaceBranding),
             durationMinutes,
-            generateInviteLink: scheduleGenerateInviteLink,
-            participantGroupIds: scheduleParticipantGroupIds,
-            participantIds: [],
+            generateInviteLink: isScheduleSelfTestSelected ? false : scheduleGenerateInviteLink,
+            participantGroupIds: isScheduleSelfTestSelected ? [] : selectedScheduleGroupIds,
+            participantIds: isScheduleSelfTestSelected && currentAdminIdentifier ? [currentAdminIdentifier] : [],
             poolId: schedulePoolId,
             questionCount,
             startsAt,
@@ -2541,75 +2524,7 @@ export function AdminQuestionWorkspace({
     });
   }
 
-  function handleScheduleSelfTest() {
-    if (!currentAdminIdentifier) {
-      setSelfTestFeedback("Your account needs a participant identifier before you can create a self test.");
-      return;
-    }
-
-    if (!selfTestPoolId) {
-      setSelfTestFeedback("Select a question pool first.");
-      return;
-    }
-
-    const durationMinutes = Number(selfTestDurationMinutes);
-    const questionCount = Number(selfTestQuestionCount);
-    const startsAt =
-      selfTestStartMode === "now"
-        ? new Date().toISOString()
-        : new Date(selfTestStartsAtInput).toISOString();
-
-    if (!Number.isFinite(durationMinutes) || durationMinutes < 1) {
-      setSelfTestFeedback("Duration must be at least 1 minute.");
-      return;
-    }
-
-    if (!Number.isFinite(questionCount) || questionCount < 1) {
-      setSelfTestFeedback("Question count must be at least 1.");
-      return;
-    }
-
-    if (
-      selfTestStartMode === "later" &&
-      (!selfTestStartsAtInput || Number.isNaN(new Date(selfTestStartsAtInput).getTime()))
-    ) {
-      setSelfTestFeedback("Choose a valid future date and time.");
-      return;
-    }
-
-    void mutateWorkspace(async () => {
-      await readJson<ScheduledTestsResponse>(
-        await fetch("/api/admin/tests", {
-          body: JSON.stringify({
-            branding: normalizeBrandingInput(workspaceBranding),
-            durationMinutes,
-            participantGroupIds: [],
-            participantIds: [currentAdminIdentifier],
-            poolId: selfTestPoolId,
-            questionCount,
-            startsAt,
-            testId: editingSelfTestId,
-            title: selfTestTitle.trim(),
-          }),
-          headers: {
-            "Content-Type": "application/json",
-          },
-          method: editingSelfTestId ? "PATCH" : "POST",
-        }),
-      );
-
-      setSelfTestFeedback(editingSelfTestId ? "Self test updated." : "Self test scheduled.");
-      resetSelfTestForm();
-      setResultsMode("tests");
-      setTestListFilter("both");
-      setOpenSection("history");
-    }).catch((error) => {
-      handleWorkspaceActionError(error, "Unable to save the self test.", setSelfTestFeedback);
-    });
-  }
-
   const selectedPool = pools.find((pool) => pool.id === schedulePoolId) ?? null;
-  const selectedSelfTestPool = pools.find((pool) => pool.id === selfTestPoolId) ?? null;
   const selectedQuestionBankPool = pools.find((pool) => pool.id === selectedQuestionBankPoolId) ?? null;
   const participantHistoryByTestId = new Map(
     participantTestHistory.map((entry) => [entry.testId, entry]),
@@ -3319,7 +3234,6 @@ export function AdminQuestionWorkspace({
               { label: "Add Questions", section: "author" },
               { label: "Question Pools", section: "question-bank" },
               { label: "Schedule", section: "schedule" },
-              { label: "Self Test", section: "self-test" },
             ])}
             {renderMenuGroup("Poll", "poll", [
               { label: "Add Questions", section: "poll-questions" },
@@ -4577,36 +4491,58 @@ export function AdminQuestionWorkspace({
           <div className="field">
             <label>Select groups or classes</label>
             <div className="selection-grid">
+              <label className="role-option" key="schedule-group-self-test">
+                <input
+                  checked={isScheduleSelfTestSelected}
+                  type="checkbox"
+                  onChange={(event) => {
+                    setScheduleParticipantGroupIds(event.target.checked ? [SELF_TEST_GROUP_OPTION_ID] : []);
+                    setScheduleGenerateInviteLink(false);
+                  }}
+                />
+                <span>Self Test</span>
+              </label>
               {participantGroups.map((group) => (
                 <label className="role-option" key={`schedule-group-${group.id}`}>
                   <input
                     checked={scheduleParticipantGroupIds.includes(group.id)}
                     type="checkbox"
-                    onChange={() =>
+                    onChange={() => {
                       setScheduleParticipantGroupIds((current) =>
-                        toggleArrayValue(current, group.id),
-                      )
-                    }
+                        toggleArrayValue(
+                          current.filter((groupId) => groupId !== SELF_TEST_GROUP_OPTION_ID),
+                          group.id,
+                        ),
+                      );
+                    }}
                   />
                   <span>{group.name}</span>
                 </label>
               ))}
             </div>
+            {isScheduleSelfTestSelected ? (
+              <p className="muted-text">Self tests are assigned only to your signed-in account.</p>
+            ) : null}
           </div>
 
           <div className="field">
             <label className="role-option">
               <input
-                checked={scheduleGenerateInviteLink}
+                checked={!isScheduleSelfTestSelected && scheduleGenerateInviteLink}
+                disabled={isScheduleSelfTestSelected}
                 type="checkbox"
                 onChange={(event) => setScheduleGenerateInviteLink(event.target.checked)}
               />
               <span>Create invite link and QR code for this test</span>
             </label>
-            <p className="muted-text">Invite links work only when exactly one group is selected.</p>
+            <p className="muted-text">
+              {isScheduleSelfTestSelected
+                ? "Invite links are not created for self tests."
+                : "Invite links work only when exactly one group is selected."}
+            </p>
           </div>
 
-          {scheduleGenerateInviteLink ? <p className="muted-text">Group access from this invite follows the selected group&apos;s own join setting.</p> : null}
+          {!isScheduleSelfTestSelected && scheduleGenerateInviteLink ? <p className="muted-text">Group access from this invite follows the selected group&apos;s own join setting.</p> : null}
 
           {scheduleFeedback ? <p className="muted-text">{scheduleFeedback}</p> : null}
           <div className="inline-actions">
@@ -4615,123 +4551,6 @@ export function AdminQuestionWorkspace({
             </button>
             {editingScheduledTestId ? (
               <button className="button-secondary" disabled={isMutating} type="button" onClick={resetScheduledTestForm}>
-                Cancel edit
-              </button>
-            ) : null}
-          </div>
-        </div>
-      </CollapsibleWorkspaceSection>
-
-      <CollapsibleWorkspaceSection
-        eyebrow=""
-        isOpen={openSection === "self-test"}
-        sectionId="admin-self-test"
-        title="Self Test"
-        onToggle={() => toggleSection("self-test")}
-      >
-        <div className="form-stack">
-          <div className="field">
-            <label htmlFor="self-test-title">Topic or purpose</label>
-            <input
-              id="self-test-title"
-              placeholder="Practice chemistry mock"
-              value={selfTestTitle}
-              onChange={(event) => setSelfTestTitle(event.target.value)}
-            />
-          </div>
-
-          <div className="field-row">
-            <div className="field grow-field">
-              <label htmlFor="self-test-pool">Question pool</label>
-              <select
-                className="select-field"
-                id="self-test-pool"
-                value={selfTestPoolId}
-                onChange={(event) => setSelfTestPoolId(event.target.value)}
-              >
-                {pools.map((pool) => (
-                  <option key={pool.id} value={pool.id}>
-                    {pool.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="self-test-question-count">Number of questions</label>
-              <input
-                id="self-test-question-count"
-                min={1}
-                type="number"
-                value={selfTestQuestionCount}
-                onChange={(event) => setSelfTestQuestionCount(event.target.value)}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="self-test-duration">Duration in minutes</label>
-              <input
-                id="self-test-duration"
-                min={1}
-                type="number"
-                value={selfTestDurationMinutes}
-                onChange={(event) => setSelfTestDurationMinutes(event.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="field">
-            <label>Start mode</label>
-            <div className="selection-grid">
-              <label className="role-option">
-                <input
-                  checked={selfTestStartMode === "now"}
-                  name="self-test-start-mode"
-                  type="radio"
-                  onChange={() => setSelfTestStartMode("now")}
-                />
-                <span>Start now</span>
-              </label>
-              <label className="role-option">
-                <input
-                  checked={selfTestStartMode === "later"}
-                  name="self-test-start-mode"
-                  type="radio"
-                  onChange={() => setSelfTestStartMode("later")}
-                />
-                <span>Schedule for later</span>
-              </label>
-            </div>
-          </div>
-
-          {selfTestStartMode === "later" ? (
-            <div className="field">
-              <label htmlFor="self-test-starts-at">Self test date and time</label>
-              <input
-                id="self-test-starts-at"
-                type="datetime-local"
-                value={selfTestStartsAtInput}
-                onChange={(event) => setSelfTestStartsAtInput(event.target.value)}
-              />
-            </div>
-          ) : null}
-
-          {selectedSelfTestPool ? (
-            <p className="muted-text">
-              Pool size: {questions.filter((question) => question.poolIds.includes(selectedSelfTestPool.id)).length} questions
-            </p>
-          ) : null}
-
-          <p className="muted-text">
-            Participant: your signed-in account. Self tests are not shared with groups or other participants.
-          </p>
-
-          {selfTestFeedback ? <p className="muted-text">{selfTestFeedback}</p> : null}
-
-          <div className="inline-actions">
-            <button className="button" disabled={isMutating} type="button" onClick={handleScheduleSelfTest}>
-              {editingSelfTestId ? "Update self test" : "Schedule self test"}
-            </button>
-            {editingSelfTestId ? (
-              <button className="button-secondary" disabled={isMutating} type="button" onClick={resetSelfTestForm}>
                 Cancel edit
               </button>
             ) : null}
