@@ -1,6 +1,5 @@
 export const NORMAL_USER_CATEGORIES = [
   "trapit-normal",
-  "trapit-self",
   "trapit-pro-limited",
   "trapit-pro",
   "trapit-pro-max",
@@ -44,28 +43,6 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
     },
     home: true,
     label: "TRAPit normal users",
-    poll: {
-      addQuestion: false,
-      schedule: false,
-      shareOpenToAll: false,
-      shareWithGroups: false,
-    },
-    test: {
-      addQuestion: false,
-      maxQuestionsPerPool: null,
-      maxQuestionPools: 0,
-      maxScheduledTestsPerMonth: 0,
-      maxSelfTestsPerMonth: 0,
-    },
-  },
-  "trapit-self": {
-    group: {
-      create: false,
-      join: true,
-      manage: false,
-    },
-    home: true,
-    label: "TRAPit Self users",
     poll: {
       addQuestion: false,
       schedule: false,

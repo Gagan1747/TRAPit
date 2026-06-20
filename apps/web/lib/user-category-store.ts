@@ -10,6 +10,7 @@ import {
   normalUserCategoryDefinitions,
   normalUserCategoryLabels,
   orderedNormalUserCategories,
+  resolveNormalUserCategory,
   type AuthSession,
   type NormalUserCategory,
 } from "@trapit/auth";
@@ -95,7 +96,7 @@ function normalizeState(parsed: Partial<UserCategoryState>): UserCategoryState {
       assignedAt: assignment.assignedAt ?? new Date().toISOString(),
       assignedByDisplayName: assignment.assignedByDisplayName?.trim() || null,
       assignedByIdentifier: assignment.assignedByIdentifier?.trim() || null,
-      category: assignment.category ?? defaultNormalUserCategory,
+      category: resolveNormalUserCategory(assignment.category),
       expiresAt: assignment.expiresAt ?? null,
       id: assignment.id ?? createEntityId("user-category-assignment"),
       reason: assignment.reason ?? "manual",
@@ -108,10 +109,10 @@ function normalizeState(parsed: Partial<UserCategoryState>): UserCategoryState {
         request.approvedDurationMonths === 3 || request.approvedDurationMonths === 12
           ? request.approvedDurationMonths
           : null,
-      currentCategory: request.currentCategory ?? defaultNormalUserCategory,
+      currentCategory: resolveNormalUserCategory(request.currentCategory),
       id: request.id ?? createEntityId("user-category-request"),
       requestedAt: request.requestedAt ?? new Date().toISOString(),
-      requestedCategory: request.requestedCategory ?? defaultNormalUserCategory,
+      requestedCategory: resolveNormalUserCategory(request.requestedCategory),
       requesterDisplayName: request.requesterDisplayName?.trim() || null,
       requesterIdentifier: request.requesterIdentifier?.trim() || null,
       requesterSub: request.requesterSub?.trim() || null,
