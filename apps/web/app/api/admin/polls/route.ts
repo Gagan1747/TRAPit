@@ -6,6 +6,7 @@ import { assertCanCreatePollQuestions, assertCanSchedulePoll } from "../../../..
 import {
   createPollQuestions,
   createScheduledPoll,
+  deletePollQuestion,
   listPollQuestions,
   listScheduledPolls,
   updateScheduledPoll,
@@ -15,6 +16,10 @@ type PollBody =
   | {
       drafts?: PollQuestionDraft[];
       mode?: "create-questions";
+    }
+  | {
+      mode?: "delete-question";
+      questionId?: string;
     }
   | {
       anonymous?: boolean;
@@ -90,6 +95,17 @@ export async function POST(request: Request) {
 
       const pollQuestions = await createPollQuestions(body.drafts, actor.sub);
       const scheduledPolls = await listScheduledPolls(actor.sub);
+      return NextResponse.json({ pollQuestions, scheduledPolls });
+    }
+
+    if (body.mode === "delete-question") {
+      if (!body.questionId?.trim()) {
+        return NextResponse.json({ error: "Poll question id is required." }, { status: 400 });
+      }
+
+      const pollQuestions = await deletePollQuestion(body.questionId, actor.sub);
+      const scheduledPolls = await listScheduledPolls(actor.sub);
+
       return NextResponse.json({ pollQuestions, scheduledPolls });
     }
 

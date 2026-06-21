@@ -7,6 +7,7 @@ import { assertCanCreateGroup, assertCanManageGroup } from "../../../../lib/user
 import {
   createGroup,
   createParticipant,
+  leaveParticipantGroup,
   listGroupJoinRequestsForAdmin,
   listParticipantGroupsForOwner,
   listParticipantGroups,
@@ -42,6 +43,10 @@ type ParticipantBody =
       mode?: "update-group";
       name?: string;
       participantIds?: string[];
+    }
+  | {
+      groupId?: string;
+      mode?: "leave-group";
     };
 
 function isCreateGroupBody(
@@ -60,6 +65,12 @@ function isResolveRequestBody(
   body: ParticipantBody,
 ): body is Extract<ParticipantBody, { mode?: "resolve-request" }> {
   return body.mode === "resolve-request";
+}
+
+function isLeaveGroupBody(
+  body: ParticipantBody,
+): body is Extract<ParticipantBody, { mode?: "leave-group" }> {
+  return body.mode === "leave-group";
 }
 
 export async function GET() {
@@ -183,6 +194,25 @@ export async function POST(request: Request) {
       });
 
       return NextResponse.json(payload);
+    }
+
+    if (isLeaveGroupBody(body)) {
+      if (!body.groupId?.trim()) {
+        return NextResponse.json({ error: "Group id is required." }, { status: 400 });
+      }
+
+      if (!actor.identifier) {
+        return NextResponse.json({ error: "User identifier is required to leave a group." }, { status: 400 });
+      }
+
+      const participantGroups = await leaveParticipantGroup({
+        groupId: body.groupId,
+        userIdentifier: actor.identifier,
+      });
+      const participants = await listParticipants();
+      const groupJoinRequests = await listGroupJoinRequestsForAdmin(actor.identifier);
+
+      return NextResponse.json({ groupJoinRequests, participantGroups, participants });
     }
 
     if (!("identifier" in body) || !body.identifier?.trim()) {

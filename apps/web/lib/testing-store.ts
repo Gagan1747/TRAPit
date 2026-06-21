@@ -39,9 +39,11 @@ import {
   type ScheduledPoll,
   type ScheduledTest,
   type TestAttempt,
+  type TestQuestionReport,
   type TestingWorkspaceState,
   type WorkspaceBranding,
   validatePollQuestionDraft,
+  validateQuestionDraft,
 } from "@trapit/testing";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -49,6 +51,7 @@ import path from "node:path";
 import {
   createPollQuestionsInBackend,
   createScheduledPollInBackend,
+  deletePollQuestionFromBackend,
   getPollByIdFromBackend,
   getPollByShareCodeFromBackend,
   isDynamoDbPollStoreEnabled,
@@ -62,6 +65,7 @@ import {
 } from "./poll-store";
 
 const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
+const TEST_REVIEW_EDIT_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 function resolveStorePath() {
   const configuredFilePath = process.env.TRAPIT_DATA_FILE?.trim();
@@ -234,6 +238,17 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       ),
     })),
     questions: parsed.questions ?? [],
+    questionReports: ((parsed as Partial<TestingWorkspaceState> & { questionReports?: Partial<TestQuestionReport>[] }).questionReports ?? []).map((report) => ({
+      createdAt: report.createdAt ?? new Date().toISOString(),
+      id: report.id ?? createEntityId("question-report"),
+      questionId: report.questionId ?? "",
+      reason: report.reason?.trim() || "Reported by participant.",
+      reporterIdentifier: report.reporterIdentifier ?? "",
+      reporterLabel: report.reporterLabel?.trim() || null,
+      resolvedAt: report.resolvedAt ?? null,
+      status: report.status ?? "open",
+      testId: report.testId ?? "",
+    })).filter((report) => report.testId && report.questionId && report.reporterIdentifier),
     scheduledPolls: (parsed.scheduledPolls ?? []).map((poll) => {
       const startsAt = poll.startsAt;
       const legacyDurationValue = (poll as ScheduledPoll & { durationMinutes?: number }).durationMinutes;
@@ -411,6 +426,80 @@ function getCompletedScheduledTest(state: TestingWorkspaceState, testId: string)
   }
 
   return scheduledTest;
+}
+
+function getCompletedTestReviewWindow(scheduledTest: ScheduledTest) {
+  const completedAt = getScheduledTestEndTime(scheduledTest);
+  const closesAt = new Date(new Date(completedAt).getTime() + TEST_REVIEW_EDIT_WINDOW_MS).toISOString();
+
+  return {
+    closesAt,
+    completedAt,
+    isOpen: Date.now() <= new Date(closesAt).getTime(),
+  };
+}
+
+function assertCompletedTestReviewWindowOpen(scheduledTest: ScheduledTest) {
+  if (!getCompletedTestReviewWindow(scheduledTest).isOpen) {
+    throw new Error("Question reporting and edits are only available for 14 days after the test is completed.");
+  }
+}
+
+function getQuestionReportsForTest(state: TestingWorkspaceState, testId: string) {
+  return state.questionReports.filter((report) => report.testId === testId);
+}
+
+function rescoreAttemptsForScheduledTest(state: TestingWorkspaceState, scheduledTest: ScheduledTest) {
+  const questionMap = getQuestionMap(state);
+  const questions = scheduledTest.questionIds
+    .map((questionId) => questionMap.get(questionId))
+    .filter((question): question is PersistentQuestion => Boolean(question));
+  const attemptsForTest = state.attempts
+    .filter((attempt) => attempt.testId === scheduledTest.id)
+    .map((attempt) => {
+      const startedAtMs = new Date(attempt.startedAt).getTime();
+      const completedAtMs = new Date(attempt.completedAt).getTime();
+
+      return {
+        ...attempt,
+        result: scoreObjectiveTest(questions, attempt.answers, startedAtMs, completedAtMs),
+      };
+    })
+    .sort((left, right) => {
+      const resultComparison = compareTestResults(left.result, right.result);
+
+      if (resultComparison !== 0) {
+        return resultComparison;
+      }
+
+      return new Date(left.completedAt).getTime() - new Date(right.completedAt).getTime();
+    });
+
+  const ranks: number[] = [];
+  const rankedAttempts = attemptsForTest.map((attempt, index) => {
+    const previousAttempt = attemptsForTest[index - 1];
+    const rank = index === 0
+      ? 1
+      : previousAttempt && compareTestResults(attempt.result, previousAttempt.result) === 0
+        ? ranks[index - 1] ?? index
+        : index + 1;
+
+    ranks[index] = rank;
+
+    return {
+      ...attempt,
+      result: {
+        ...attempt.result,
+        assignedParticipantCount: scheduledTest.resolvedParticipantIdentifiers.length,
+        incorrectCount: getIncorrectCount(attempt.result),
+        rank,
+        rankedParticipantCount: attemptsForTest.length,
+      },
+    };
+  });
+  const rankedAttemptMap = new Map(rankedAttempts.map((attempt) => [attempt.id, attempt]));
+
+  state.attempts = state.attempts.map((attempt) => rankedAttemptMap.get(attempt.id) ?? attempt);
 }
 
 function syncQuestionPoolMemberships(
@@ -996,6 +1085,41 @@ export async function createPollQuestions(
   return filterPollQuestionsForActor(state.pollQuestions, actorId);
 }
 
+export async function deletePollQuestion(questionId: string, actorId: string | null = null) {
+  if (isDynamoDbPollStoreEnabled()) {
+    return withPollStoreFallback(
+      () => deletePollQuestionFromBackend(questionId, actorId),
+      async () => {
+        const state = await readStore();
+        ensureActorOwnsPollQuestion(state, questionId, actorId);
+
+        state.pollQuestions = state.pollQuestions.filter((question) => question.id !== questionId);
+        state.scheduledPolls = state.scheduledPolls.map((poll) => ({
+          ...poll,
+          questionIds: poll.questionIds.filter((savedId) => savedId !== questionId),
+          updatedAt: new Date().toISOString(),
+        }));
+        await writeStore(state);
+
+        return filterPollQuestionsForActor(state.pollQuestions, actorId);
+      },
+    );
+  }
+
+  const state = await readStore();
+  ensureActorOwnsPollQuestion(state, questionId, actorId);
+
+  state.pollQuestions = state.pollQuestions.filter((question) => question.id !== questionId);
+  state.scheduledPolls = state.scheduledPolls.map((poll) => ({
+    ...poll,
+    questionIds: poll.questionIds.filter((savedId) => savedId !== questionId),
+    updatedAt: new Date().toISOString(),
+  }));
+  await writeStore(state);
+
+  return filterPollQuestionsForActor(state.pollQuestions, actorId);
+}
+
 export async function listScheduledPolls(actorId: string | null = null) {
   if (isDynamoDbPollStoreEnabled()) {
     return withPollStoreFallback(
@@ -1493,12 +1617,27 @@ export async function listParticipantGroupsForOwner(
   ownerIdentifier: string,
   options?: { includeUnowned?: boolean },
 ) {
+  const state = await readStore();
   const participantGroups = options?.includeUnowned
     ? await assignUnownedGroupsToOwner(ownerIdentifier)
-    : (await readStore()).participantGroups;
+    : state.participantGroups;
+  const participantMap = getParticipantMap({
+    ...state,
+    participantGroups,
+  });
 
   return participantGroups.filter((group) => {
     if (isGroupOwnedBy(group, ownerIdentifier)) {
+      return true;
+    }
+
+    const isMember = group.participantIds.some((participantId) => {
+      const participant = participantMap.get(participantId);
+
+      return participant ? identifiersMatch(participant.identifier, ownerIdentifier) : false;
+    });
+
+    if (isMember) {
       return true;
     }
 
@@ -1615,6 +1754,48 @@ export async function updateGroup(input: {
   await writeStore(state);
 
   return state.participantGroups;
+}
+
+export async function leaveParticipantGroup(input: {
+  groupId: string;
+  userIdentifier: string;
+}) {
+  const state = await readStore();
+  const group = state.participantGroups.find((entry) => entry.id === input.groupId);
+
+  if (!group) {
+    throw new Error("Group not found.");
+  }
+
+  if (isGroupOwnedBy(group, input.userIdentifier)) {
+    throw new Error("Group owners cannot leave their own group.");
+  }
+
+  const participantMap = getParticipantMap(state);
+  const participantIdsToRemove = group.participantIds.filter((participantId) => {
+    const participant = participantMap.get(participantId);
+
+    return participant ? identifiersMatch(participant.identifier, input.userIdentifier) : false;
+  });
+
+  if (!participantIdsToRemove.length) {
+    throw new Error("You are not a member of this group.");
+  }
+
+  const timestamp = new Date().toISOString();
+  state.participantGroups = state.participantGroups.map((entry) =>
+    entry.id === group.id
+      ? {
+          ...entry,
+          participantIds: entry.participantIds.filter((participantId) => !participantIdsToRemove.includes(participantId)),
+          updatedAt: timestamp,
+        }
+      : entry,
+  );
+
+  await writeStore(state);
+
+  return listParticipantGroupsForOwner(input.userIdentifier, { includeUnowned: true });
 }
 
 export async function listGroupJoinRequestsForAdmin(adminIdentifier: string) {
@@ -3256,12 +3437,85 @@ export async function getUserTestReview(testId: string, identifier: string) {
         options: question.options,
         prompt: question.prompt,
         questionId: question.id,
+        reportCount: getQuestionReportsForTest(state, testId).filter((report) => report.questionId === question.id).length,
+        reportedByCurrentUser: getQuestionReportsForTest(state, testId).some(
+          (report) => report.questionId === question.id && identifiersMatch(report.reporterIdentifier, normalizedIdentifier),
+        ),
         selectedOptionIndex: attempt?.answers[question.id],
       })),
+    canReport: Boolean(attempt) && getCompletedTestReviewWindow(scheduledTest).isOpen,
+    reviewWindowClosesAt: getCompletedTestReviewWindow(scheduledTest).closesAt,
     submittedAt: attempt?.completedAt ?? null,
     testId: scheduledTest.id,
     testTitle: scheduledTest.title,
   };
+}
+
+export async function reportTestQuestion(input: {
+  questionId: string;
+  reason: string;
+  reporterIdentifier: string;
+  reporterLabel: string | null;
+  testId: string;
+}) {
+  const state = await readStore();
+  const normalizedReporterIdentifier = normalizeParticipantIdentifier(input.reporterIdentifier);
+  const scheduledTest = getCompletedScheduledTest(state, input.testId);
+  assertCompletedTestReviewWindowOpen(scheduledTest);
+
+  if (!scheduledTest.questionIds.includes(input.questionId)) {
+    throw new Error("Question not found in this test.");
+  }
+
+  const attempt = state.attempts.find(
+    (entry) => entry.testId === input.testId && identifiersMatch(entry.userId, normalizedReporterIdentifier),
+  );
+
+  if (!attempt) {
+    throw new Error("Only participants who submitted this test can report a question.");
+  }
+
+  const existingReport = state.questionReports.find(
+    (report) => report.testId === input.testId
+      && report.questionId === input.questionId
+      && identifiersMatch(report.reporterIdentifier, normalizedReporterIdentifier),
+  );
+  const timestamp = new Date().toISOString();
+  const reason = input.reason.trim() || "Reported by participant.";
+
+  if (existingReport) {
+    state.questionReports = state.questionReports.map((report) =>
+      report.id === existingReport.id
+        ? {
+            ...report,
+            createdAt: timestamp,
+            reason,
+            reporterLabel: input.reporterLabel?.trim() || report.reporterLabel,
+            resolvedAt: null,
+            status: "open",
+          }
+        : report,
+    );
+  } else {
+    state.questionReports = [
+      {
+        createdAt: timestamp,
+        id: createEntityId("question-report"),
+        questionId: input.questionId,
+        reason,
+        reporterIdentifier: normalizedReporterIdentifier,
+        reporterLabel: input.reporterLabel?.trim() || null,
+        resolvedAt: null,
+        status: "open",
+        testId: input.testId,
+      },
+      ...state.questionReports,
+    ];
+  }
+
+  await writeStore(state);
+
+  return getUserTestReview(input.testId, normalizedReporterIdentifier);
 }
 
 export async function getScheduledTestInviteByShareCode(
@@ -3433,6 +3687,8 @@ export async function getAdminTestReview(testId: string, actorId: string | null 
 
   const questionMap = getQuestionMap(state);
   const attempts = state.attempts.filter((attempt) => attempt.testId === testId);
+  const reports = getQuestionReportsForTest(state, testId);
+  const reviewWindow = getCompletedTestReviewWindow(scheduledTest);
 
   return {
     review: scheduledTest.questionIds
@@ -3459,13 +3715,86 @@ export async function getAdminTestReview(testId: string, actorId: string | null 
           options: question.options,
           prompt: question.prompt,
           questionId: question.id,
+          reports: reports.filter((report) => report.questionId === question.id),
           totalResponses: optionSelectionCounts.reduce((total, count) => total + count, 0),
         };
       }),
+    canEditQuestions: reviewWindow.isOpen,
+    reviewWindowClosesAt: reviewWindow.closesAt,
     submittedCount: attempts.length,
     testId: scheduledTest.id,
     testTitle: scheduledTest.title,
   };
+}
+
+export async function updateCompletedTestQuestion(input: {
+  actorId: string | null;
+  correctOptionIndex: number;
+  options: string[];
+  prompt: string;
+  questionId: string;
+  testId: string;
+}) {
+  const state = await readStore();
+  const scheduledTest = ensureActorOwnsScheduledTest(state, input.testId, input.actorId);
+
+  if (scheduledTest.status !== "completed") {
+    throw new Error("Questions can be edited after results are announced.");
+  }
+
+  assertCompletedTestReviewWindowOpen(scheduledTest);
+
+  if (!scheduledTest.questionIds.includes(input.questionId)) {
+    throw new Error("Question not found in this test.");
+  }
+
+  const normalizedDraft = normalizeDraft({
+    correctOptionIndex: input.correctOptionIndex,
+    options: input.options,
+    prompt: input.prompt,
+  });
+  const validationError = validateQuestionDraft(normalizedDraft);
+
+  if (validationError) {
+    throw new Error(validationError);
+  }
+
+  const timestamp = new Date().toISOString();
+  let didUpdateQuestion = false;
+
+  state.questions = state.questions.map((question) => {
+    if (question.id !== input.questionId) {
+      return question;
+    }
+
+    didUpdateQuestion = true;
+
+    return {
+      ...question,
+      correctOptionIndex: normalizedDraft.correctOptionIndex,
+      options: normalizedDraft.options,
+      prompt: normalizedDraft.prompt,
+      updatedAt: timestamp,
+    };
+  });
+
+  if (!didUpdateQuestion) {
+    throw new Error("Question not found.");
+  }
+
+  state.questionReports = state.questionReports.map((report) =>
+    report.testId === input.testId && report.questionId === input.questionId && report.status === "open"
+      ? {
+          ...report,
+          resolvedAt: timestamp,
+          status: "resolved",
+        }
+      : report,
+  );
+  rescoreAttemptsForScheduledTest(state, scheduledTest);
+  await writeStore(state);
+
+  return getAdminTestReview(input.testId, input.actorId);
 }
 
 export async function getWorkspaceData() {

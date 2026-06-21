@@ -216,28 +216,47 @@ type BrandingResponse = {
   branding: WorkspaceBranding | null;
 };
 
+type TestQuestionReportSummary = {
+  createdAt: string;
+  id: string;
+  questionId: string;
+  reason: string;
+  reporterIdentifier: string;
+  reporterLabel: string | null;
+  resolvedAt: string | null;
+  status: "open" | "resolved";
+  testId: string;
+};
+
 type AdminTestReviewResponse = {
+  canEditQuestions: boolean;
   review: Array<{
     correctOptionIndex: number;
     optionSelectionCounts: number[];
     options: string[];
     prompt: string;
     questionId: string;
+    reports: TestQuestionReportSummary[];
     totalResponses: number;
   }>;
+  reviewWindowClosesAt: string;
   submittedCount: number;
   testId: string;
   testTitle: string;
 };
 
 type UserTestReviewResponse = {
+  canReport: boolean;
   review: Array<{
     correctOptionIndex: number;
     options: string[];
     prompt: string;
     questionId: string;
+    reportCount: number;
+    reportedByCurrentUser: boolean;
     selectedOptionIndex?: number;
   }>;
+  reviewWindowClosesAt: string;
   submittedAt: string | null;
   testId: string;
   testTitle: string;
@@ -916,6 +935,7 @@ export function AdminQuestionWorkspace({
   const [selectedQuestionBankPoolId, setSelectedQuestionBankPoolId] = useState<string | null>(null);
   const [questions, setQuestions] = useState<WorkspaceQuestion[]>([]);
   const [reviewByTestId, setReviewByTestId] = useState<Record<string, AdminTestReviewResponse>>({});
+  const [reviewEditDraftsByKey, setReviewEditDraftsByKey] = useState<Record<string, EditableQuestionDraft>>({});
   const [reviewLoadingByTestId, setReviewLoadingByTestId] = useState<Record<string, boolean>>({});
   const [resultsMode, setResultsMode] = useState<AdminResultsMode>("tests");
   const [expandedOpenPollResultIds, setExpandedOpenPollResultIds] = useState<string[]>([]);
@@ -1405,6 +1425,81 @@ export function AdminQuestionWorkspace({
     }
   }
 
+  function getReviewEditKey(testId: string, questionId: string) {
+    return `${testId}:${questionId}`;
+  }
+
+  function handleStartReviewQuestionEdit(testId: string, question: AdminTestReviewResponse["review"][number]) {
+    setReviewEditDraftsByKey((currentDrafts) => ({
+      ...currentDrafts,
+      [getReviewEditKey(testId, question.questionId)]: {
+        correctOptionIndex: question.correctOptionIndex,
+        options: [...question.options],
+        prompt: question.prompt,
+      },
+    }));
+  }
+
+  function handleCancelReviewQuestionEdit(testId: string, questionId: string) {
+    setReviewEditDraftsByKey((currentDrafts) => {
+      const nextDrafts = { ...currentDrafts };
+      delete nextDrafts[getReviewEditKey(testId, questionId)];
+      return nextDrafts;
+    });
+  }
+
+  function updateReviewEditDraft(testId: string, questionId: string, updater: (draft: EditableQuestionDraft) => EditableQuestionDraft) {
+    setReviewEditDraftsByKey((currentDrafts) => {
+      const key = getReviewEditKey(testId, questionId);
+      const currentDraft = currentDrafts[key];
+
+      if (!currentDraft) {
+        return currentDrafts;
+      }
+
+      return {
+        ...currentDrafts,
+        [key]: updater(currentDraft),
+      };
+    });
+  }
+
+  async function handleSaveReviewQuestionEdit(testId: string, questionId: string) {
+    const draft = reviewEditDraftsByKey[getReviewEditKey(testId, questionId)];
+
+    if (!draft) {
+      return;
+    }
+
+    try {
+      const payload = await readJson<AdminTestReviewResponse>(
+        await fetch(`/api/admin/tests/${testId}/review`, {
+          body: JSON.stringify({
+            correctOptionIndex: draft.correctOptionIndex,
+            mode: "update-question",
+            options: draft.options,
+            prompt: draft.prompt,
+            questionId,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setReviewByTestId((currentReviews) => ({
+        ...currentReviews,
+        [testId]: payload,
+      }));
+      handleCancelReviewQuestionEdit(testId, questionId);
+      await loadWorkspace();
+      setFeedback("Question updated and completed test results recalculated.");
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to update the review question.");
+    }
+  }
+
   function toggleParticipantReviewVisibility(testId: string) {
     setVisibleParticipantReviewTestIds((currentIds) =>
       currentIds.includes(testId)
@@ -1442,6 +1537,38 @@ export function AdminQuestionWorkspace({
         ...currentState,
         [testId]: false,
       }));
+    }
+  }
+
+  async function handleReportReviewQuestion(testId: string, questionId: string) {
+    const reason = window.prompt("What is wrong with this question or correct answer?");
+
+    if (reason === null) {
+      return;
+    }
+
+    try {
+      const payload = await readJson<UserTestReviewResponse>(
+        await fetch(`/api/user/tests/${testId}/review`, {
+          body: JSON.stringify({
+            mode: "report-question",
+            questionId,
+            reason,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setParticipantReviewByTestId((currentReviews) => ({
+        ...currentReviews,
+        [testId]: payload,
+      }));
+      setFeedback("Question reported to the test creator.");
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to report the question.");
     }
   }
 
@@ -2176,6 +2303,32 @@ export function AdminQuestionWorkspace({
     );
   }
 
+  function handleDeletePollQuestion(questionId: string) {
+    if (!window.confirm("Delete this saved poll question?")) {
+      return;
+    }
+
+    void mutateWorkspace(async () => {
+      await readJson<PollsResponse>(
+        await fetch("/api/admin/polls", {
+          body: JSON.stringify({
+            mode: "delete-question",
+            questionId,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setPollScheduleQuestionIds((currentIds) => currentIds.filter((savedId) => savedId !== questionId));
+      setPollFeedback("Poll question deleted.");
+    }).catch((error) => {
+      handleWorkspaceActionError(error, "Unable to delete the poll question.", setPollFeedback);
+    });
+  }
+
   function handleCommitPollImport() {
     if (!pollImportPreview?.validCount) {
       setPollImportFeedback("Preview valid poll questions before importing.");
@@ -2432,6 +2585,31 @@ export function AdminQuestionWorkspace({
       setEditingGroupDraft(null);
     }).catch((error) => {
       handleWorkspaceActionError(error, "Unable to update the group.", setGroupFeedback);
+    });
+  }
+
+  function handleLeaveGroup(groupId: string) {
+    if (!window.confirm("Leave this group?")) {
+      return;
+    }
+
+    void mutateWorkspace(async () => {
+      await readJson<ParticipantsResponse>(
+        await fetch("/api/admin/participants", {
+          body: JSON.stringify({
+            groupId,
+            mode: "leave-group",
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setGroupFeedback("You left the group.");
+    }).catch((error) => {
+      handleWorkspaceActionError(error, "Unable to leave the group.", setGroupFeedback);
     });
   }
 
@@ -3133,7 +3311,7 @@ export function AdminQuestionWorkspace({
           </div>
           <div className="admin-menu-stack">
             {renderMenuGroup("Test", "test", [
-              { label: "Question Pools", section: "question-bank" },
+              { label: "Add Questions", section: "question-bank" },
               { label: "Schedule", section: "schedule" },
             ])}
             {renderMenuGroup("Poll", "poll", [
@@ -3560,7 +3738,7 @@ export function AdminQuestionWorkspace({
         eyebrow=""
         isOpen={openSection === "question-bank"}
         sectionId="admin-question-bank"
-        title="Question Bank"
+        title="Question Pools"
         onToggle={() => toggleSection("question-bank")}
       >
         {isLoading ? (
@@ -4077,36 +4255,64 @@ export function AdminQuestionWorkspace({
                 const requestsForGroup = groupJoinRequests.filter(
                   (request) => request.adminGroupId === group.id,
                 );
+                const isOwnedGroup = Boolean(
+                  currentAdminIdentifier && group.ownerIdentifier && participantIdentifiersMatch(group.ownerIdentifier, currentAdminIdentifier),
+                );
+                const isJoinedGroup = Boolean(
+                  currentAdminIdentifier
+                    && group.participantIds.some((participantId) => {
+                      const participant = participants.find((entry) => entry.id === participantId);
+
+                      return participant ? participantIdentifiersMatch(participant.identifier, currentAdminIdentifier) : false;
+                    }),
+                );
 
                 return (
                   <article className="question-card nested-card" key={group.id}>
                     <div className="question-head">
                       <strong>{group.name}</strong>
                       <div className="inline-actions">
+                        <span className="status-chip success">{isOwnedGroup ? "Created by you" : "Joined"}</span>
                         <span className="status-chip success">
                           {group.inviteJoinMode === "automatic" ? "Open for all" : "Approval required"}
                         </span>
                         <span className="status-chip success">{group.participantIds.length} members</span>
-                        {requestsForGroup.length ? (
+                        {isOwnedGroup && requestsForGroup.length ? (
                           <span className="status-chip success">
                             {requestsForGroup.length} request{requestsForGroup.length === 1 ? "" : "s"}
                           </span>
                         ) : null}
-                        <button
-                          className="button-secondary small-button"
-                          disabled={isMutating}
-                          type="button"
-                          onClick={() =>
-                            editingGroupId === group.id
-                              ? handleCancelEditingGroup()
-                              : handleStartEditingGroup(group)
-                          }
-                        >
-                          {editingGroupId === group.id ? "Cancel" : "Edit group"}
-                        </button>
+                        {isOwnedGroup ? (
+                          <button
+                            className="button-secondary small-button"
+                            disabled={isMutating}
+                            type="button"
+                            onClick={() =>
+                              editingGroupId === group.id
+                                ? handleCancelEditingGroup()
+                                : handleStartEditingGroup(group)
+                            }
+                          >
+                            {editingGroupId === group.id ? "Cancel" : "Edit group"}
+                          </button>
+                        ) : isJoinedGroup ? (
+                          <button
+                            className="button-secondary small-button"
+                            disabled={isMutating}
+                            type="button"
+                            onClick={() => handleLeaveGroup(group.id)}
+                          >
+                            Leave group
+                          </button>
+                        ) : null}
                       </div>
                     </div>
-                    {editingGroupId === group.id && editingGroupDraft ? (
+                    {!isOwnedGroup && group.ownerIdentifier ? (
+                      <p className="muted-text">
+                        Created by {formatPhoneNumberForDisplay(group.ownerIdentifier, { showFullPhoneNumber: isSuperAdmin })}
+                      </p>
+                    ) : null}
+                    {isOwnedGroup && editingGroupId === group.id && editingGroupDraft ? (
                       <div className="form-stack">
                         <div className="field">
                           <label htmlFor={`edit-group-name-${group.id}`}>Group name</label>
@@ -4260,7 +4466,7 @@ export function AdminQuestionWorkspace({
                       </div>
                     )}
 
-                    {requestsForGroup.length ? (
+                    {isOwnedGroup && requestsForGroup.length ? (
                       <div className="request-list">
                         {requestsForGroup.map((request) => (
                           <article className="request-card" key={request.id}>
@@ -4588,7 +4794,17 @@ export function AdminQuestionWorkspace({
                   <article className="question-card nested-card" key={question.id}>
                     <div className="question-head">
                       <strong>Question {index + 1}</strong>
-                      {question.topic ? <span className="status-chip warning">{question.topic}</span> : null}
+                      <div className="inline-actions">
+                        {question.topic ? <span className="status-chip warning">{question.topic}</span> : null}
+                        <button
+                          className="button-secondary small-button"
+                          disabled={isMutating}
+                          type="button"
+                          onClick={() => handleDeletePollQuestion(question.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
                     </div>
                     <p>{question.prompt}</p>
                     <ol className="question-options compact-question-options">
@@ -5330,26 +5546,131 @@ export function AdminQuestionWorkspace({
 
                             {visibleReviewTestIds.includes(scheduledTest.id) && reviewByTestId[scheduledTest.id] ? (
                               <div className="review-list">
-                                {reviewByTestId[scheduledTest.id].review.map((question, questionIndex) => (
+                                {reviewByTestId[scheduledTest.id].review.map((question, questionIndex) => {
+                                  const reviewEditKey = getReviewEditKey(scheduledTest.id, question.questionId);
+                                  const reviewEditDraft = reviewEditDraftsByKey[reviewEditKey] ?? null;
+                                  const openReports = question.reports.filter((report) => report.status === "open");
+
+                                  return (
                                   <article className="question-card nested-card" key={`${scheduledTest.id}-${question.questionId}`}>
                                     <div className="question-head">
-                                      <strong>Question {questionIndex + 1}</strong>
-                                      <span className="status-chip success">
-                                        {question.totalResponses} response{question.totalResponses === 1 ? "" : "s"}
-                                      </span>
+                                      <div className="inline-actions">
+                                        <strong>Question {questionIndex + 1}</strong>
+                                        <span className="status-chip success">
+                                          {question.totalResponses} response{question.totalResponses === 1 ? "" : "s"}
+                                        </span>
+                                        {openReports.length ? (
+                                          <span className="status-chip warning">
+                                            {openReports.length} report{openReports.length === 1 ? "" : "s"}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                      {reviewByTestId[scheduledTest.id].canEditQuestions ? (
+                                        <button
+                                          className="button-secondary small-button"
+                                          disabled={isMutating}
+                                          type="button"
+                                          onClick={() =>
+                                            reviewEditDraft
+                                              ? handleCancelReviewQuestionEdit(scheduledTest.id, question.questionId)
+                                              : handleStartReviewQuestionEdit(scheduledTest.id, question)
+                                          }
+                                        >
+                                          {reviewEditDraft ? "Cancel edit" : "Edit question"}
+                                        </button>
+                                      ) : null}
                                     </div>
-                                    <p>{question.prompt}</p>
-                                    <ol className="question-options compact-question-options">
-                                      {question.options.map((option, optionIndex) => (
-                                        <li key={`${question.questionId}-${optionIndex}`}>
-                                          {option}
-                                          {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
-                                          {` - ${question.optionSelectionCounts[optionIndex] ?? 0} response${(question.optionSelectionCounts[optionIndex] ?? 0) === 1 ? "" : "s"}`}
-                                        </li>
-                                      ))}
-                                    </ol>
+                                    {question.reports.length ? (
+                                      <div className="request-list">
+                                        {question.reports.map((report) => (
+                                          <article className="request-card" key={report.id}>
+                                            <div>
+                                              <strong>{report.reporterLabel ?? formatPhoneNumberForDisplay(report.reporterIdentifier, { showFullPhoneNumber: isSuperAdmin })}</strong>
+                                              <p className="muted-text">{report.reason}</p>
+                                              <p className="muted-text">Reported {formatShortDateTime(report.createdAt)}</p>
+                                            </div>
+                                            <span className={`status-chip ${report.status === "resolved" ? "success" : "warning"}`}>
+                                              {report.status}
+                                            </span>
+                                          </article>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                    {reviewEditDraft ? (
+                                      <div className="form-stack">
+                                        <div className="field textarea-field">
+                                          <label htmlFor={`review-question-${scheduledTest.id}-${question.questionId}`}>Question</label>
+                                          <textarea
+                                            id={`review-question-${scheduledTest.id}-${question.questionId}`}
+                                            value={reviewEditDraft.prompt}
+                                            onChange={(event) =>
+                                              updateReviewEditDraft(scheduledTest.id, question.questionId, (draft) => ({
+                                                ...draft,
+                                                prompt: event.target.value,
+                                              }))
+                                            }
+                                          />
+                                        </div>
+                                        <div className="option-list">
+                                          {reviewEditDraft.options.map((option, optionIndex) => (
+                                            <div className="option-editor" key={`${question.questionId}-review-option-${optionIndex}`}>
+                                              <div className="field">
+                                                <label htmlFor={`${question.questionId}-review-option-${optionIndex}`}>Option {optionIndex + 1}</label>
+                                                <input
+                                                  id={`${question.questionId}-review-option-${optionIndex}`}
+                                                  value={option}
+                                                  onChange={(event) =>
+                                                    updateReviewEditDraft(scheduledTest.id, question.questionId, (draft) => ({
+                                                      ...draft,
+                                                      options: draft.options.map((savedOption, savedIndex) =>
+                                                        savedIndex === optionIndex ? event.target.value : savedOption,
+                                                      ),
+                                                    }))
+                                                  }
+                                                />
+                                              </div>
+                                              <label className="radio-chip">
+                                                <input
+                                                  checked={reviewEditDraft.correctOptionIndex === optionIndex}
+                                                  name={`${question.questionId}-review-correct-option`}
+                                                  type="radio"
+                                                  onChange={() =>
+                                                    updateReviewEditDraft(scheduledTest.id, question.questionId, (draft) => ({
+                                                      ...draft,
+                                                      correctOptionIndex: optionIndex,
+                                                    }))
+                                                  }
+                                                />
+                                                Correct
+                                              </label>
+                                            </div>
+                                          ))}
+                                        </div>
+                                        <div className="inline-actions">
+                                          <button className="button" disabled={isMutating} type="button" onClick={() => void handleSaveReviewQuestionEdit(scheduledTest.id, question.questionId)}>
+                                            Save and recalculate
+                                          </button>
+                                          <button className="button-secondary" disabled={isMutating} type="button" onClick={() => handleCancelReviewQuestionEdit(scheduledTest.id, question.questionId)}>
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <>
+                                        <p>{question.prompt}</p>
+                                        <ol className="question-options compact-question-options">
+                                          {question.options.map((option, optionIndex) => (
+                                            <li key={`${question.questionId}-${optionIndex}`}>
+                                              {option}
+                                              {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
+                                              {` - ${question.optionSelectionCounts[optionIndex] ?? 0} response${(question.optionSelectionCounts[optionIndex] ?? 0) === 1 ? "" : "s"}`}
+                                            </li>
+                                          ))}
+                                        </ol>
+                                      </>
+                                    )}
                                   </article>
-                                ))}
+                                );})}
                               </div>
                             ) : null}
                           </div>
@@ -5432,10 +5753,27 @@ export function AdminQuestionWorkspace({
                             {participantReviewByTestId[participantTest.id].review.map((question, reviewIndex) => (
                               <article className="question-card nested-card" key={`${participantTest.id}-participant-review-${question.questionId}`}>
                                 <div className="question-head">
-                                  <strong>Question {reviewIndex + 1}</strong>
-                                  <span className="status-chip success">
-                                    Correct option {question.correctOptionIndex + 1}
-                                  </span>
+                                  <div className="inline-actions">
+                                    <strong>Question {reviewIndex + 1}</strong>
+                                    <span className="status-chip success">
+                                      Correct option {question.correctOptionIndex + 1}
+                                    </span>
+                                    {question.reportCount ? (
+                                      <span className="status-chip warning">
+                                        {question.reportCount} report{question.reportCount === 1 ? "" : "s"}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  {participantReviewByTestId[participantTest.id].canReport ? (
+                                    <button
+                                      className="button-secondary small-button"
+                                      disabled={question.reportedByCurrentUser}
+                                      type="button"
+                                      onClick={() => void handleReportReviewQuestion(participantTest.id, question.questionId)}
+                                    >
+                                      {question.reportedByCurrentUser ? "Reported" : "Report question"}
+                                    </button>
+                                  ) : null}
                                 </div>
                                 <p>{question.prompt}</p>
                                 <ol className="question-options compact-question-options">

@@ -2,6 +2,7 @@ import "server-only";
 
 import {
   BatchGetCommand,
+  DeleteCommand,
   PutCommand,
   QueryCommand,
   ScanCommand,
@@ -314,6 +315,42 @@ export async function createPollQuestionsInBackend(
       client.send(new PutCommand({
         Item: question,
         TableName: tableName,
+      })),
+    ),
+  );
+
+  return listPollQuestionsFromBackend(actorId);
+}
+
+export async function deletePollQuestionFromBackend(questionId: string, actorId: string | null = null) {
+  const question = (await listPollQuestionsFromBackend(null)).find((entry) => entry.id === questionId);
+
+  if (!question) {
+    throw new Error("Poll question not found.");
+  }
+
+  if (actorId && question.createdBy !== actorId) {
+    throw new Error("You can only manage poll questions you created.");
+  }
+
+  await getDocumentClient().send(new DeleteCommand({
+    Key: { id: questionId },
+    TableName: getPollTables().questions,
+  }));
+
+  const scheduledPollsTable = getPollTables().scheduledPolls;
+  const scheduledPolls = await scanAllItems<ScheduledPoll>(scheduledPollsTable);
+  const affectedPolls = scheduledPolls.filter((poll) => poll.questionIds.includes(questionId));
+
+  await Promise.all(
+    affectedPolls.map((poll) =>
+      getDocumentClient().send(new PutCommand({
+        Item: {
+          ...poll,
+          questionIds: poll.questionIds.filter((savedId) => savedId !== questionId),
+          updatedAt: new Date().toISOString(),
+        },
+        TableName: scheduledPollsTable,
       })),
     ),
   );

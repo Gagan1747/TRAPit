@@ -170,6 +170,18 @@ export type TestAttempt = {
   userId: string;
 };
 
+export type TestQuestionReport = {
+  createdAt: string;
+  id: string;
+  questionId: string;
+  reason: string;
+  reporterIdentifier: string;
+  reporterLabel: string | null;
+  resolvedAt: string | null;
+  status: "open" | "resolved";
+  testId: string;
+};
+
 export type TestHistoryEntry = {
   attemptId: string;
   completedAt: string;
@@ -216,6 +228,7 @@ export type TestingWorkspaceState = {
   pollQuestions: PersistentPollQuestion[];
   pools: QuestionPool[];
   questions: PersistentQuestion[];
+  questionReports: TestQuestionReport[];
   scheduledPolls: ScheduledPoll[];
   scheduledTests: ScheduledTest[];
   workspaceBranding: WorkspaceBranding | null;
@@ -802,6 +815,7 @@ export function createEmptyTestingWorkspaceState(): TestingWorkspaceState {
     pollQuestions: [],
     pools: [],
     questions: [],
+    questionReports: [],
     scheduledPolls: [],
     scheduledTests: [],
     workspaceBranding: null,
