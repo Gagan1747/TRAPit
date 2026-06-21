@@ -872,6 +872,7 @@ export function AdminQuestionWorkspace({
   const [groupGenerateInviteLink, setGroupGenerateInviteLink] = useState(false);
   const [groupInviteJoinMode, setGroupInviteJoinMode] = useState<"approval-required" | "automatic">("approval-required");
   const [groupJoinRequests, setGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
+  const [isCreateGroupPanelOpen, setIsCreateGroupPanelOpen] = useState(false);
   const [groupSearchFeedback, setGroupSearchFeedback] = useState<string | null>(null);
   const [groupSearchPhoneNumber, setGroupSearchPhoneNumber] = useState("");
   const [groupSearchResults, setGroupSearchResults] = useState<ParticipantGroup[]>([]);
@@ -3040,7 +3041,6 @@ export function AdminQuestionWorkspace({
       ? shuffledParticipantQuestions[currentParticipantQuestionIndex]
       : null;
   const groupMenuItems: Array<{ label: string; section: AdminWorkspaceSection }> = [
-    { label: "Create", section: "create-groups" },
     { label: "Manage", section: "manage-groups" },
     ...(activeParticipantTestId
       ? []
@@ -4375,84 +4375,91 @@ export function AdminQuestionWorkspace({
 
       <CollapsibleWorkspaceSection
         eyebrow=""
-        isOpen={openSection === "create-groups"}
-        sectionId="admin-create-groups"
-        title="Create Groups"
-        onToggle={() => toggleSection("create-groups")}
-      >
-        <div className="question-card form-stack">
-          <div className="field">
-            <label htmlFor="group-name">Enter group name</label>
-            <input
-              id="group-name"
-              placeholder="Enter group name"
-              value={groupName}
-              onChange={(event) => setGroupName(event.target.value)}
-            />
-          </div>
-          <ParticipantSearchPicker
-            emptyMessage="No participants selected for this group yet."
-            inputId="group-participant-search"
-            participants={participants}
-            searchPlaceholder="Search participants by phone number"
-            selectedIds={selectedGroupParticipantIds}
-            selectionLabel="Select participants"
-            showFullPhoneNumbers={isSuperAdmin}
-            onChange={setSelectedGroupParticipantIds}
-          />
-          <div className="question-card nested-card form-stack">
-            <label className="role-option">
-              <input
-                checked={groupGenerateInviteLink}
-                type="checkbox"
-                onChange={(event) => setGroupGenerateInviteLink(event.target.checked)}
-              />
-              <span>Create invite link for this group</span>
-            </label>
-            <div className="selection-grid">
-              <label className="role-option">
-                <input
-                  checked={groupInviteJoinMode === "approval-required"}
-                  name="group-invite-join-mode"
-                  type="radio"
-                  onChange={() => setGroupInviteJoinMode("approval-required")}
-                />
-                <span>Approval required</span>
-              </label>
-              <label className="role-option">
-                <input
-                  checked={groupInviteJoinMode === "automatic"}
-                  name="group-invite-join-mode"
-                  type="radio"
-                  onChange={() => setGroupInviteJoinMode("automatic")}
-                />
-                <span>Open for all</span>
-              </label>
-            </div>
-            <p className="muted-text">
-              {groupGenerateInviteLink
-                ? groupInviteJoinMode === "automatic"
-                  ? "Anyone who signs in from the link will join this group automatically."
-                  : "Anyone who signs in from the link will need creator approval before joining this group."
-                : "Without an invite link, only the selected participants can be invited into this group right now."}
-            </p>
-          </div>
-          {groupFeedback ? <p className="muted-text">{groupFeedback}</p> : null}
-          <div className="inline-actions">
-            <button className="button" disabled={isMutating} type="button" onClick={handleCreateGroup}>
-              Create group
-            </button>
-          </div>
-        </div>
-      </CollapsibleWorkspaceSection>
-
-      <CollapsibleWorkspaceSection
-        eyebrow=""
         isOpen={openSection === "manage-groups"}
         sectionId="admin-manage-groups"
         title="Manage Groups"
         onToggle={() => toggleSection("manage-groups")}
       >
+        <div className="question-card form-stack">
+          <div className="question-head">
+            <strong>Create group</strong>
+            <button
+              aria-expanded={isCreateGroupPanelOpen}
+              className="button-secondary small-button"
+              type="button"
+              onClick={() => setIsCreateGroupPanelOpen((current) => !current)}
+            >
+              {isCreateGroupPanelOpen ? "Hide" : "Create"}
+            </button>
+          </div>
+          {isCreateGroupPanelOpen ? (
+            <div className="form-stack">
+              <div className="field">
+                <label htmlFor="group-name">Enter group name</label>
+                <input
+                  id="group-name"
+                  placeholder="Enter group name"
+                  value={groupName}
+                  onChange={(event) => setGroupName(event.target.value)}
+                />
+              </div>
+              <ParticipantSearchPicker
+                emptyMessage="No participants selected for this group yet."
+                inputId="group-participant-search"
+                participants={participants}
+                searchPlaceholder="Search participants by phone number"
+                selectedIds={selectedGroupParticipantIds}
+                selectionLabel="Select participants"
+                showFullPhoneNumbers={isSuperAdmin}
+                onChange={setSelectedGroupParticipantIds}
+              />
+              <div className="question-card nested-card form-stack">
+                <label className="role-option">
+                  <input
+                    checked={groupGenerateInviteLink}
+                    type="checkbox"
+                    onChange={(event) => setGroupGenerateInviteLink(event.target.checked)}
+                  />
+                  <span>Create invite link for this group</span>
+                </label>
+                <div className="selection-grid">
+                  <label className="role-option">
+                    <input
+                      checked={groupInviteJoinMode === "approval-required"}
+                      name="group-invite-join-mode"
+                      type="radio"
+                      onChange={() => setGroupInviteJoinMode("approval-required")}
+                    />
+                    <span>Approval required</span>
+                  </label>
+                  <label className="role-option">
+                    <input
+                      checked={groupInviteJoinMode === "automatic"}
+                      name="group-invite-join-mode"
+                      type="radio"
+                      onChange={() => setGroupInviteJoinMode("automatic")}
+                    />
+                    <span>Open for all</span>
+                  </label>
+                </div>
+                <p className="muted-text">
+                  {groupGenerateInviteLink
+                    ? groupInviteJoinMode === "automatic"
+                      ? "Anyone who signs in from the link will join this group automatically."
+                      : "Anyone who signs in from the link will need creator approval before joining this group."
+                    : "Without an invite link, only the selected participants can be invited into this group right now."}
+                </p>
+              </div>
+              {groupFeedback ? <p className="muted-text">{groupFeedback}</p> : null}
+              <div className="inline-actions">
+                <button className="button" disabled={isMutating} type="button" onClick={handleCreateGroup}>
+                  Create group
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
         <div className="question-card">
           <div className="question-head">
             <strong>My groups</strong>
