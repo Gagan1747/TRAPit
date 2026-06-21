@@ -383,6 +383,7 @@ async function fileToDataUrl(file: File) {
 }
 
 type AdminWorkspaceSection =
+  | "analytics-coming-soon"
   | "author"
   | "create-groups"
   | "history"
@@ -393,6 +394,7 @@ type AdminWorkspaceSection =
   | "participants"
   | "pools"
   | "question-bank"
+  | "reports-coming-soon"
   | "schedule";
 
 type AdminMenuGroup = "groups" | "poll" | "test";
@@ -913,6 +915,9 @@ export function AdminQuestionWorkspace({
   const [pollImportText, setPollImportText] = useState("");
   const [pollQrCodes, setPollQrCodes] = useState<Record<string, string>>({});
   const [pollQuestions, setPollQuestions] = useState<PersistentPollQuestion[]>([]);
+  const [editingPollQuestionDraft, setEditingPollQuestionDraft] = useState<PollQuestionDraft | null>(null);
+  const [editingPollQuestionId, setEditingPollQuestionId] = useState<string | null>(null);
+  const [selectedPollQuestionIds, setSelectedPollQuestionIds] = useState<string[]>([]);
   const [editingScheduledPollId, setEditingScheduledPollId] = useState<string | null>(null);
   const [pollScheduleAnonymous, setPollScheduleAnonymous] = useState(false);
   const [pollScheduleGenerateQrCode, setPollScheduleGenerateQrCode] = useState(false);
@@ -1858,6 +1863,32 @@ export function AdminQuestionWorkspace({
     );
   }
 
+  function renderOverflowSectionItem(label: string, section: AdminWorkspaceSection) {
+    const lockedPrompt =
+      currentActorRole === "user" && currentUserCategory
+        ? getSectionUpgradePrompt(section, currentUserCategory)
+        : null;
+
+    return (
+      <button
+        className="workspace-overflow-action"
+        key={section}
+        type="button"
+        onClick={() => {
+          if (lockedPrompt) {
+            openUpgradePanel(lockedPrompt);
+          } else {
+            handleMenuSectionSelection(section);
+          }
+
+          setIsOverflowMenuOpen(false);
+        }}
+      >
+        {label}
+      </button>
+    );
+  }
+
   function renderMenuGroup(
     label: string,
     group: AdminMenuGroup,
@@ -2329,6 +2360,157 @@ export function AdminQuestionWorkspace({
     });
   }
 
+  function togglePollQuestionSelection(questionId: string) {
+    setSelectedPollQuestionIds((currentIds) => toggleArrayValue(currentIds, questionId));
+  }
+
+  function handleToggleSelectAllPollQuestions() {
+    if (!pollQuestions.length) {
+      return;
+    }
+
+    const allSelected = pollQuestions.every((question) => selectedPollQuestionIds.includes(question.id));
+
+    setSelectedPollQuestionIds((currentIds) =>
+      allSelected
+        ? currentIds.filter((questionId) => !pollQuestions.some((question) => question.id === questionId))
+        : [...new Set([...currentIds, ...pollQuestions.map((question) => question.id)])],
+    );
+  }
+
+  function handleDeleteSelectedPollQuestions() {
+    if (!selectedPollQuestionIds.length) {
+      setPollFeedback("Select at least one poll question to remove.");
+      return;
+    }
+
+    const questionCount = selectedPollQuestionIds.length;
+    const confirmationMessage =
+      questionCount === 1
+        ? "Delete the selected poll question?"
+        : `Delete ${questionCount} selected poll questions?`;
+
+    if (!window.confirm(confirmationMessage)) {
+      return;
+    }
+
+    const questionIds = [...selectedPollQuestionIds];
+
+    void mutateWorkspace(async () => {
+      for (const questionId of questionIds) {
+        await readJson<PollsResponse>(
+          await fetch("/api/admin/polls", {
+            body: JSON.stringify({
+              mode: "delete-question",
+              questionId,
+            }),
+            headers: {
+              "Content-Type": "application/json",
+            },
+            method: "POST",
+          }),
+        );
+      }
+
+      setSelectedPollQuestionIds((currentIds) =>
+        currentIds.filter((questionId) => !questionIds.includes(questionId)),
+      );
+      setPollScheduleQuestionIds((currentIds) =>
+        currentIds.filter((questionId) => !questionIds.includes(questionId)),
+      );
+      setPollFeedback(
+        questionCount === 1
+          ? "Poll question deleted."
+          : `${questionCount} poll questions deleted.`,
+      );
+    }).catch((error) => {
+      handleWorkspaceActionError(error, "Unable to delete the selected poll questions.", setPollFeedback);
+    });
+  }
+
+  function handleStartEditingPollQuestion(question: PersistentPollQuestion) {
+    setEditingPollQuestionId(question.id);
+    setEditingPollQuestionDraft({
+      options: [...question.options],
+      prompt: question.prompt,
+      topic: question.topic,
+    });
+    setPollFeedback(null);
+  }
+
+  function handleCancelEditingPollQuestion() {
+    setEditingPollQuestionId(null);
+    setEditingPollQuestionDraft(null);
+  }
+
+  function updateEditablePollOption(index: number, value: string) {
+    setEditingPollQuestionDraft((currentDraft) => {
+      if (!currentDraft) {
+        return currentDraft;
+      }
+
+      return {
+        ...currentDraft,
+        options: currentDraft.options.map((option, optionIndex) =>
+          optionIndex === index ? value : option,
+        ),
+      };
+    });
+  }
+
+  function handleEditablePollOptionCountChange(nextCount: number) {
+    setEditingPollQuestionDraft((currentDraft) => {
+      if (!currentDraft) {
+        return currentDraft;
+      }
+
+      const nextOptions =
+        nextCount > currentDraft.options.length
+          ? [...currentDraft.options, ...createEmptyOptions(nextCount - currentDraft.options.length)]
+          : currentDraft.options.slice(0, nextCount);
+
+      return {
+        ...currentDraft,
+        options: nextOptions,
+      };
+    });
+  }
+
+  function handleSaveEditedPollQuestion(questionId: string) {
+    if (editingPollQuestionId !== questionId || !editingPollQuestionDraft) {
+      return;
+    }
+
+    const validationError = validatePollQuestionDraft(editingPollQuestionDraft);
+
+    if (validationError) {
+      setPollFeedback(validationError);
+      return;
+    }
+
+    void mutateWorkspace(async () => {
+      await readJson<PollsResponse>(
+        await fetch("/api/admin/polls", {
+          body: JSON.stringify({
+            draft: editingPollQuestionDraft,
+            mode: "update-question",
+            questionId,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setEditingPollQuestionId(null);
+      setEditingPollQuestionDraft(null);
+      setPollFeedback("Poll question updated.");
+    }).catch((error) => {
+      handleWorkspaceActionError(error, "Unable to update the poll question.", setPollFeedback);
+    });
+  }
+
   function handleCommitPollImport() {
     if (!pollImportPreview?.validCount) {
       setPollImportFeedback("Preview valid poll questions before importing.");
@@ -2708,6 +2890,11 @@ export function AdminQuestionWorkspace({
   const areAllVisibleQuestionsSelected =
     filteredQuestionBankQuestionIds.length > 0 &&
     filteredQuestionBankQuestionIds.every((questionId) => selectedQuestionIds.includes(questionId));
+  const selectedVisiblePollQuestionIds = pollQuestions
+    .map((question) => question.id)
+    .filter((questionId) => selectedPollQuestionIds.includes(questionId));
+  const areAllPollQuestionsSelected =
+    pollQuestions.length > 0 && pollQuestions.every((question) => selectedPollQuestionIds.includes(question.id));
   const questionBankQuestionPositionById = new Map(
     filteredQuestionBankQuestions.map((question, index) => [question.id, index + 1]),
   );
@@ -2859,6 +3046,7 @@ export function AdminQuestionWorkspace({
       ? []
       : ([{ label: "Join", section: "join-groups" }] satisfies Array<{ label: string; section: AdminWorkspaceSection }>)),
   ];
+  const isComingSoonSection = openSection === "reports-coming-soon" || openSection === "analytics-coming-soon";
   const sortedScheduledPolls = [...scheduledPolls].sort((leftPoll, rightPoll) => {
     const priorityDifference =
       adminTestStatusPriority[leftPoll.status] - adminTestStatusPriority[rightPoll.status];
@@ -3005,6 +3193,15 @@ export function AdminQuestionWorkspace({
 
     setPollScheduleQuestionIds((currentIds) =>
       currentIds.filter((questionId) => availablePollQuestionIds.has(questionId)),
+    );
+    setSelectedPollQuestionIds((currentIds) =>
+      currentIds.filter((questionId) => availablePollQuestionIds.has(questionId)),
+    );
+    setEditingPollQuestionId((currentId) =>
+      currentId && availablePollQuestionIds.has(currentId) ? currentId : null,
+    );
+    setEditingPollQuestionDraft((currentDraft) =>
+      editingPollQuestionId && availablePollQuestionIds.has(editingPollQuestionId) ? currentDraft : null,
     );
   }, [pollQuestions]);
 
@@ -3212,6 +3409,8 @@ export function AdminQuestionWorkspace({
                       Branding
                     </button>
                   ) : null}
+                  <p className="eyebrow">Groups</p>
+                  {groupMenuItems.map((item) => renderOverflowSectionItem(item.label, item.section))}
                 </div>
               ) : null}
 
@@ -3314,15 +3513,25 @@ export function AdminQuestionWorkspace({
               { label: "Add Questions", section: "question-bank" },
               { label: "Schedule", section: "schedule" },
             ])}
+            {renderMenuItem("R...", "reports-coming-soon")}
+            {renderMenuItem("A...", "analytics-coming-soon")}
             {renderMenuGroup("Poll", "poll", [
               { label: "Add Questions", section: "poll-questions" },
               { label: "Schedule", section: "poll-schedule" },
             ])}
-            {renderMenuGroup("Groups", "groups", groupMenuItems)}
           </div>
         </aside>
 
         <div className="admin-main-column">
+          {isComingSoonSection ? (
+            <section className="panel workspace-card">
+              <div className="empty-state">
+                <p className="muted-text">Feature coming soon.......</p>
+              </div>
+            </section>
+          ) : (
+            <>
+
           {currentActorRole === "user" && categorySnapshot && isUpgradePanelOpen ? (
             <section className="panel workspace-card">
               <div className="section-head compact-head">
@@ -4787,15 +4996,56 @@ export function AdminQuestionWorkspace({
             <div className="question-card">
               <div className="question-head">
                 <strong>Saved poll questions</strong>
-                <span className="status-chip success">{pollQuestions.length}</span>
+                <div className="inline-actions">
+                  <label className="radio-chip">
+                    <input
+                      checked={areAllPollQuestionsSelected}
+                      disabled={!pollQuestions.length}
+                      type="checkbox"
+                      onChange={handleToggleSelectAllPollQuestions}
+                    />
+                    Select all
+                  </label>
+                  <button
+                    className="button-secondary small-button"
+                    disabled={!selectedVisiblePollQuestionIds.length || isMutating}
+                    type="button"
+                    onClick={handleDeleteSelectedPollQuestions}
+                  >
+                    Remove selected
+                  </button>
+                  <span className="status-chip success">{pollQuestions.length}</span>
+                </div>
               </div>
               <div className="question-list">
                 {pollQuestions.map((question, index) => (
-                  <article className="question-card nested-card" key={question.id}>
-                    <div className="question-head">
-                      <strong>Question {index + 1}</strong>
+                  <article className="question-card nested-card compact-question-card" key={question.id}>
+                    <div className="question-head compact-question-head">
                       <div className="inline-actions">
+                        <label className="radio-chip">
+                          <input
+                            checked={selectedPollQuestionIds.includes(question.id)}
+                            type="checkbox"
+                            onChange={() => togglePollQuestionSelection(question.id)}
+                          />
+                          Select
+                        </label>
+                        <strong>Q{index + 1}</strong>
                         {question.topic ? <span className="status-chip warning">{question.topic}</span> : null}
+                      </div>
+                      <div className="inline-actions">
+                        <button
+                          className="button-secondary small-button"
+                          disabled={isMutating}
+                          type="button"
+                          onClick={() =>
+                            editingPollQuestionId === question.id
+                              ? handleCancelEditingPollQuestion()
+                              : handleStartEditingPollQuestion(question)
+                          }
+                        >
+                          {editingPollQuestionId === question.id ? "Cancel" : "Edit"}
+                        </button>
                         <button
                           className="button-secondary small-button"
                           disabled={isMutating}
@@ -4806,12 +5056,105 @@ export function AdminQuestionWorkspace({
                         </button>
                       </div>
                     </div>
-                    <p>{question.prompt}</p>
-                    <ol className="question-options compact-question-options">
-                      {question.options.map((option, optionIndex) => (
-                        <li key={`${question.id}-${optionIndex}`}>{option}</li>
-                      ))}
-                    </ol>
+                    {editingPollQuestionId === question.id && editingPollQuestionDraft ? (
+                      <div className="form-stack">
+                        <div className="field compact-field">
+                          <label htmlFor={`edit-poll-topic-${question.id}`}>Topic</label>
+                          <input
+                            id={`edit-poll-topic-${question.id}`}
+                            value={editingPollQuestionDraft.topic}
+                            onChange={(event) =>
+                              setEditingPollQuestionDraft((currentDraft) =>
+                                currentDraft
+                                  ? {
+                                      ...currentDraft,
+                                      topic: event.target.value,
+                                    }
+                                  : currentDraft,
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="field textarea-field">
+                          <label htmlFor={`edit-poll-question-${question.id}`}>Question</label>
+                          <textarea
+                            id={`edit-poll-question-${question.id}`}
+                            value={editingPollQuestionDraft.prompt}
+                            onChange={(event) =>
+                              setEditingPollQuestionDraft((currentDraft) =>
+                                currentDraft
+                                  ? {
+                                      ...currentDraft,
+                                      prompt: event.target.value,
+                                    }
+                                  : currentDraft,
+                              )
+                            }
+                          />
+                        </div>
+
+                        <div className="inline-actions">
+                          {[2, 3, 4, 5].map((optionCount) => (
+                            <button
+                              className={editingPollQuestionDraft.options.length === optionCount ? "button" : "button-secondary"}
+                              key={`${question.id}-poll-option-count-${optionCount}`}
+                              type="button"
+                              onClick={() => handleEditablePollOptionCountChange(optionCount)}
+                            >
+                              {optionCount} options
+                            </button>
+                          ))}
+                        </div>
+
+                        <div className="option-list">
+                          {editingPollQuestionDraft.options.map((option, optionIndex) => (
+                            <div className="option-editor" key={`${question.id}-edit-poll-option-${optionIndex}`}>
+                              <div className="field">
+                                <label htmlFor={`${question.id}-edit-poll-option-${optionIndex}`}>
+                                  Option {optionIndex + 1}
+                                </label>
+                                <input
+                                  id={`${question.id}-edit-poll-option-${optionIndex}`}
+                                  value={option}
+                                  onChange={(event) => updateEditablePollOption(optionIndex, event.target.value)}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="inline-actions">
+                          <button
+                            className="button"
+                            disabled={isMutating}
+                            type="button"
+                            onClick={() => handleSaveEditedPollQuestion(question.id)}
+                          >
+                            Save changes
+                          </button>
+                          <button
+                            className="button-secondary"
+                            disabled={isMutating}
+                            type="button"
+                            onClick={handleCancelEditingPollQuestion}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="compact-question-prompt">{question.prompt}</p>
+                        <ol className="question-options compact-question-options">
+                          {question.options.map((option, optionIndex) => (
+                            <li key={`${question.id}-${optionIndex}`}>{option}</li>
+                          ))}
+                        </ol>
+                        <p className="muted-text compact-question-meta">
+                          Updated {formatShortDate(question.updatedAt)}
+                        </p>
+                      </>
+                    )}
                   </article>
                 ))}
               </div>
@@ -6145,6 +6488,8 @@ export function AdminQuestionWorkspace({
         </div>
       </CollapsibleWorkspaceSection>
       ) : null}
+            </>
+          )}
 
         </div>
       </div>

@@ -322,6 +322,40 @@ export async function createPollQuestionsInBackend(
   return listPollQuestionsFromBackend(actorId);
 }
 
+export async function updatePollQuestionInBackend(
+  questionId: string,
+  draft: PollQuestionDraft,
+  actorId: string | null = null,
+) {
+  const question = (await listPollQuestionsFromBackend(null)).find((entry) => entry.id === questionId);
+
+  if (!question) {
+    throw new Error("Poll question not found.");
+  }
+
+  if (actorId && question.createdBy !== actorId) {
+    throw new Error("You can only manage poll questions you created.");
+  }
+
+  const normalizedDraft = normalizePollQuestionDraft(draft);
+  const validationError = validatePollQuestionDraft(normalizedDraft);
+
+  if (validationError) {
+    throw new Error(validationError);
+  }
+
+  await getDocumentClient().send(new PutCommand({
+    Item: {
+      ...question,
+      ...normalizedDraft,
+      updatedAt: new Date().toISOString(),
+    },
+    TableName: getPollTables().questions,
+  }));
+
+  return listPollQuestionsFromBackend(actorId);
+}
+
 export async function deletePollQuestionFromBackend(questionId: string, actorId: string | null = null) {
   const question = (await listPollQuestionsFromBackend(null)).find((entry) => entry.id === questionId);
 

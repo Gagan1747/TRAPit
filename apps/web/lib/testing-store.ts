@@ -61,6 +61,7 @@ import {
   listScheduledPollsFromBackend,
   recordPollAttemptInBackend,
   recordRegisteredPollAttemptInBackend,
+  updatePollQuestionInBackend,
   updateScheduledPollInBackend,
 } from "./poll-store";
 
@@ -1115,6 +1116,63 @@ export async function deletePollQuestion(questionId: string, actorId: string | n
     questionIds: poll.questionIds.filter((savedId) => savedId !== questionId),
     updatedAt: new Date().toISOString(),
   }));
+  await writeStore(state);
+
+  return filterPollQuestionsForActor(state.pollQuestions, actorId);
+}
+
+export async function updatePollQuestion(
+  questionId: string,
+  draft: PollQuestionDraft,
+  actorId: string | null = null,
+) {
+  if (isDynamoDbPollStoreEnabled()) {
+    return withPollStoreFallback(
+      () => updatePollQuestionInBackend(questionId, draft, actorId),
+      async () => {
+        const state = await readStore();
+        ensureActorOwnsPollQuestion(state, questionId, actorId);
+        const normalizedDraft = normalizePollQuestionDraft(draft);
+        const validationError = validatePollQuestionDraft(normalizedDraft);
+
+        if (validationError) {
+          throw new Error(validationError);
+        }
+
+        state.pollQuestions = state.pollQuestions.map((question) =>
+          question.id === questionId
+            ? {
+                ...question,
+                ...normalizedDraft,
+                updatedAt: new Date().toISOString(),
+              }
+            : question,
+        );
+        await writeStore(state);
+
+        return filterPollQuestionsForActor(state.pollQuestions, actorId);
+      },
+    );
+  }
+
+  const state = await readStore();
+  ensureActorOwnsPollQuestion(state, questionId, actorId);
+  const normalizedDraft = normalizePollQuestionDraft(draft);
+  const validationError = validatePollQuestionDraft(normalizedDraft);
+
+  if (validationError) {
+    throw new Error(validationError);
+  }
+
+  state.pollQuestions = state.pollQuestions.map((question) =>
+    question.id === questionId
+      ? {
+          ...question,
+          ...normalizedDraft,
+          updatedAt: new Date().toISOString(),
+        }
+      : question,
+  );
   await writeStore(state);
 
   return filterPollQuestionsForActor(state.pollQuestions, actorId);

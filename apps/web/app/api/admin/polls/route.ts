@@ -9,6 +9,7 @@ import {
   deletePollQuestion,
   listPollQuestions,
   listScheduledPolls,
+  updatePollQuestion,
   updateScheduledPoll,
 } from "../../../../lib/testing-store";
 
@@ -19,6 +20,11 @@ type PollBody =
     }
   | {
       mode?: "delete-question";
+      questionId?: string;
+    }
+  | {
+      draft?: PollQuestionDraft;
+      mode?: "update-question";
       questionId?: string;
     }
   | {
@@ -104,6 +110,21 @@ export async function POST(request: Request) {
       }
 
       const pollQuestions = await deletePollQuestion(body.questionId, actor.sub);
+      const scheduledPolls = await listScheduledPolls(actor.sub);
+
+      return NextResponse.json({ pollQuestions, scheduledPolls });
+    }
+
+    if (body.mode === "update-question") {
+      if (!body.questionId?.trim()) {
+        return NextResponse.json({ error: "Poll question id is required." }, { status: 400 });
+      }
+
+      if (!body.draft) {
+        return NextResponse.json({ error: "Poll question details are required." }, { status: 400 });
+      }
+
+      const pollQuestions = await updatePollQuestion(body.questionId, body.draft, actor.sub);
       const scheduledPolls = await listScheduledPolls(actor.sub);
 
       return NextResponse.json({ pollQuestions, scheduledPolls });
