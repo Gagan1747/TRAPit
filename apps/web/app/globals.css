@@ -1288,6 +1288,58 @@ main {
   background: rgba(180, 76, 47, 0.24);
 }
 
+.test-runner-page-shell {
+  padding-top: 72px;
+}
+
+.test-runner-page-panel {
+  position: relative;
+}
+
+.test-runner-shell {
+  position: relative;
+}
+
+.test-runner-content {
+  padding-top: 18px;
+}
+
+.test-runner-timer {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  z-index: 50;
+  display: grid;
+  gap: 2px;
+  min-width: 168px;
+  padding: 12px 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 14px 30px rgba(35, 23, 18, 0.18);
+  text-align: center;
+}
+
+.test-runner-timer span {
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.test-runner-timer strong {
+  font-size: 2.35rem;
+  line-height: 1;
+}
+
+.test-runner-timer.success {
+  background: rgba(120, 141, 94, 0.94);
+  color: var(--accent-deep);
+}
+
+.test-runner-timer.warning {
+  background: rgba(180, 76, 47, 0.94);
+  color: #fffaf5;
+}
+
 button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -1482,5 +1534,20 @@ button:disabled {
   .hero-copy,
   .form-panel {
     padding: 24px;
+  }
+
+  .test-runner-page-shell {
+    padding-top: 92px;
+  }
+
+  .test-runner-timer {
+    top: 12px;
+    right: 12px;
+    min-width: 136px;
+    padding: 10px 14px;
+  }
+
+  .test-runner-timer strong {
+    font-size: 1.8rem;
   }
 }

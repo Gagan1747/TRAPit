@@ -2281,6 +2281,7 @@ export async function createScheduledTest(input: {
   questionCount: number;
   startsAt: string;
   title?: string | null;
+  titleSuffix?: string | null;
 }) {
   const state = await readStore();
   const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy, input.actorIdentifier ?? null);
@@ -2317,7 +2318,8 @@ export async function createScheduledTest(input: {
   }
 
   const timestamp = new Date().toISOString();
-  const title = input.title?.trim() || `${pool.name} test`;
+  const baseTitle = input.title?.trim() || `${pool.name} test`;
+  const title = input.titleSuffix?.trim() ? `${baseTitle} ${input.titleSuffix.trim()}` : baseTitle;
   const scheduledTest: ScheduledTest = {
     branding: normalizeWorkspaceBranding(input.branding),
     createdAt: timestamp,

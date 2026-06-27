@@ -217,16 +217,10 @@ export function UserTestWorkspace({
       return;
     }
 
-    setActiveTestId(testId);
-    setActiveParticipantName(participantName);
-    setAnswers({});
-    answersRef.current = {};
-    setCurrentQuestionIndex(0);
-    setResult(null);
-    setStartedAt(new Date().toISOString());
-    setRemainingMs(null);
-    setFeedback(null);
-    setOpenSection("tests");
+    const runnerPath = `/user/test/${encodeURIComponent(testId)}?participantName=${encodeURIComponent(participantName)}`;
+
+    window.open(runnerPath, "_blank", "noopener,noreferrer");
+    setFeedback("Test opened in a new tab.");
   }
 
   function toggleSection(section: UserWorkspaceSection) {

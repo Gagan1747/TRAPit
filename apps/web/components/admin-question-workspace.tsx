@@ -69,6 +69,10 @@ ${POLL_OCR_EXAMPLE}`;
 
 const SELF_TEST_GROUP_OPTION_ID = "__self-test__";
 
+type TestRepeatMode = "none" | "daily" | "weekly" | "monthly";
+
+const RECURRING_TEST_INSTANCE_COUNT = 6;
+
 function createEmptyOptions(count: number) {
   return Array.from({ length: count }, () => "");
 }
@@ -85,6 +89,78 @@ function toDateTimeInputValue(value: string) {
   const timezoneOffsetMs = date.getTimezoneOffset() * 60 * 1000;
 
   return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
+}
+
+function parseDateTimeInputValue(value: string) {
+  const [datePart, timePart = "00:00"] = value.split("T");
+  const [year, month, day] = datePart.split("-").map(Number);
+  const [hours, minutes] = timePart.split(":").map(Number);
+
+  if (![year, month, day, hours, minutes].every(Number.isFinite)) {
+    return null;
+  }
+
+  return { day, hours, minutes, month, year };
+}
+
+function formatDateTimeInputValue(parts: { day: number; hours: number; minutes: number; month: number; year: number }) {
+  const year = String(parts.year).padStart(4, "0");
+  const month = String(parts.month).padStart(2, "0");
+  const day = String(parts.day).padStart(2, "0");
+  const hours = String(parts.hours).padStart(2, "0");
+  const minutes = String(parts.minutes).padStart(2, "0");
+
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function getDaysInMonth(year: number, month: number) {
+  return new Date(year, month, 0).getDate();
+}
+
+function addMonthsToDateTimeInput(value: string, monthOffset: number) {
+  const parts = parseDateTimeInputValue(value);
+
+  if (!parts) {
+    return value;
+  }
+
+  const zeroBasedMonth = parts.month - 1 + monthOffset;
+  const targetYear = parts.year + Math.floor(zeroBasedMonth / 12);
+  const targetMonthIndex = ((zeroBasedMonth % 12) + 12) % 12;
+  const targetMonth = targetMonthIndex + 1;
+  const targetDay = Math.min(parts.day, getDaysInMonth(targetYear, targetMonth));
+
+  return formatDateTimeInputValue({
+    ...parts,
+    day: targetDay,
+    month: targetMonth,
+    year: targetYear,
+  });
+}
+
+function addDaysToDateTimeInput(value: string, dayOffset: number) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  date.setDate(date.getDate() + dayOffset);
+  return toDateTimeInputValue(date.toISOString());
+}
+
+function getRecurringScheduleInputs(startsAtInput: string, repeatMode: TestRepeatMode) {
+  if (repeatMode === "none") {
+    return [startsAtInput];
+  }
+
+  return Array.from({ length: RECURRING_TEST_INSTANCE_COUNT }, (_, index) => {
+    if (repeatMode === "monthly") {
+      return addMonthsToDateTimeInput(startsAtInput, index);
+    }
+
+    return addDaysToDateTimeInput(startsAtInput, repeatMode === "weekly" ? index * 7 : index);
+  });
 }
 
 function formatMembershipCount(value: number) {
@@ -955,6 +1031,7 @@ export function AdminQuestionWorkspace({
   const [scheduleParticipantGroupIds, setScheduleParticipantGroupIds] = useState<string[]>([]);
   const [schedulePoolId, setSchedulePoolId] = useState("");
   const [scheduleQuestionCount, setScheduleQuestionCount] = useState("1");
+  const [scheduleRepeatMode, setScheduleRepeatMode] = useState<TestRepeatMode>("none");
   const [scheduleStartsAtInput, setScheduleStartsAtInput] = useState(createDefaultScheduleTime());
   const [scheduleTitle, setScheduleTitle] = useState("");
   const [scheduledTests, setScheduledTests] = useState<ScheduledTest[]>([]);
@@ -1253,6 +1330,7 @@ export function AdminQuestionWorkspace({
     setScheduleGenerateInviteLink(false);
     setScheduleParticipantGroupIds([]);
     setScheduleQuestionCount("1");
+    setScheduleRepeatMode("none");
     setScheduleStartsAtInput(createDefaultScheduleTime());
     setScheduleTitle("");
   }
@@ -1281,6 +1359,7 @@ export function AdminQuestionWorkspace({
     setScheduleDurationMinutes(String(test.durationMinutes));
     setScheduleGenerateInviteLink(Boolean(test.shareCode));
     setScheduleParticipantGroupIds([...test.participantGroupIds]);
+    setScheduleRepeatMode("none");
     setScheduleStartsAtInput(toDateTimeInputValue(test.startsAt));
     setScheduleTitle(test.title);
     setScheduleFeedback(null);
@@ -1294,6 +1373,7 @@ export function AdminQuestionWorkspace({
     setScheduleDurationMinutes(String(test.durationMinutes));
     setScheduleGenerateInviteLink(false);
     setScheduleParticipantGroupIds([SELF_TEST_GROUP_OPTION_ID]);
+    setScheduleRepeatMode("none");
     setScheduleStartsAtInput(toDateTimeInputValue(test.startsAt));
     setScheduleTitle(test.title);
     setScheduleFeedback(null);
@@ -2834,6 +2914,11 @@ export function AdminQuestionWorkspace({
     }
 
     const startsAt = new Date(scheduleStartsAtInput).toISOString();
+    const scheduleStartInputs = getRecurringScheduleInputs(
+      scheduleStartsAtInput,
+      editingScheduledTestId ? "none" : scheduleRepeatMode,
+    );
+    const recurrenceStartsAt = scheduleStartInputs.map((value) => new Date(value).toISOString());
 
     void mutateWorkspace(async () => {
       await readJson<ScheduledTestsResponse>(
@@ -2846,6 +2931,8 @@ export function AdminQuestionWorkspace({
             participantIds: isScheduleSelfTestSelected && currentAdminIdentifier ? [currentAdminIdentifier] : [],
             poolId: schedulePoolId,
             questionCount,
+            recurrenceStartsAt: editingScheduledTestId ? undefined : recurrenceStartsAt,
+            repeatMode: editingScheduledTestId ? "none" : scheduleRepeatMode,
             startsAt,
             testId: editingScheduledTestId,
             title: scheduleTitle.trim(),
@@ -2857,7 +2944,13 @@ export function AdminQuestionWorkspace({
         }),
       );
 
-      setScheduleFeedback(editingScheduledTestId ? "Test updated." : "Test scheduled.");
+      setScheduleFeedback(
+        editingScheduledTestId
+          ? "Test updated."
+          : scheduleRepeatMode === "none"
+            ? "Test scheduled."
+            : "6 recurring tests scheduled.",
+      );
       resetScheduledTestForm();
     }).catch((error) => {
       handleWorkspaceActionError(error, "Unable to save the test.", setScheduleFeedback);
@@ -2865,6 +2958,10 @@ export function AdminQuestionWorkspace({
   }
 
   const selectedPool = pools.find((pool) => pool.id === schedulePoolId) ?? null;
+  const schedulePreviewInputs = getRecurringScheduleInputs(
+    scheduleStartsAtInput,
+    editingScheduledTestId ? "none" : scheduleRepeatMode,
+  );
   const selectedQuestionBankPool = pools.find((pool) => pool.id === selectedQuestionBankPoolId) ?? null;
   const participantHistoryByTestId = new Map(
     participantTestHistory.map((entry) => [entry.testId, entry]),
@@ -4776,6 +4873,45 @@ export function AdminQuestionWorkspace({
             </div>
           </div>
 
+          <div className="field">
+            <label htmlFor="schedule-repeat-mode">Repeat schedule</label>
+            <select
+              className="select-field"
+              disabled={Boolean(editingScheduledTestId)}
+              id="schedule-repeat-mode"
+              value={editingScheduledTestId ? "none" : scheduleRepeatMode}
+              onChange={(event) => setScheduleRepeatMode(event.target.value as TestRepeatMode)}
+            >
+              <option value="none">Do not repeat</option>
+              <option value="daily">Daily - 6 tests</option>
+              <option value="weekly">Weekly - same weekday, 6 tests</option>
+              <option value="monthly">Monthly - same date, 6 tests</option>
+            </select>
+            {editingScheduledTestId ? (
+              <p className="muted-text">Recurring schedules are created from new tests only. Edit each scheduled test separately.</p>
+            ) : scheduleRepeatMode !== "none" ? (
+              <div className="question-card nested-card">
+                <div className="question-head">
+                  <strong>Schedule preview</strong>
+                  <span className="status-chip success">6 tests</span>
+                </div>
+                <ol className="question-options compact-question-options">
+                  {schedulePreviewInputs.map((previewInput, previewIndex) => {
+                    const previewDate = new Date(previewInput);
+
+                    return (
+                      <li key={`${previewInput}-${previewIndex}`}>
+                        {Number.isNaN(previewDate.getTime())
+                          ? "Choose a valid test date and time."
+                          : formatShortDateTime(previewDate.toISOString())}
+                      </li>
+                    );
+                  })}
+                </ol>
+              </div>
+            ) : null}
+          </div>
+
           <div className="field-row">
             <div className="field grow-field">
               <label htmlFor="schedule-pool">Question pool</label>
@@ -4870,7 +5006,7 @@ export function AdminQuestionWorkspace({
           {scheduleFeedback ? <p className="muted-text">{scheduleFeedback}</p> : null}
           <div className="inline-actions">
             <button className="button" disabled={isMutating} type="button" onClick={handleScheduleTest}>
-              {editingScheduledTestId ? "Update test" : "Schedule test"}
+              {editingScheduledTestId ? "Update test" : scheduleRepeatMode === "none" ? "Schedule test" : "Schedule 6 tests"}
             </button>
             {editingScheduledTestId ? (
               <button className="button-secondary" disabled={isMutating} type="button" onClick={resetScheduledTestForm}>
