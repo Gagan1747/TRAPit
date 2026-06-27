@@ -4883,9 +4883,9 @@ export function AdminQuestionWorkspace({
               onChange={(event) => setScheduleRepeatMode(event.target.value as TestRepeatMode)}
             >
               <option value="none">Do not repeat</option>
-              <option value="daily">Daily - 6 tests</option>
-              <option value="weekly">Weekly - same weekday, 6 tests</option>
-              <option value="monthly">Monthly - same date, 6 tests</option>
+              <option value="daily">Every day - 1 test per day, 6 total</option>
+              <option value="weekly">Every week - same weekday, 6 total</option>
+              <option value="monthly">Every month - same date, 6 total</option>
             </select>
             {editingScheduledTestId ? (
               <p className="muted-text">Recurring schedules are created from new tests only. Edit each scheduled test separately.</p>
