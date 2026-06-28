@@ -1666,18 +1666,10 @@ export function AdminQuestionWorkspace({
       return;
     }
 
-    setActiveParticipantTestId(testId);
-    setActiveParticipantName(participantName);
-    setParticipantAnswers({});
-    participantAnswersRef.current = {};
-    setCurrentParticipantQuestionIndex(0);
-    setParticipantResult(null);
-    setParticipantStartedAt(new Date().toISOString());
-    setParticipantRemainingMs(null);
-    setFeedback(null);
-    setResultsMode("tests");
-    setTestListFilter("participant");
-    setOpenSection("history");
+    const runnerPath = `/user/test/${encodeURIComponent(testId)}?participantName=${encodeURIComponent(participantName)}`;
+
+    window.open(runnerPath, "_blank", "noopener,noreferrer");
+    setFeedback("Test opened in a new tab.");
   }
 
   function cancelActiveParticipantTest() {
