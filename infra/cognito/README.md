@@ -35,6 +35,22 @@ The web app can call public Cognito sign-up and sign-in APIs with only the user 
 3. Do not rely on email verification for this scaffold.
 4. Enter test users in E.164 format, for example `+14155550123`.
 
+## Renflair WhatsApp OTP delivery
+
+TRAPit can keep Cognito as the source of truth for user creation and OTP verification while using Renflair WhatsApp as the delivery provider.
+
+Use the Lambda in `infra/cognito/renflair-custom-sms-sender` as the Cognito Custom SMS Sender trigger. Cognito generates and validates the OTP, the Lambda decrypts the Cognito-generated code with KMS, and Renflair sends it to the user's WhatsApp number.
+
+Required AWS resources:
+
+1. KMS key for the Cognito custom sender encrypted code.
+2. Secrets Manager secret containing the Renflair API key.
+3. Lambda function using the `renflair-custom-sms-sender` package.
+4. Lambda execution role with `secretsmanager:GetSecretValue` and `kms:Decrypt`.
+5. Cognito Custom SMS Sender trigger pointing to the Lambda and KMS key.
+
+The web and mobile sign-up confirmation screens can stay on the existing Cognito confirmation-code flow.
+
 ## What to wire next
 
 1. Use Cognito hosted UI or SDK-based sign-in and sign-up.

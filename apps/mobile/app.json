@@ -9,6 +9,9 @@
     "experiments": {
       "typedRoutes": true
     },
+    "plugins": [
+      "expo-notifications"
+    ],
     "assetBundlePatterns": [
       "**/*"
     ],

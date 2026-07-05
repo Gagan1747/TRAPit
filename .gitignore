@@ -5,4 +5,7 @@ node_modules
 dist
 coverage
 *.log
+*.zip
 .env.local
+renflair-sample/*
+!renflair-sample/.gitkeep

@@ -1,5 +1,6 @@
 import { getMobileDashboardPath, getSessionIdentifier, normalUserCategoryLabels } from "@trapit/auth";
 import { Redirect, type Href } from "expo-router";
+import { useEffect } from "react";
 import { SafeAreaView, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { isMobileAuthConfigured } from "../src/auth/auth-config";
@@ -8,10 +9,21 @@ import { MobileCategoryMembershipPanel } from "../src/components/mobile-category
 import { MobileRestrictedUserDashboardWorkspace } from "../src/components/mobile-restricted-user-dashboard-workspace";
 import { MobileUserTestWorkspace } from "../src/components/mobile-user-test-workspace";
 import { formatPhoneNumberForDisplay, isSuperAdminSession } from "../src/lib/privacy";
+import { registerMobilePushToken } from "../src/notifications/push";
 
 export default function UserScreen() {
   const { isLoading, session, signOut } = useAuth();
   const authConfigured = isMobileAuthConfigured();
+
+  useEffect(() => {
+    if (!authConfigured || !session) {
+      return;
+    }
+
+    void registerMobilePushToken(session).catch((error) => {
+      console.warn("Unable to register TRAPit push notifications.", error);
+    });
+  }, [authConfigured, session]);
 
   if (isLoading) {
     return null;

@@ -73,6 +73,7 @@ const statusPriority: Record<AvailableTest["status"], number> = {
   scheduled: 1,
   completed: 2,
 };
+const REMINDER_WINDOW_MS = 15 * 60 * 1000;
 
 async function readJson<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as T & { error?: string };
@@ -86,6 +87,20 @@ async function readJson<T>(response: Response): Promise<T> {
 
 function getPollAccessPath(shareCode: string) {
   return `/poll/${encodeURIComponent(shareCode)}`;
+}
+
+function getMinutesUntil(startsAt: string) {
+  return Math.max(0, Math.ceil((new Date(startsAt).getTime() - Date.now()) / 60000));
+}
+
+function getStartReminderDetail(startsAt: string) {
+  const minutesUntil = getMinutesUntil(startsAt);
+
+  if (minutesUntil <= 0) {
+    return `Started at ${formatShortDateTime(startsAt)}.`;
+  }
+
+  return `Starts in ${minutesUntil} minute${minutesUntil === 1 ? "" : "s"} (${formatShortDateTime(startsAt)}).`;
 }
 
 export function RestrictedUserDashboardWorkspace({
@@ -147,7 +162,57 @@ export function RestrictedUserDashboardWorkspace({
     : sortedAvailablePolls.filter(
       (poll) => poll.status === "completed" && new Date(poll.updatedAt).getTime() > notificationBaseline,
     ).length;
-  const notificationItems: NotificationBellItem[] = [
+  const upcomingReminderTests = sortedAvailableTests.filter((test) => {
+    const startsAtMs = new Date(test.startsAt).getTime();
+
+    return test.status === "scheduled" && startsAtMs > Date.now() && startsAtMs - Date.now() <= REMINDER_WINDOW_MS;
+  });
+  const upcomingReminderPolls = sortedAvailablePolls.filter((poll) => {
+    const startsAtMs = new Date(poll.startsAt).getTime();
+
+    return poll.status === "scheduled" && startsAtMs > Date.now() && startsAtMs - Date.now() <= REMINDER_WINDOW_MS;
+  });
+  const actionableNotificationItems: NotificationBellItem[] = [
+    ...sortedAvailableTests
+      .filter((test) => test.status === "live")
+      .map((test) => ({
+        actionHref: `/user/test/${encodeURIComponent(test.id)}?participantName=${encodeURIComponent(identifier)}`,
+        actionLabel: "Start",
+        count: 1,
+        detail: `Live now. Started at ${formatShortDateTime(test.startsAt)}.`,
+        label: `Test: ${test.title}`,
+        tone: "live" as const,
+      })),
+    ...sortedAvailablePolls
+      .filter((poll) => poll.status === "live" && poll.shareCode)
+      .map((poll) => ({
+        actionHref: getPollAccessPath(poll.shareCode ?? ""),
+        actionLabel: "Respond",
+        count: 1,
+        detail: `Live now. Closes at ${formatShortDateTime(poll.endsAt)}.`,
+        label: `Poll: ${poll.title}`,
+        tone: "live" as const,
+      })),
+    ...upcomingReminderTests.map((test) => ({
+      actionHref: `/user/test/${encodeURIComponent(test.id)}?participantName=${encodeURIComponent(identifier)}`,
+      actionLabel: "Open",
+      count: 1,
+      detail: getStartReminderDetail(test.startsAt),
+      label: `Test soon: ${test.title}`,
+      tone: "soon" as const,
+    })),
+    ...upcomingReminderPolls
+      .filter((poll) => poll.shareCode)
+      .map((poll) => ({
+        actionHref: getPollAccessPath(poll.shareCode ?? ""),
+        actionLabel: "Open",
+        count: 1,
+        detail: getStartReminderDetail(poll.startsAt),
+        label: `Poll soon: ${poll.title}`,
+        tone: "soon" as const,
+      })),
+  ];
+  const notificationItems: NotificationBellItem[] = actionableNotificationItems.length ? actionableNotificationItems : [
     { count: liveTestsCount + livePollsCount, label: "Live tests and polls" },
     { count: upcomingTestsCount + upcomingPollsCount, label: "Upcoming tests and polls" },
     { count: releasedTestResultsCount + releasedPollResultsCount, label: "Released results" },

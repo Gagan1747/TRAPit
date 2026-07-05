@@ -3,8 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 
 export type NotificationBellItem = {
+  actionHref?: string;
+  actionLabel?: string;
   count: number;
+  detail?: string;
   label: string;
+  tone?: "default" | "live" | "soon";
 };
 
 type NotificationBellProps = {
@@ -62,9 +66,18 @@ export function NotificationBell({ items, subtitle, title }: NotificationBellPro
           <p className="muted-text notification-panel-subtitle">{subtitle}</p>
           <div className="notification-panel-list">
             {items.map((item) => (
-              <div className="notification-panel-item" key={item.label}>
-                <span>{item.label}</span>
-                <strong>{item.count}</strong>
+              <div className={`notification-panel-item${item.tone ? ` is-${item.tone}` : ""}`} key={`${item.label}-${item.detail ?? item.count}`}>
+                <div className="notification-panel-item-copy">
+                  <span>{item.label}</span>
+                  {item.detail ? <small>{item.detail}</small> : null}
+                </div>
+                {item.actionHref ? (
+                  <a className="mini-link" href={item.actionHref} target="_blank" rel="noreferrer">
+                    {item.actionLabel ?? "Open"}
+                  </a>
+                ) : (
+                  <strong>{item.count}</strong>
+                )}
               </div>
             ))}
           </div>

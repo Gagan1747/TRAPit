@@ -118,6 +118,7 @@ NEXT_PUBLIC_COGNITO_WEB_CLIENT_ID=...
 EXPO_PUBLIC_API_BASE_URL=https://trapit.in
 TRAPIT_DATA_DIR=/var/lib/trapit
 TRAPIT_POLL_STORE_MODE=file
+TRAPIT_NOTIFICATION_WORKER_SECRET=<generate-a-long-random-secret>
 ```
 
 If you want automatic user group assignment in Cognito, also provide AWS credentials on the instance with permission for `cognito-idp:AdminAddUserToGroup`.
@@ -142,6 +143,8 @@ Create those tables using the examples in `infra/dynamodb/README.md`, and give t
 For the new sign-in activity table specifically, you can attach the example policy document in `infra/dynamodb/trapit-signin-activity-policy.json` after replacing `REGION` and `ACCOUNT_ID` with your AWS values.
 
 `TRAPIT_DATA_DIR` moves the web app data file outside the Git checkout so deployments do not overwrite test history, group data, or results. The live file becomes `/var/lib/trapit/testing-workspace.json`.
+
+`TRAPIT_NOTIFICATION_WORKER_SECRET` protects the internal notification worker endpoint that sends free Expo push reminders for tests and polls starting soon. Use a long random value and keep the same value in the cron command below.
 
 ## 5.1 Create the persistent application data directory
 
@@ -192,6 +195,30 @@ pm2 status
 pm2 logs trapit-web
 curl http://127.0.0.1:3000
 ```
+
+## 7.1 Enable free mobile push reminders
+
+The app includes an internal worker endpoint that sends Expo push notifications for tests and polls starting within the next 15 minutes. This has no per-message Renflair/SMS cost, but users must open the mobile app once and allow notifications so their Expo push token can be registered.
+
+Add a cron job on the EC2 instance to call the worker every five minutes:
+
+```bash
+crontab -e
+```
+
+Add this line, replacing the secret with the same `TRAPIT_NOTIFICATION_WORKER_SECRET` value from `apps/web/.env.production`:
+
+```cron
+*/5 * * * * curl -fsS -X POST https://trapit.in/api/internal/notifications/run -H "Authorization: Bearer REPLACE_WITH_TRAPIT_NOTIFICATION_WORKER_SECRET" >/tmp/trapit-notifications.log 2>&1
+```
+
+To test manually after deployment:
+
+```bash
+curl -i -X POST https://trapit.in/api/internal/notifications/run -H "Authorization: Bearer REPLACE_WITH_TRAPIT_NOTIFICATION_WORKER_SECRET"
+```
+
+The response includes `tokensChecked` and `sent`. Duplicate reminders are prevented by `notification-state.json` under `TRAPIT_DATA_DIR`.
 
 ## 8. Configure Nginx reverse proxy
 

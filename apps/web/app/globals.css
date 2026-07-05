@@ -653,13 +653,34 @@ main {
 
 .notification-panel-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
   padding: 12px 14px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.6);
   border: 1px solid rgba(180, 76, 47, 0.16);
+}
+
+.notification-panel-item.is-live {
+  border-color: rgba(34, 118, 82, 0.28);
+  background: rgba(232, 247, 238, 0.84);
+}
+
+.notification-panel-item.is-soon {
+  border-color: rgba(180, 76, 47, 0.28);
+  background: rgba(255, 244, 232, 0.86);
+}
+
+.notification-panel-item-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.notification-panel-item-copy small {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .user-detail-summary-card {

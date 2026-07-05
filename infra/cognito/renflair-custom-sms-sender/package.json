@@ -1,0 +1,18 @@
+{
+  "name": "trapit-renflair-custom-sms-sender",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cognito Custom SMS Sender Lambda that delivers OTP codes through Renflair WhatsApp.",
+  "main": "index.cjs",
+  "scripts": {
+    "check": "node --check index.cjs",
+    "bundle": "npm install --omit=dev && powershell -NoProfile -Command \"Compress-Archive -Path index.cjs,node_modules,package.json -DestinationPath renflair-custom-sms-sender.zip -Force\""
+  },
+  "dependencies": {
+    "@aws-crypto/client-node": "^5.0.0",
+    "@aws-sdk/client-secrets-manager": "^3.859.0"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
+  }
+}
