@@ -73,7 +73,11 @@ export function BrowserPushPrompt({ publicKey }: BrowserPushPromptProps) {
     }
 
     if (Notification.permission === "default" && !isPromptDismissed()) {
-      setIsVisible(true);
+      const showPromptTimer = window.setTimeout(() => {
+        setIsVisible(true);
+      }, 5000);
+
+      return () => window.clearTimeout(showPromptTimer);
     }
   }, [publicKey]);
 
