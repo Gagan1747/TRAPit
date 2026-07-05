@@ -35,6 +35,7 @@ import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
+import { BrowserPushPrompt } from "./browser-push-prompt";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 
 const AI_OCR_EXAMPLE = `Question: 5+3?
@@ -3435,6 +3436,10 @@ export function AdminQuestionWorkspace({
 
   return (
     <div className="workspace-stack">
+      {currentActorRole === "user" ? (
+        <BrowserPushPrompt publicKey={process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY ?? null} />
+      ) : null}
+
       <div className="workspace-toolbar">
         <div className="workspace-overflow" ref={toolbarMenuRef}>
           <button
