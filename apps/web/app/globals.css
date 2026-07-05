@@ -646,6 +646,25 @@ main {
   margin: 0;
 }
 
+.notification-browser-push {
+  display: grid;
+  gap: 6px;
+}
+
+.notification-browser-push-button {
+  justify-self: start;
+}
+
+.notification-browser-push-button:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.notification-browser-push small {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .notification-panel-list {
   display: grid;
   gap: 10px;

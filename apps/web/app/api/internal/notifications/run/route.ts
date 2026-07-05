@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
+import webPush, { type PushSubscription } from "web-push";
 
 import {
   hasNotificationDelivery,
   listPushTokens,
+  listWebPushSubscriptions,
   recordNotificationDelivery,
 } from "../../../../../lib/notification-store";
 import {
@@ -19,6 +21,12 @@ type ExpoPushMessage = {
   sound: "default";
   title: string;
   to: string;
+};
+
+type ReminderMessage = {
+  body: string;
+  data: Record<string, string>;
+  title: string;
 };
 
 function isAuthorized(request: Request) {
@@ -66,13 +74,55 @@ async function sendExpoPushNotifications(messages: ExpoPushMessage[]) {
   }
 }
 
+function configureWebPush() {
+  const publicKey = process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY?.trim();
+  const privateKey = process.env.WEB_PUSH_PRIVATE_KEY?.trim();
+  const subject = process.env.WEB_PUSH_SUBJECT?.trim() || "mailto:admin@trapit.in";
+
+  if (!publicKey || !privateKey) {
+    return false;
+  }
+
+  webPush.setVapidDetails(subject, publicKey, privateKey);
+  return true;
+}
+
+async function sendWebPushNotification(subscription: PushSubscription, message: ReminderMessage) {
+  await webPush.sendNotification(subscription, JSON.stringify(message));
+}
+
+function buildTestReminder(test: { id: string; startsAt: string; title: string }): ReminderMessage {
+  return {
+    body: `${test.title} starts at ${formatStartTime(test.startsAt)}.`,
+    data: { kind: "test", testId: test.id, url: `/user/test/${encodeURIComponent(test.id)}` },
+    title: "TRAPit.in test reminder",
+  };
+}
+
+function buildPollReminder(poll: { id: string; shareCode: string | null; startsAt: string; title: string }): ReminderMessage {
+  return {
+    body: `${poll.title} starts at ${formatStartTime(poll.startsAt)}.`,
+    data: {
+      kind: "poll",
+      pollId: poll.id,
+      shareCode: poll.shareCode ?? "",
+      url: poll.shareCode ? `/poll/${encodeURIComponent(poll.shareCode)}` : "/user",
+    },
+    title: "TRAPit.in poll reminder",
+  };
+}
+
 export async function POST(request: Request) {
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: "Notification worker access is required." }, { status: 401 });
   }
 
-  const pushTokens = await listPushTokens();
+  const [pushTokens, webPushSubscriptions] = await Promise.all([
+    listPushTokens(),
+    listWebPushSubscriptions(),
+  ]);
   const queuedMessages: Array<{ deliveryKey: string; message: ExpoPushMessage; tokenId: string }> = [];
+  const queuedWebMessages: Array<{ deliveryKey: string; message: ReminderMessage; subscription: PushSubscription; subscriptionId: string }> = [];
 
   for (const pushToken of pushTokens) {
     const identifier = pushToken.userIdentifier?.trim();
@@ -93,13 +143,15 @@ export async function POST(request: Request) {
         continue;
       }
 
+      const reminder = buildTestReminder(test);
+
       queuedMessages.push({
         deliveryKey,
         message: {
-          body: `${test.title} starts at ${formatStartTime(test.startsAt)}.`,
-          data: { kind: "test", testId: test.id },
+          body: reminder.body,
+          data: reminder.data,
           sound: "default",
-          title: "TRAPit.in test reminder",
+          title: reminder.title,
           to: pushToken.token,
         },
         tokenId: pushToken.id,
@@ -113,13 +165,15 @@ export async function POST(request: Request) {
         continue;
       }
 
+      const reminder = buildPollReminder(poll);
+
       queuedMessages.push({
         deliveryKey,
         message: {
-          body: `${poll.title} starts at ${formatStartTime(poll.startsAt)}.`,
-          data: { kind: "poll", pollId: poll.id, shareCode: poll.shareCode ?? "" },
+          body: reminder.body,
+          data: reminder.data,
           sound: "default",
-          title: "TRAPit.in poll reminder",
+          title: reminder.title,
           to: pushToken.token,
         },
         tokenId: pushToken.id,
@@ -127,11 +181,81 @@ export async function POST(request: Request) {
     }
   }
 
+  for (const subscription of webPushSubscriptions) {
+    const identifier = subscription.userIdentifier?.trim();
+
+    if (!identifier) {
+      continue;
+    }
+
+    const [availableTests, availablePolls] = await Promise.all([
+      listAvailableTestsForParticipant(identifier),
+      listAvailablePollsForParticipant(identifier),
+    ]);
+
+    for (const test of availableTests.filter((entry) => entry.status === "scheduled" && isStartingSoon(entry.startsAt))) {
+      const deliveryKey = `test:${test.id}:15min`;
+
+      if (await hasNotificationDelivery(deliveryKey, subscription.id)) {
+        continue;
+      }
+
+      queuedWebMessages.push({
+        deliveryKey,
+        message: buildTestReminder(test),
+        subscription: {
+          endpoint: subscription.endpoint,
+          keys: subscription.keys,
+        },
+        subscriptionId: subscription.id,
+      });
+    }
+
+    for (const poll of availablePolls.filter((entry) => entry.status === "scheduled" && isStartingSoon(entry.startsAt))) {
+      const deliveryKey = `poll:${poll.id}:15min`;
+
+      if (await hasNotificationDelivery(deliveryKey, subscription.id)) {
+        continue;
+      }
+
+      queuedWebMessages.push({
+        deliveryKey,
+        message: buildPollReminder(poll),
+        subscription: {
+          endpoint: subscription.endpoint,
+          keys: subscription.keys,
+        },
+        subscriptionId: subscription.id,
+      });
+    }
+  }
+
   await sendExpoPushNotifications(queuedMessages.map((entry) => entry.message));
+
+  let webSent = 0;
+
+  if (configureWebPush()) {
+    for (const queuedWebMessage of queuedWebMessages) {
+      try {
+        await sendWebPushNotification(queuedWebMessage.subscription, queuedWebMessage.message);
+        await recordNotificationDelivery(queuedWebMessage.deliveryKey, queuedWebMessage.subscriptionId);
+        webSent += 1;
+      } catch (error) {
+        console.warn("Unable to send browser push notification.", error);
+      }
+    }
+  }
 
   for (const queuedMessage of queuedMessages) {
     await recordNotificationDelivery(queuedMessage.deliveryKey, queuedMessage.tokenId);
   }
 
-  return NextResponse.json({ sent: queuedMessages.length, tokensChecked: pushTokens.length });
+  return NextResponse.json({
+    browserSent: webSent,
+    browserSubscriptionsChecked: webPushSubscriptions.length,
+    mobileSent: queuedMessages.length,
+    sent: queuedMessages.length + webSent,
+    tokensChecked: pushTokens.length,
+    webPushConfigured: Boolean(process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY?.trim() && process.env.WEB_PUSH_PRIVATE_KEY?.trim()),
+  });
 }

@@ -464,6 +464,8 @@ export function RestrictedUserDashboardWorkspace({
     <div className="workspace-stack">
       <div className="workspace-toolbar">
         <NotificationBell
+          browserPushPublicKey={process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY ?? null}
+          enableBrowserPush={authConfigured}
           items={notificationItems}
           subtitle={notificationBaseline === null ? "Counts reflect the current dashboard state." : "Released results are measured from your previous sign in."}
           title="User dashboard alerts"

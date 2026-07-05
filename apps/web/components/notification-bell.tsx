@@ -12,6 +12,8 @@ export type NotificationBellItem = {
 };
 
 type NotificationBellProps = {
+  browserPushPublicKey?: string | null;
+  enableBrowserPush?: boolean;
   items: NotificationBellItem[];
   subtitle: string;
   title: string;
@@ -28,10 +30,34 @@ function BellIcon() {
   );
 }
 
-export function NotificationBell({ items, subtitle, title }: NotificationBellProps) {
+function urlBase64ToUint8Array(value: string) {
+  const padding = "=".repeat((4 - value.length % 4) % 4);
+  const base64 = `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+
+  for (let index = 0; index < rawData.length; index += 1) {
+    outputArray[index] = rawData.charCodeAt(index);
+  }
+
+  return outputArray;
+}
+
+function isBrowserPushSupported() {
+  return typeof window !== "undefined"
+    && "serviceWorker" in navigator
+    && "PushManager" in window
+    && "Notification" in window
+    && window.isSecureContext;
+}
+
+export function NotificationBell({ browserPushPublicKey, enableBrowserPush = false, items, subtitle, title }: NotificationBellProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [browserPushStatus, setBrowserPushStatus] = useState<"idle" | "registered" | "registering" | "unavailable">("idle");
+  const [browserPushFeedback, setBrowserPushFeedback] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const totalCount = items.reduce((sum, item) => sum + item.count, 0);
+  const canRegisterBrowserPush = enableBrowserPush && Boolean(browserPushPublicKey);
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -44,6 +70,66 @@ export function NotificationBell({ items, subtitle, title }: NotificationBellPro
 
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, []);
+
+  useEffect(() => {
+    if (!canRegisterBrowserPush) {
+      setBrowserPushStatus("unavailable");
+      return;
+    }
+
+    if (!isBrowserPushSupported()) {
+      setBrowserPushStatus("unavailable");
+      return;
+    }
+
+    if (Notification.permission === "granted") {
+      setBrowserPushStatus("registered");
+    }
+  }, [canRegisterBrowserPush]);
+
+  async function registerBrowserPush() {
+    if (!browserPushPublicKey || !isBrowserPushSupported()) {
+      setBrowserPushFeedback("Browser notifications are not available here.");
+      setBrowserPushStatus("unavailable");
+      return;
+    }
+
+    try {
+      setBrowserPushStatus("registering");
+      setBrowserPushFeedback(null);
+
+      const permission = await Notification.requestPermission();
+
+      if (permission !== "granted") {
+        setBrowserPushFeedback("Browser notification permission was not granted.");
+        setBrowserPushStatus("idle");
+        return;
+      }
+
+      const registration = await navigator.serviceWorker.register("/sw.js");
+      const existingSubscription = await registration.pushManager.getSubscription();
+      const subscription = existingSubscription ?? await registration.pushManager.subscribe({
+        applicationServerKey: urlBase64ToUint8Array(browserPushPublicKey),
+        userVisibleOnly: true,
+      });
+      const response = await fetch("/api/user/web-push-subscriptions", {
+        body: JSON.stringify(subscription),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Unable to save browser notification settings.");
+      }
+
+      setBrowserPushFeedback("Browser notifications are enabled.");
+      setBrowserPushStatus("registered");
+    } catch (error) {
+      setBrowserPushFeedback(error instanceof Error ? error.message : "Unable to enable browser notifications.");
+      setBrowserPushStatus("idle");
+    }
+  }
 
   return (
     <div className="notification-bell" ref={rootRef}>
@@ -64,6 +150,23 @@ export function NotificationBell({ items, subtitle, title }: NotificationBellPro
           <p className="eyebrow">Notifications</p>
           <h2 className="section-title">{title}</h2>
           <p className="muted-text notification-panel-subtitle">{subtitle}</p>
+          {canRegisterBrowserPush ? (
+            <div className="notification-browser-push">
+              <button
+                className="mini-link notification-browser-push-button"
+                disabled={browserPushStatus === "registering" || browserPushStatus === "registered"}
+                type="button"
+                onClick={() => void registerBrowserPush()}
+              >
+                {browserPushStatus === "registered"
+                  ? "Browser alerts enabled"
+                  : browserPushStatus === "registering"
+                    ? "Enabling..."
+                    : "Enable browser alerts"}
+              </button>
+              {browserPushFeedback ? <small>{browserPushFeedback}</small> : null}
+            </div>
+          ) : null}
           <div className="notification-panel-list">
             {items.map((item) => (
               <div className={`notification-panel-item${item.tone ? ` is-${item.tone}` : ""}`} key={`${item.label}-${item.detail ?? item.count}`}>

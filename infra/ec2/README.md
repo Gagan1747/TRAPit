@@ -119,6 +119,9 @@ EXPO_PUBLIC_API_BASE_URL=https://trapit.in
 TRAPIT_DATA_DIR=/var/lib/trapit
 TRAPIT_POLL_STORE_MODE=file
 TRAPIT_NOTIFICATION_WORKER_SECRET=<generate-a-long-random-secret>
+NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY=<web-push-public-vapid-key>
+WEB_PUSH_PRIVATE_KEY=<web-push-private-vapid-key>
+WEB_PUSH_SUBJECT=mailto:admin@trapit.in
 ```
 
 If you want automatic user group assignment in Cognito, also provide AWS credentials on the instance with permission for `cognito-idp:AdminAddUserToGroup`.
@@ -145,6 +148,15 @@ For the new sign-in activity table specifically, you can attach the example poli
 `TRAPIT_DATA_DIR` moves the web app data file outside the Git checkout so deployments do not overwrite test history, group data, or results. The live file becomes `/var/lib/trapit/testing-workspace.json`.
 
 `TRAPIT_NOTIFICATION_WORKER_SECRET` protects the internal notification worker endpoint that sends free Expo push reminders for tests and polls starting soon. Use a long random value and keep the same value in the cron command below.
+
+`NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY`, `WEB_PUSH_PRIVATE_KEY`, and `WEB_PUSH_SUBJECT` enable free browser push notifications for web users. Generate the VAPID keys once with:
+
+```bash
+cd /var/www/trapit
+corepack pnpm --filter @trapit/web exec web-push generate-vapid-keys
+```
+
+Put the public key in `NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY`, the private key in `WEB_PUSH_PRIVATE_KEY`, and a contact email in `WEB_PUSH_SUBJECT`. Because `NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY` is compiled into the browser bundle, set these values before running the deployment build.
 
 ## 5.1 Create the persistent application data directory
 
@@ -196,9 +208,9 @@ pm2 logs trapit-web
 curl http://127.0.0.1:3000
 ```
 
-## 7.1 Enable free mobile push reminders
+## 7.1 Enable free push reminders
 
-The app includes an internal worker endpoint that sends Expo push notifications for tests and polls starting within the next 15 minutes. This has no per-message Renflair/SMS cost, but users must open the mobile app once and allow notifications so their Expo push token can be registered.
+The app includes an internal worker endpoint that sends free push notifications for tests and polls starting within the next 15 minutes. Mobile reminders use Expo push tokens. Web reminders use browser Web Push subscriptions. This has no per-message Renflair/SMS cost, but users must open the mobile app or web dashboard once and allow notifications so their token/subscription can be registered.
 
 Add a cron job on the EC2 instance to call the worker every five minutes:
 
@@ -218,7 +230,7 @@ To test manually after deployment:
 curl -i -X POST https://trapit.in/api/internal/notifications/run -H "Authorization: Bearer REPLACE_WITH_TRAPIT_NOTIFICATION_WORKER_SECRET"
 ```
 
-The response includes `tokensChecked` and `sent`. Duplicate reminders are prevented by `notification-state.json` under `TRAPIT_DATA_DIR`.
+The response includes `tokensChecked`, `browserSubscriptionsChecked`, and `sent`. Duplicate reminders are prevented by `notification-state.json` under `TRAPIT_DATA_DIR`.
 
 ## 8. Configure Nginx reverse proxy
 

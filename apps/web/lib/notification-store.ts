@@ -17,6 +17,20 @@ export type StoredPushToken = {
   userSub: string | null;
 };
 
+export type StoredWebPushSubscription = {
+  createdAt: string;
+  endpoint: string;
+  id: string;
+  keys: {
+    auth: string;
+    p256dh: string;
+  };
+  lastSeenAt: string;
+  userAgent: string | null;
+  userIdentifier: string | null;
+  userSub: string | null;
+};
+
 type NotificationDelivery = {
   deliveredAt: string;
   key: string;
@@ -26,6 +40,7 @@ type NotificationDelivery = {
 type NotificationState = {
   deliveries: NotificationDelivery[];
   pushTokens: StoredPushToken[];
+  webPushSubscriptions: StoredWebPushSubscription[];
 };
 
 function normalizePlatform(value: unknown): StoredPushToken["platform"] {
@@ -73,6 +88,19 @@ function normalizeState(parsed: Partial<NotificationState>): NotificationState {
       userIdentifier: pushToken.userIdentifier?.trim() || null,
       userSub: pushToken.userSub?.trim() || null,
     })).filter((pushToken) => pushToken.token),
+    webPushSubscriptions: (parsed.webPushSubscriptions ?? []).map((subscription) => ({
+      createdAt: subscription.createdAt ?? new Date().toISOString(),
+      endpoint: subscription.endpoint ?? "",
+      id: subscription.id ?? createEntityId("web-push-subscription"),
+      keys: {
+        auth: subscription.keys?.auth ?? "",
+        p256dh: subscription.keys?.p256dh ?? "",
+      },
+      lastSeenAt: subscription.lastSeenAt ?? new Date().toISOString(),
+      userAgent: subscription.userAgent?.trim() || null,
+      userIdentifier: subscription.userIdentifier?.trim() || null,
+      userSub: subscription.userSub?.trim() || null,
+    })).filter((subscription) => subscription.endpoint && subscription.keys.auth && subscription.keys.p256dh),
   };
 }
 
@@ -146,6 +174,59 @@ export async function upsertPushToken(input: {
 export async function listPushTokens() {
   const state = await readState();
   return state.pushTokens;
+}
+
+export async function upsertWebPushSubscription(input: {
+  endpoint: string;
+  keys: {
+    auth?: string;
+    p256dh?: string;
+  };
+  userAgent?: string | null;
+  userIdentifier: string | null;
+  userSub: string | null;
+}) {
+  const endpoint = input.endpoint.trim();
+  const auth = input.keys.auth?.trim() ?? "";
+  const p256dh = input.keys.p256dh?.trim() ?? "";
+
+  if (!endpoint || !auth || !p256dh) {
+    throw new Error("A valid web push subscription is required.");
+  }
+
+  const state = await readState();
+  const timestamp = new Date().toISOString();
+  const existingSubscription = state.webPushSubscriptions.find((entry) => entry.endpoint === endpoint);
+
+  if (existingSubscription) {
+    existingSubscription.keys = { auth, p256dh };
+    existingSubscription.lastSeenAt = timestamp;
+    existingSubscription.userAgent = input.userAgent?.trim() || existingSubscription.userAgent;
+    existingSubscription.userIdentifier = input.userIdentifier?.trim() || existingSubscription.userIdentifier;
+    existingSubscription.userSub = input.userSub?.trim() || existingSubscription.userSub;
+    await writeState(state);
+    return existingSubscription;
+  }
+
+  const nextSubscription: StoredWebPushSubscription = {
+    createdAt: timestamp,
+    endpoint,
+    id: createEntityId("web-push-subscription"),
+    keys: { auth, p256dh },
+    lastSeenAt: timestamp,
+    userAgent: input.userAgent?.trim() || null,
+    userIdentifier: input.userIdentifier?.trim() || null,
+    userSub: input.userSub?.trim() || null,
+  };
+
+  state.webPushSubscriptions = [nextSubscription, ...state.webPushSubscriptions];
+  await writeState(state);
+  return nextSubscription;
+}
+
+export async function listWebPushSubscriptions() {
+  const state = await readState();
+  return state.webPushSubscriptions;
 }
 
 export async function hasNotificationDelivery(key: string, tokenId: string) {
