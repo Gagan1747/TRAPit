@@ -94,12 +94,11 @@ export function BrowserPushPrompt({ publicKey }: BrowserPushPromptProps) {
       const permission = await Notification.requestPermission();
 
       if (permission !== "granted") {
-        setFeedback("Notification permission was not granted.");
+        setIsVisible(false);
         return;
       }
 
       await registerBrowserPush(publicKey);
-      setFeedback("Browser reminders are enabled for this device.");
       setIsVisible(false);
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to enable browser reminders.");
