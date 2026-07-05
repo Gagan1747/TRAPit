@@ -700,8 +700,12 @@ main {
   background: linear-gradient(135deg, rgba(232, 247, 238, 0.9), rgba(255, 255, 255, 0.86));
 }
 
-.browser-push-prompt-copy {
-  margin: 6px 0 0;
+.browser-push-prompt-title {
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.4;
 }
 
 .browser-push-prompt-actions {

@@ -116,20 +116,16 @@ export function BrowserPushPrompt({ publicKey }: BrowserPushPromptProps) {
   return (
     <div className="browser-push-prompt panel">
       <div>
-        <p className="eyebrow">Free reminders</p>
-        <h2 className="section-title">Enable TRAPit browser alerts</h2>
-        <p className="muted-text browser-push-prompt-copy">
-          Get notified before your assigned tests and polls start on this browser.
-        </p>
+        <p className="browser-push-prompt-title">Allow TRAPit to notify you before Tests and Polls</p>
         {feedback ? <p className="form-feedback">{feedback}</p> : null}
       </div>
       {isVisible ? (
         <div className="browser-push-prompt-actions">
           <button className="primary-button" disabled={isRegistering} type="button" onClick={() => void handleEnable()}>
-            {isRegistering ? "Enabling..." : "Enable notifications"}
+            {isRegistering ? "Allowing..." : "Allow"}
           </button>
           <button className="secondary-button" type="button" onClick={handleDismiss}>
-            Not now
+            Block
           </button>
         </div>
       ) : null}
