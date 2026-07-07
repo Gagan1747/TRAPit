@@ -53,7 +53,7 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
       addQuestion: true,
       maxQuestionsPerPool: 200,
       maxQuestionPools: 5,
-      maxScheduledTestsPerMonth: 0,
+      maxScheduledTestsPerMonth: 2,
       maxSelfTestsPerMonth: 5,
     },
   },

@@ -617,7 +617,7 @@ function getSectionUpgradePrompt(
         };
       case "schedule":
         return {
-          featureLabel: "Scheduled and self tests",
+          featureLabel: "Scheduled tests",
           isIncluded: currentDefinition.test.maxScheduledTestsPerMonth > 0 || currentDefinition.test.maxSelfTestsPerMonth > 0,
           matcher: (candidate: NormalUserCategory) =>
             normalUserCategoryDefinitions[candidate].test.maxScheduledTestsPerMonth > 0 || normalUserCategoryDefinitions[candidate].test.maxSelfTestsPerMonth > 0,
@@ -3608,7 +3608,7 @@ export function AdminQuestionWorkspace({
               { label: "Schedule", section: "schedule" },
             ])}
             {renderMenuItem("R...", "reports-coming-soon")}
-            {renderMenuItem("A...", "analytics-coming-soon")}
+            {renderMenuItem("Apportion", "analytics-coming-soon")}
             {renderMenuGroup("Poll", "poll", [
               { label: "Add Questions", section: "poll-questions" },
               { label: "Schedule", section: "poll-schedule" },
@@ -3683,12 +3683,6 @@ export function AdminQuestionWorkspace({
                             <th scope="row">Scheduled tests / month</th>
                             {membershipUpgradePlans.map((plan) => (
                               <td key={`${plan.category}-scheduled-tests`}>{formatMembershipCount(plan.definition.test.maxScheduledTestsPerMonth)}</td>
-                            ))}
-                          </tr>
-                          <tr>
-                            <th scope="row">Self tests / month</th>
-                            {membershipUpgradePlans.map((plan) => (
-                              <td key={`${plan.category}-self-tests`}>{formatMembershipCount(plan.definition.test.maxSelfTestsPerMonth)}</td>
                             ))}
                           </tr>
                           <tr>

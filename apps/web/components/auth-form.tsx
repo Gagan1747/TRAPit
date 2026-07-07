@@ -57,6 +57,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [fullName, setFullName] = useState("");
   const [isPending, setIsPending] = useState(false);
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [selectedCountryCode, setSelectedCountryCode] = useState(DEFAULT_PHONE_COUNTRY_CODE);
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -95,6 +96,7 @@ export function AuthForm({ mode }: AuthFormProps) {
 
     setPhoneNumber(sanitizedPhoneNumber);
     setPassword("");
+    setConfirmPassword("");
     setIsPasswordVisible(false);
     setConfirmationCode("");
     setSignUpState(null);
@@ -109,6 +111,7 @@ export function AuthForm({ mode }: AuthFormProps) {
 
     setSelectedCountryCode(nextCountryCode);
     setPassword("");
+    setConfirmPassword("");
     setIsPasswordVisible(false);
     setConfirmationCode("");
     setSignUpState(null);
@@ -161,6 +164,16 @@ export function AuthForm({ mode }: AuthFormProps) {
           ? "Full name, phone number, and password are required."
           : "Phone number and password are required.",
       );
+      return;
+    }
+
+    if (mode === "sign-up" && signUpSubMode === "create" && !confirmPassword) {
+      setErrorMessage("Confirm password is required.");
+      return;
+    }
+
+    if (mode === "sign-up" && signUpSubMode === "create" && password !== confirmPassword) {
+      setErrorMessage("Passwords do not match.");
       return;
     }
 
@@ -407,6 +420,20 @@ export function AuthForm({ mode }: AuthFormProps) {
               {isPasswordVisible ? "Hide" : "Show"}
             </button>
           </div>
+        </div>
+      ) : null}
+
+      {mode === "sign-up" && signUpSubMode === "create" ? (
+        <div className="field">
+          <label htmlFor="confirm-password">Confirm password</label>
+          <input
+            id="confirm-password"
+            type={isPasswordVisible ? "text" : "password"}
+            placeholder="Re-enter your password"
+            disabled={!authConfigured}
+            value={confirmPassword}
+            onChange={(event) => setConfirmPassword(event.target.value)}
+          />
         </div>
       ) : null}
 

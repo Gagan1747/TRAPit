@@ -21,14 +21,6 @@ function throwLimitExceeded(featureName: string, category: NormalUserCategory, n
   throw new Error(formatLimitMessage(featureName, category, nextCategory));
 }
 
-function getEffectiveSelfTestLimit(category: NormalUserCategory) {
-  const definition = getNormalUserCategoryDefinition(category);
-
-  return definition.test.maxSelfTestsPerMonth > 0
-    ? definition.test.maxSelfTestsPerMonth
-    : definition.test.maxScheduledTestsPerMonth;
-}
-
 export function assertCanCreateQuestionPool(category: NormalUserCategory, existingPoolCount: number) {
   const definition = getNormalUserCategoryDefinition(category);
 
@@ -153,19 +145,6 @@ export function assertCanScheduleTest(category: NormalUserCategory, scheduledTes
 }
 
 export function assertCanScheduleSelfTest(category: NormalUserCategory, selfTestsThisMonth: number) {
-  const selfTestLimit = getEffectiveSelfTestLimit(category);
-
-  if (selfTestsThisMonth >= selfTestLimit) {
-    throwLimitExceeded(
-      "Test - Self-Test",
-      category,
-      getUpgradeTargetCategory(category, (candidateDefinition) => {
-        const nextSelfTestLimit = candidateDefinition.test.maxSelfTestsPerMonth > 0
-          ? candidateDefinition.test.maxSelfTestsPerMonth
-          : candidateDefinition.test.maxScheduledTestsPerMonth;
-
-        return nextSelfTestLimit > selfTestLimit;
-      }) ?? getNextNormalUserCategory(category),
-    );
-  }
+  void category;
+  void selfTestsThisMonth;
 }
