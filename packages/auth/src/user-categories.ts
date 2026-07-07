@@ -54,7 +54,7 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
       maxQuestionsPerPool: 200,
       maxQuestionPools: 5,
       maxScheduledTestsPerMonth: 2,
-      maxSelfTestsPerMonth: 5,
+      maxSelfTestsPerMonth: 0,
     },
   },
   "trapit-pro-limited": {
@@ -76,7 +76,7 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
       maxQuestionsPerPool: 400,
       maxQuestionPools: 10,
       maxScheduledTestsPerMonth: 10,
-      maxSelfTestsPerMonth: 10,
+      maxSelfTestsPerMonth: 0,
     },
   },
   "trapit-pro": {
@@ -98,7 +98,7 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
       maxQuestionsPerPool: 400,
       maxQuestionPools: 50,
       maxScheduledTestsPerMonth: 50,
-      maxSelfTestsPerMonth: 50,
+      maxSelfTestsPerMonth: 0,
     },
   },
   "trapit-pro-max": {
@@ -120,7 +120,7 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
       maxQuestionsPerPool: 1000,
       maxQuestionPools: 100,
       maxScheduledTestsPerMonth: 100,
-      maxSelfTestsPerMonth: 100,
+      maxSelfTestsPerMonth: 0,
     },
   },
 };

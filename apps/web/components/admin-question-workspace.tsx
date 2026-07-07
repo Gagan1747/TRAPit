@@ -618,9 +618,8 @@ function getSectionUpgradePrompt(
       case "schedule":
         return {
           featureLabel: "Scheduled tests",
-          isIncluded: currentDefinition.test.maxScheduledTestsPerMonth > 0 || currentDefinition.test.maxSelfTestsPerMonth > 0,
-          matcher: (candidate: NormalUserCategory) =>
-            normalUserCategoryDefinitions[candidate].test.maxScheduledTestsPerMonth > 0 || normalUserCategoryDefinitions[candidate].test.maxSelfTestsPerMonth > 0,
+          isIncluded: currentDefinition.test.maxScheduledTestsPerMonth > 0,
+          matcher: (candidate: NormalUserCategory) => normalUserCategoryDefinitions[candidate].test.maxScheduledTestsPerMonth > 0,
           message: "Schedule tests for groups or create self tests for your signed-in account.",
         };
       case "poll-questions":
