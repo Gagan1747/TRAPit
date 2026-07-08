@@ -422,22 +422,33 @@ type UpgradePrompt = {
 
 function createEmptyBranding(): WorkspaceBranding {
   return {
+    appointmentsPerSlot: null,
     imageDataUrl: null,
     instituteName: "",
+    workingDays: "",
+    workingHours: "",
   };
 }
 
 function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBranding | null {
   const instituteName = branding?.instituteName.trim() ?? "";
   const imageDataUrl = branding?.imageDataUrl?.trim() ?? null;
+  const workingDays = branding?.workingDays.trim() ?? "";
+  const workingHours = branding?.workingHours.trim() ?? "";
+  const appointmentsPerSlot = Number.isFinite(branding?.appointmentsPerSlot) && branding?.appointmentsPerSlot && branding.appointmentsPerSlot > 0
+    ? Math.floor(branding.appointmentsPerSlot)
+    : null;
 
-  if (!instituteName && !imageDataUrl) {
+  if (!instituteName && !imageDataUrl && !workingDays && !workingHours && appointmentsPerSlot === null) {
     return null;
   }
 
   return {
+    appointmentsPerSlot,
     imageDataUrl,
     instituteName,
+    workingDays,
+    workingHours,
   };
 }
 
@@ -957,6 +968,9 @@ export function AdminQuestionWorkspace({
   const [brandingFeedback, setBrandingFeedback] = useState<string | null>(null);
   const [brandingImageDataUrl, setBrandingImageDataUrl] = useState<string | null>(null);
   const [brandingInstituteName, setBrandingInstituteName] = useState("");
+  const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("");
+  const [businessWorkingDays, setBusinessWorkingDays] = useState("");
+  const [businessWorkingHours, setBusinessWorkingHours] = useState("");
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const [importPreview, setImportPreview] = useState<BulkImportPreview | null>(null);
   const [importText, setImportText] = useState("");
@@ -1093,6 +1107,9 @@ export function AdminQuestionWorkspace({
       setWorkspaceBranding(brandingPayload.branding);
       setBrandingInstituteName(brandingPayload.branding?.instituteName ?? "");
       setBrandingImageDataUrl(brandingPayload.branding?.imageDataUrl ?? null);
+      setBusinessAppointmentsPerSlot(brandingPayload.branding?.appointmentsPerSlot ? String(brandingPayload.branding.appointmentsPerSlot) : "");
+      setBusinessWorkingDays(brandingPayload.branding?.workingDays ?? "");
+      setBusinessWorkingHours(brandingPayload.branding?.workingHours ?? "");
       setHistory(historyPayload.history);
       setLeaderboards(historyPayload.leaderboards);
       setSummary(historyPayload.summary);
@@ -2617,9 +2634,19 @@ export function AdminQuestionWorkspace({
   }
 
   async function handleSaveBranding() {
+    const appointmentsPerSlot = businessAppointmentsPerSlot.trim() ? Number(businessAppointmentsPerSlot) : null;
+
+    if (appointmentsPerSlot !== null && (!Number.isFinite(appointmentsPerSlot) || appointmentsPerSlot < 1)) {
+      setBrandingFeedback("Appointments per slot must be at least 1.");
+      return;
+    }
+
     const nextBranding = normalizeBrandingInput({
+      appointmentsPerSlot,
       imageDataUrl: brandingImageDataUrl,
       instituteName: brandingInstituteName,
+      workingDays: businessWorkingDays,
+      workingHours: businessWorkingHours,
     });
 
     try {
@@ -2636,15 +2663,21 @@ export function AdminQuestionWorkspace({
       setWorkspaceBranding(payload.branding);
       setBrandingInstituteName(payload.branding?.instituteName ?? "");
       setBrandingImageDataUrl(payload.branding?.imageDataUrl ?? null);
-      setBrandingFeedback(payload.branding ? "Branding saved." : "Branding cleared.");
+      setBusinessAppointmentsPerSlot(payload.branding?.appointmentsPerSlot ? String(payload.branding.appointmentsPerSlot) : "");
+      setBusinessWorkingDays(payload.branding?.workingDays ?? "");
+      setBusinessWorkingHours(payload.branding?.workingHours ?? "");
+      setBrandingFeedback(payload.branding ? "Business details saved." : "Business details cleared.");
     } catch (error) {
-      setBrandingFeedback(error instanceof Error ? error.message : "Unable to save branding.");
+      setBrandingFeedback(error instanceof Error ? error.message : "Unable to save business details.");
     }
   }
 
   async function handleClearBranding() {
     setBrandingInstituteName("");
     setBrandingImageDataUrl(null);
+    setBusinessAppointmentsPerSlot("");
+    setBusinessWorkingDays("");
+    setBusinessWorkingHours("");
 
     try {
       const payload = await readJson<BrandingResponse>(
@@ -2660,9 +2693,12 @@ export function AdminQuestionWorkspace({
       setWorkspaceBranding(payload.branding);
       setBrandingInstituteName(payload.branding?.instituteName ?? "");
       setBrandingImageDataUrl(payload.branding?.imageDataUrl ?? null);
-      setBrandingFeedback("Branding cleared.");
+      setBusinessAppointmentsPerSlot(payload.branding?.appointmentsPerSlot ? String(payload.branding.appointmentsPerSlot) : "");
+      setBusinessWorkingDays(payload.branding?.workingDays ?? "");
+      setBusinessWorkingHours(payload.branding?.workingHours ?? "");
+      setBrandingFeedback("Business details cleared.");
     } catch (error) {
-      setBrandingFeedback(error instanceof Error ? error.message : "Unable to clear branding.");
+      setBrandingFeedback(error instanceof Error ? error.message : "Unable to clear business details.");
     }
   }
 
@@ -3499,7 +3535,7 @@ export function AdminQuestionWorkspace({
                       type="button"
                       onClick={() => setToolbarMenuView("branding")}
                     >
-                      Branding
+                      Business
                     </button>
                   ) : null}
                   <p className="eyebrow">Groups</p>
@@ -3544,21 +3580,50 @@ export function AdminQuestionWorkspace({
                     <button className="button-secondary small-button" type="button" onClick={() => setToolbarMenuView("menu")}>
                       Back
                     </button>
-                    <p className="eyebrow">Branding</p>
+                    <p className="eyebrow">Business</p>
                   </div>
-                  <h2 className="section-title">Institute branding</h2>
+                  <h2 className="section-title">Business details</h2>
                   <div className="form-stack">
                     <div className="field">
-                      <label htmlFor="branding-institute-name">Institute name</label>
+                      <label htmlFor="branding-institute-name">Business name</label>
                       <input
                         id="branding-institute-name"
-                        placeholder="Enter institute name"
+                        placeholder="Enter business name"
                         value={brandingInstituteName}
                         onChange={(event) => setBrandingInstituteName(event.target.value)}
                       />
                     </div>
                     <div className="field">
-                      <label htmlFor="branding-image">Logo or branding image</label>
+                      <label htmlFor="business-working-days">Working days</label>
+                      <input
+                        id="business-working-days"
+                        placeholder="Monday to Friday"
+                        value={businessWorkingDays}
+                        onChange={(event) => setBusinessWorkingDays(event.target.value)}
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="business-working-hours">Working hours</label>
+                      <input
+                        id="business-working-hours"
+                        placeholder="10:00 AM - 6:00 PM"
+                        value={businessWorkingHours}
+                        onChange={(event) => setBusinessWorkingHours(event.target.value)}
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="business-appointments-per-slot">Appointments per slot</label>
+                      <input
+                        id="business-appointments-per-slot"
+                        min="1"
+                        placeholder="1"
+                        type="number"
+                        value={businessAppointmentsPerSlot}
+                        onChange={(event) => setBusinessAppointmentsPerSlot(event.target.value)}
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="branding-image">Logo or business image</label>
                       <input
                         accept="image/*"
                         id="branding-image"
@@ -3574,11 +3639,11 @@ export function AdminQuestionWorkspace({
                     {brandingFeedback ? <p className="muted-text">{brandingFeedback}</p> : null}
                     <div className="inline-actions">
                       <button className="button" disabled={isMutating} type="button" onClick={() => void handleSaveBranding()}>
-                        Save branding
+                        Save business
                       </button>
                       <button
                         className="button-secondary"
-                        disabled={isMutating || (!brandingInstituteName.trim() && !brandingImageDataUrl)}
+                        disabled={isMutating || (!brandingInstituteName.trim() && !brandingImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && !businessAppointmentsPerSlot.trim())}
                         type="button"
                         onClick={() => void handleClearBranding()}
                       >

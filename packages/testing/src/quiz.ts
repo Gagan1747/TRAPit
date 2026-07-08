@@ -62,8 +62,11 @@ export type PersistentPollQuestion = PollQuestionDraft & {
 export type PollParticipantType = "open" | "registered";
 
 export type WorkspaceBranding = {
+  appointmentsPerSlot: number | null;
   imageDataUrl: string | null;
   instituteName: string;
+  workingDays: string;
+  workingHours: string;
 };
 
 export type ScheduledPoll = {
@@ -537,14 +540,22 @@ export function normalizeWorkspaceBranding(
 
   const instituteName = branding.instituteName?.trim() ?? "";
   const imageDataUrl = branding.imageDataUrl?.trim() ?? null;
+  const workingDays = branding.workingDays?.trim() ?? "";
+  const workingHours = branding.workingHours?.trim() ?? "";
+  const appointmentsPerSlot = Number.isFinite(branding.appointmentsPerSlot) && branding.appointmentsPerSlot && branding.appointmentsPerSlot > 0
+    ? Math.floor(branding.appointmentsPerSlot)
+    : null;
 
-  if (!instituteName && !imageDataUrl) {
+  if (!instituteName && !imageDataUrl && !workingDays && !workingHours && appointmentsPerSlot === null) {
     return null;
   }
 
   return {
+    appointmentsPerSlot,
     imageDataUrl,
     instituteName,
+    workingDays,
+    workingHours,
   };
 }
 
