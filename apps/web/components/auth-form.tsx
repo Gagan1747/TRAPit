@@ -47,6 +47,7 @@ export function AuthForm({ mode }: AuthFormProps) {
 
     return redirectValue.startsWith("/") ? redirectValue : "";
   })();
+  const redirectQuery = redirectPath ? `?redirect=${encodeURIComponent(redirectPath)}` : "";
   const initialSignUpSubMode = searchParams.get("step") === "confirm" ? "confirm" : "create";
   const initialConfirmAvailable = searchParams.get("step") === "confirm";
   const initialSignUpHint = searchParams.get("signup") === "retry"
@@ -347,10 +348,10 @@ export function AuthForm({ mode }: AuthFormProps) {
     <form className="form-stack" onSubmit={handleSubmit}>
       <div>
         <div aria-label="Authentication mode" className="segmented-control segmented-control-wide" role="group">
-          <a className={`segmented-control-item${mode === "sign-in" ? " is-active" : ""}`} href="/sign-in">
+          <a className={`segmented-control-item${mode === "sign-in" ? " is-active" : ""}`} href={`/sign-in${redirectQuery}`}>
             Sign in
           </a>
-          <a className={`segmented-control-item${mode === "sign-up" ? " is-active" : ""}`} href="/sign-up">
+          <a className={`segmented-control-item${mode === "sign-up" ? " is-active" : ""}`} href={`/sign-up${redirectQuery}`}>
             Sign up
           </a>
         </div>
@@ -504,7 +505,7 @@ export function AuthForm({ mode }: AuthFormProps) {
       ) : null}
 
       {mode === "sign-up" && signUpSubMode === "confirm" ? (
-        <a className="button-secondary" href="/sign-in">
+        <a className="button-secondary" href={`/sign-in${redirectQuery}`}>
           Already confirmed? Sign in
         </a>
       ) : null}
