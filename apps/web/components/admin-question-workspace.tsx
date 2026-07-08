@@ -30,7 +30,7 @@ import {
   type TestResult,
   type WorkspaceBranding,
 } from "@trapit/testing";
-import { type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
@@ -3441,6 +3441,8 @@ export function AdminQuestionWorkspace({
   });
   const selectedBusinessDayKeys = parseBusinessDays(businessWorkingDays);
   const businessTimeRange = parseBusinessTimeRange(businessWorkingHours);
+  const businessRangeStartPercent = ((businessTimeRange.startMinutes - BUSINESS_DAY_START_MINUTES) / (BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES)) * 100;
+  const businessRangeEndPercent = ((businessTimeRange.endMinutes - BUSINESS_DAY_START_MINUTES) / (BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES)) * 100;
   const hasBusinessSetupDraft = Boolean(
     brandingInstituteName.trim() &&
     selectedBusinessDayKeys.length &&
@@ -3839,10 +3841,19 @@ export function AdminQuestionWorkspace({
                         <span>{formatBusinessTimeRange(businessTimeRange.startMinutes, businessTimeRange.endMinutes)}</span>
                         <strong>{formatBusinessTime(businessTimeRange.endMinutes)}</strong>
                       </div>
-                      <div className="business-range-stack">
-                        <label>
-                          <span>Open</span>
+                      <div
+                        className="business-range-control"
+                        style={{
+                          "--business-range-end": `${businessRangeEndPercent}%`,
+                          "--business-range-start": `${businessRangeStartPercent}%`,
+                        } as CSSProperties}
+                      >
+                        <div className="business-range-track" aria-hidden="true" />
+                        <div className="business-range-fill" aria-hidden="true" />
+                        <label className="business-range-handle business-range-handle-start">
+                          <span className="sr-only">Open time</span>
                           <input
+                            aria-label="Open time"
                             max={BUSINESS_DAY_END_MINUTES - BUSINESS_TIME_STEP_MINUTES}
                             min={BUSINESS_DAY_START_MINUTES}
                             step={BUSINESS_TIME_STEP_MINUTES}
@@ -3851,9 +3862,10 @@ export function AdminQuestionWorkspace({
                             onChange={(event) => handleBusinessTimeRangeChange("start", event.target.value)}
                           />
                         </label>
-                        <label>
-                          <span>Close</span>
+                        <label className="business-range-handle business-range-handle-end">
+                          <span className="sr-only">Close time</span>
                           <input
+                            aria-label="Close time"
                             max={BUSINESS_DAY_END_MINUTES}
                             min={BUSINESS_DAY_START_MINUTES + BUSINESS_TIME_STEP_MINUTES}
                             step={BUSINESS_TIME_STEP_MINUTES}
@@ -3862,6 +3874,10 @@ export function AdminQuestionWorkspace({
                             onChange={(event) => handleBusinessTimeRangeChange("end", event.target.value)}
                           />
                         </label>
+                        <div className="business-range-labels" aria-hidden="true">
+                          <span>Open</span>
+                          <span>Close</span>
+                        </div>
                       </div>
                     </div>
                     <div className="field business-field-card">
