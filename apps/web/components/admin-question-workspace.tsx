@@ -30,7 +30,7 @@ import {
   type TestResult,
   type WorkspaceBranding,
 } from "@trapit/testing";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
@@ -70,6 +70,22 @@ ${POLL_OCR_EXAMPLE}`;
 
 const SELF_TEST_GROUP_OPTION_ID = "__self-test__";
 
+const BUSINESS_WEEK_DAYS = [
+  { key: "Mon", label: "M", name: "Monday" },
+  { key: "Tue", label: "T", name: "Tuesday" },
+  { key: "Wed", label: "W", name: "Wednesday" },
+  { key: "Thu", label: "T", name: "Thursday" },
+  { key: "Fri", label: "F", name: "Friday" },
+  { key: "Sat", label: "S", name: "Saturday" },
+  { key: "Sun", label: "S", name: "Sunday" },
+] as const;
+
+const BUSINESS_TIME_STEP_MINUTES = 30;
+const BUSINESS_DAY_START_MINUTES = 6 * 60;
+const BUSINESS_DAY_END_MINUTES = 22 * 60;
+const DEFAULT_BUSINESS_START_MINUTES = 10 * 60;
+const DEFAULT_BUSINESS_END_MINUTES = 18 * 60;
+
 type TestRepeatMode = "none" | "daily" | "weekly" | "monthly";
 
 const RECURRING_TEST_INSTANCE_COUNT = 6;
@@ -90,6 +106,83 @@ function toDateTimeInputValue(value: string) {
   const timezoneOffsetMs = date.getTimezoneOffset() * 60 * 1000;
 
   return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
+}
+
+function formatBusinessDays(selectedDayKeys: string[]) {
+  return BUSINESS_WEEK_DAYS
+    .filter((day) => selectedDayKeys.includes(day.key))
+    .map((day) => day.name)
+    .join(", ");
+}
+
+function parseBusinessDays(value: string): string[] {
+  const normalizedValue = value.toLowerCase();
+
+  if (!normalizedValue.trim()) {
+    return [];
+  }
+
+  if (normalizedValue.includes("monday to friday") || normalizedValue.includes("mon to fri")) {
+    return BUSINESS_WEEK_DAYS.slice(0, 5).map((day) => day.key);
+  }
+
+  return BUSINESS_WEEK_DAYS
+    .filter((day) => normalizedValue.includes(day.name.toLowerCase()) || normalizedValue.includes(day.key.toLowerCase()))
+    .map((day) => day.key);
+}
+
+function formatBusinessTime(minutes: number) {
+  const hours24 = Math.floor(minutes / 60);
+  const displayHour = hours24 % 12 || 12;
+  const displayMinutes = String(minutes % 60).padStart(2, "0");
+  const suffix = hours24 >= 12 ? "PM" : "AM";
+
+  return `${displayHour}:${displayMinutes} ${suffix}`;
+}
+
+function parseBusinessTime(value: string) {
+  const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  let hours = Number.parseInt(match[1], 10);
+  const minutes = Number.parseInt(match[2] ?? "0", 10);
+  const suffix = match[3]?.toUpperCase();
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || minutes > 59) {
+    return null;
+  }
+
+  if (suffix === "PM" && hours < 12) {
+    hours += 12;
+  }
+
+  if (suffix === "AM" && hours === 12) {
+    hours = 0;
+  }
+
+  return Math.min(BUSINESS_DAY_END_MINUTES, Math.max(BUSINESS_DAY_START_MINUTES, hours * 60 + minutes));
+}
+
+function parseBusinessTimeRange(value: string) {
+  const [startValue, endValue] = value.split(/\s*-\s*/);
+  const startMinutes = parseBusinessTime(startValue ?? "") ?? DEFAULT_BUSINESS_START_MINUTES;
+  const endMinutes = parseBusinessTime(endValue ?? "") ?? DEFAULT_BUSINESS_END_MINUTES;
+
+  if (startMinutes >= endMinutes) {
+    return {
+      endMinutes: Math.min(BUSINESS_DAY_END_MINUTES, startMinutes + BUSINESS_TIME_STEP_MINUTES),
+      startMinutes,
+    };
+  }
+
+  return { endMinutes, startMinutes };
+}
+
+function formatBusinessTimeRange(startMinutes: number, endMinutes: number) {
+  return `${formatBusinessTime(startMinutes)} - ${formatBusinessTime(endMinutes)}`;
 }
 
 function parseDateTimeInputValue(value: string) {
@@ -991,6 +1084,7 @@ export function AdminQuestionWorkspace({
   const [brandingFeedback, setBrandingFeedback] = useState<string | null>(null);
   const [brandingImageDataUrl, setBrandingImageDataUrl] = useState<string | null>(null);
   const [brandingInstituteName, setBrandingInstituteName] = useState("");
+  const [isBrandingDragActive, setIsBrandingDragActive] = useState(false);
   const [businessAppointmentQrCode, setBusinessAppointmentQrCode] = useState<string | null>(null);
   const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("");
   const [businessWorkingDays, setBusinessWorkingDays] = useState("");
@@ -1090,6 +1184,7 @@ export function AdminQuestionWorkspace({
   const [workspaceBranding, setWorkspaceBranding] = useState<WorkspaceBranding | null>(null);
   const participantAnswersRef = useRef<Record<string, number | undefined>>({});
   const participantIsSubmittingRef = useRef(false);
+  const brandingFileInputRef = useRef<HTMLInputElement | null>(null);
   const copiedLinkTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toolbarMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -2735,6 +2830,42 @@ export function AdminQuestionWorkspace({
     }
   }
 
+  function handleToggleBusinessDay(dayKey: string) {
+    const selectedDays = parseBusinessDays(businessWorkingDays);
+    const nextSelectedDays = selectedDays.includes(dayKey)
+      ? selectedDays.filter((selectedDayKey) => selectedDayKey !== dayKey)
+      : BUSINESS_WEEK_DAYS.filter((day) => selectedDays.includes(day.key) || day.key === dayKey).map((day) => day.key);
+
+    setBusinessWorkingDays(formatBusinessDays(nextSelectedDays));
+  }
+
+  function handleBusinessTimeRangeChange(boundary: "end" | "start", nextValue: string) {
+    const nextMinutes = Number.parseInt(nextValue, 10);
+    const currentRange = parseBusinessTimeRange(businessWorkingHours);
+
+    if (!Number.isFinite(nextMinutes)) {
+      return;
+    }
+
+    const nextRange = boundary === "start"
+      ? {
+          endMinutes: Math.max(currentRange.endMinutes, nextMinutes + BUSINESS_TIME_STEP_MINUTES),
+          startMinutes: Math.min(nextMinutes, currentRange.endMinutes - BUSINESS_TIME_STEP_MINUTES),
+        }
+      : {
+          endMinutes: Math.max(nextMinutes, currentRange.startMinutes + BUSINESS_TIME_STEP_MINUTES),
+          startMinutes: currentRange.startMinutes,
+        };
+
+    setBusinessWorkingHours(formatBusinessTimeRange(nextRange.startMinutes, nextRange.endMinutes));
+  }
+
+  function handleBrandingDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsBrandingDragActive(false);
+    void handleBrandingFileSelection(event.dataTransfer.files?.[0] ?? null);
+  }
+
   async function handleClearBranding() {
     setBrandingInstituteName("");
     setBrandingImageDataUrl(null);
@@ -3308,6 +3439,20 @@ export function AdminQuestionWorkspace({
     workingDays: businessWorkingDays,
     workingHours: businessWorkingHours,
   });
+  const selectedBusinessDayKeys = parseBusinessDays(businessWorkingDays);
+  const businessTimeRange = parseBusinessTimeRange(businessWorkingHours);
+  const hasBusinessSetupDraft = Boolean(
+    brandingInstituteName.trim() &&
+    selectedBusinessDayKeys.length &&
+    businessWorkingHours.trim() &&
+    businessAppointmentsPerSlot.trim(),
+  );
+  const businessAppointmentUrl = workspaceBranding?.appointmentShareCode
+    ? getApportionAccessUrl(workspaceBranding.appointmentShareCode)
+    : "";
+  const businessAppointmentDisplayUrl = businessAppointmentUrl
+    ? businessAppointmentUrl.replace(/^https?:\/\//i, "")
+    : "trapit.in/b/mybusiness";
   const filteredManagedUsers = categoryManagement?.managedUsers.filter((user) => {
     const query = categorySearchQuery.trim().toLowerCase();
     const normalizedQueryCandidates = Array.from(getParticipantIdentifierCandidates(query));
@@ -3559,7 +3704,7 @@ export function AdminQuestionWorkspace({
           </button>
 
           {isOverflowMenuOpen ? (
-            <div className="workspace-overflow-panel panel" role="dialog">
+            <div className={`workspace-overflow-panel panel${toolbarMenuView === "branding" ? " is-business-drawer" : ""}`} role="dialog">
               {toolbarMenuView === "menu" ? (
                 <div className="workspace-overflow-stack">
                   <p className="eyebrow">Workspace actions</p>
@@ -3642,7 +3787,7 @@ export function AdminQuestionWorkspace({
               ) : null}
 
               {toolbarMenuView === "branding" ? (
-                <div className="workspace-overflow-stack">
+                <div className="workspace-overflow-stack business-drawer-stack">
                   <div className="workspace-overflow-head">
                     <button className="button-secondary small-button" type="button" onClick={() => setToolbarMenuView("menu")}>
                       Back
@@ -3650,8 +3795,14 @@ export function AdminQuestionWorkspace({
                     <p className="eyebrow">Business</p>
                   </div>
                   <h2 className="section-title">Business details</h2>
-                  <div className="form-stack">
-                    <div className="field">
+                  <div className="business-setup-steps" aria-label="Business setup progress">
+                    <span className="is-complete">Setup</span>
+                    <span className={selectedBusinessDayKeys.length ? "is-complete" : ""}>Days</span>
+                    <span className={brandingImageDataUrl ? "is-complete" : ""}>Logo</span>
+                    <span className={workspaceBranding?.appointmentShareCode ? "is-complete" : ""}>Confirm</span>
+                  </div>
+                  <div className="form-stack business-details-form">
+                    <div className="field business-field-card">
                       <label htmlFor="branding-institute-name">Business name</label>
                       <input
                         id="branding-institute-name"
@@ -3660,25 +3811,60 @@ export function AdminQuestionWorkspace({
                         onChange={(event) => setBrandingInstituteName(event.target.value)}
                       />
                     </div>
-                    <div className="field">
-                      <label htmlFor="business-working-days">Working days</label>
-                      <input
-                        id="business-working-days"
-                        placeholder="Monday to Friday"
-                        value={businessWorkingDays}
-                        onChange={(event) => setBusinessWorkingDays(event.target.value)}
-                      />
+                    <div className="field business-field-card">
+                      <span className="field-label">Working days</span>
+                      <div className="business-day-grid" role="group" aria-label="Working days">
+                        {BUSINESS_WEEK_DAYS.map((day) => {
+                          const isActive = selectedBusinessDayKeys.includes(day.key);
+
+                          return (
+                            <button
+                              aria-pressed={isActive}
+                              className={`business-day-toggle${isActive ? " is-active" : ""}`}
+                              key={day.key}
+                              title={day.name}
+                              type="button"
+                              onClick={() => handleToggleBusinessDay(day.key)}
+                            >
+                              {day.label}
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
-                    <div className="field">
-                      <label htmlFor="business-working-hours">Working hours</label>
-                      <input
-                        id="business-working-hours"
-                        placeholder="10:00 AM - 6:00 PM"
-                        value={businessWorkingHours}
-                        onChange={(event) => setBusinessWorkingHours(event.target.value)}
-                      />
+                    <div className="field business-field-card">
+                      <span className="field-label">Working hours</span>
+                      <div className="business-time-summary">
+                        <strong>{formatBusinessTime(businessTimeRange.startMinutes)}</strong>
+                        <span>{formatBusinessTimeRange(businessTimeRange.startMinutes, businessTimeRange.endMinutes)}</span>
+                        <strong>{formatBusinessTime(businessTimeRange.endMinutes)}</strong>
+                      </div>
+                      <div className="business-range-stack">
+                        <label>
+                          <span>Open</span>
+                          <input
+                            max={BUSINESS_DAY_END_MINUTES - BUSINESS_TIME_STEP_MINUTES}
+                            min={BUSINESS_DAY_START_MINUTES}
+                            step={BUSINESS_TIME_STEP_MINUTES}
+                            type="range"
+                            value={businessTimeRange.startMinutes}
+                            onChange={(event) => handleBusinessTimeRangeChange("start", event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          <span>Close</span>
+                          <input
+                            max={BUSINESS_DAY_END_MINUTES}
+                            min={BUSINESS_DAY_START_MINUTES + BUSINESS_TIME_STEP_MINUTES}
+                            step={BUSINESS_TIME_STEP_MINUTES}
+                            type="range"
+                            value={businessTimeRange.endMinutes}
+                            onChange={(event) => handleBusinessTimeRangeChange("end", event.target.value)}
+                          />
+                        </label>
+                      </div>
                     </div>
-                    <div className="field">
+                    <div className="field business-field-card">
                       <label htmlFor="business-appointments-per-slot">Appointments per slot</label>
                       <input
                         id="business-appointments-per-slot"
@@ -3689,47 +3875,86 @@ export function AdminQuestionWorkspace({
                         onChange={(event) => setBusinessAppointmentsPerSlot(event.target.value)}
                       />
                     </div>
-                    <div className="field">
-                      <label htmlFor="branding-image">Logo or business image</label>
-                      <input
-                        accept="image/*"
-                        id="branding-image"
-                        type="file"
-                        onChange={(event) => void handleBrandingFileSelection(event.target.files?.[0] ?? null)}
-                      />
-                    </div>
-                    {brandingPreview?.imageDataUrl ? (
-                      <div className="branding-preview-card">
-                        <img alt="Branding preview" className="branding-preview-image" src={brandingPreview.imageDataUrl} />
+                    <div className="field business-field-card">
+                      <span className="field-label">Logo or business image</span>
+                      <div className="business-logo-row">
+                        <div
+                          className={`business-logo-dropzone${isBrandingDragActive ? " is-dragging" : ""}`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => brandingFileInputRef.current?.click()}
+                          onDragEnter={(event) => {
+                            event.preventDefault();
+                            setIsBrandingDragActive(true);
+                          }}
+                          onDragLeave={() => setIsBrandingDragActive(false)}
+                          onDragOver={(event) => event.preventDefault()}
+                          onDrop={handleBrandingDrop}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              brandingFileInputRef.current?.click();
+                            }
+                          }}
+                        >
+                          <span aria-hidden="true" className="business-upload-icon">Up</span>
+                          <strong>Drag & Drop your logo</strong>
+                          <span>or Browse</span>
+                        </div>
+                        <input
+                          accept="image/*"
+                          className="sr-only"
+                          id="branding-image"
+                          ref={brandingFileInputRef}
+                          type="file"
+                          onChange={(event) => void handleBrandingFileSelection(event.target.files?.[0] ?? null)}
+                        />
+                        <div className="business-logo-preview" aria-label="Logo preview">
+                          {brandingPreview?.imageDataUrl ? (
+                            <img alt="Branding preview" src={brandingPreview.imageDataUrl} />
+                          ) : (
+                            <span>Logo</span>
+                          )}
+                        </div>
                       </div>
-                    ) : null}
+                    </div>
                     {workspaceBranding?.appointmentShareCode ? (
-                      <div className="question-card nested-card business-share-card">
-                        <div className="question-head">
-                          <div>
-                            <strong>Appointment booking link</strong>
-                            <p className="muted-text">Share this link or QR code with registered users who want to book an appointment.</p>
-                          </div>
-                          <span className="status-chip">QR</span>
+                      <div className="business-share-card is-unlocked">
+                        <div className="business-share-copy">
+                          <span>Booking Link & QR</span>
+                          <strong>{businessAppointmentDisplayUrl}</strong>
                         </div>
                         <div className="inline-actions">
                           <button
                             className="button-secondary small-button"
                             type="button"
-                            onClick={() => void handleCopyLink("business-apportion", getApportionAccessUrl(workspaceBranding.appointmentShareCode ?? ""))}
+                            onClick={() => void handleCopyLink("business-apportion", businessAppointmentUrl)}
                           >
                             {copiedLinkKey === "business-apportion" ? "Copied" : "Copy link"}
                           </button>
-                          <a className="button-secondary small-button" href={getApportionAccessUrl(workspaceBranding.appointmentShareCode)} target="_blank" rel="noreferrer">
+                          <a className="button-secondary small-button" href={businessAppointmentUrl} target="_blank" rel="noreferrer">
                             Open page
                           </a>
                         </div>
-                        {businessAppointmentQrCode ? (
-                          <img alt="QR code for appointment booking" height={180} src={businessAppointmentQrCode} width={180} />
-                        ) : null}
+                        <div className="business-qr-preview">
+                          {businessAppointmentQrCode ? (
+                            <img alt="QR code for appointment booking" height={132} src={businessAppointmentQrCode} width={132} />
+                          ) : null}
+                          {businessAppointmentQrCode ? (
+                            <a className="button-secondary small-button" download="trapit-apportion-qr.png" href={businessAppointmentQrCode}>
+                              Download QR
+                            </a>
+                          ) : null}
+                        </div>
                       </div>
                     ) : (
-                      <p className="muted-text">Save business details to generate an appointment booking link and QR code.</p>
+                      <div className={`business-share-card is-locked${hasBusinessSetupDraft ? " is-ready" : ""}`}>
+                        <div className="business-share-copy">
+                          <span>Booking Link & QR</span>
+                          <strong>{hasBusinessSetupDraft ? businessAppointmentDisplayUrl : "Complete setup"}</strong>
+                        </div>
+                        <div className="business-locked-qr" aria-hidden="true" />
+                      </div>
                     )}
                     {brandingFeedback ? <p className="muted-text">{brandingFeedback}</p> : null}
                     <div className="inline-actions">
