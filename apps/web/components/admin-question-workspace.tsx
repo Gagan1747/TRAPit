@@ -293,6 +293,22 @@ type BrandingResponse = {
   branding: WorkspaceBranding | null;
 };
 
+type ApportionAppointment = {
+  createdAt: string;
+  id: string;
+  notes: string | null;
+  ownerIdentifier: string;
+  requesterIdentifier: string;
+  requesterName: string;
+  requesterPhone: string | null;
+  startsAt: string;
+};
+
+type ApportionDashboardResponse = {
+  ownerAppointments: ApportionAppointment[];
+  requesterAppointments: ApportionAppointment[];
+};
+
 type TestQuestionReportSummary = {
   createdAt: string;
   id: string;
@@ -422,6 +438,7 @@ type UpgradePrompt = {
 
 function createEmptyBranding(): WorkspaceBranding {
   return {
+    appointmentShareCode: null,
     appointmentsPerSlot: null,
     imageDataUrl: null,
     instituteName: "",
@@ -433,6 +450,7 @@ function createEmptyBranding(): WorkspaceBranding {
 function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBranding | null {
   const instituteName = branding?.instituteName.trim() ?? "";
   const imageDataUrl = branding?.imageDataUrl?.trim() ?? null;
+  const appointmentShareCode = branding?.appointmentShareCode?.trim() || null;
   const workingDays = branding?.workingDays.trim() ?? "";
   const workingHours = branding?.workingHours.trim() ?? "";
   const appointmentsPerSlot = Number.isFinite(branding?.appointmentsPerSlot) && branding?.appointmentsPerSlot && branding.appointmentsPerSlot > 0
@@ -444,6 +462,7 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
   }
 
   return {
+    appointmentShareCode,
     appointmentsPerSlot,
     imageDataUrl,
     instituteName,
@@ -472,6 +491,7 @@ async function fileToDataUrl(file: File) {
 
 type AdminWorkspaceSection =
   | "analytics-coming-soon"
+  | "apportion"
   | "author"
   | "create-groups"
   | "history"
@@ -928,6 +948,7 @@ type AdminQuestionWorkspaceProps = {
   currentActorRole: "admin" | "user";
   currentAdminIdentifier: string | null;
   currentUserCategory: NormalUserCategory | null;
+  initialOpenSection?: AdminWorkspaceSection;
   isSuperAdmin: boolean;
   previousSignInAt: string | null;
 };
@@ -936,6 +957,7 @@ export function AdminQuestionWorkspace({
   currentActorRole,
   currentAdminIdentifier,
   currentUserCategory,
+  initialOpenSection,
   isSuperAdmin,
   previousSignInAt,
 }: AdminQuestionWorkspaceProps) {
@@ -965,9 +987,11 @@ export function AdminQuestionWorkspace({
   const [groupSearchResults, setGroupSearchResults] = useState<ParticipantGroup[]>([]);
   const [groupName, setGroupName] = useState("");
   const [history, setHistory] = useState<TestHistoryEntry[]>([]);
+  const [ownerApportionAppointments, setOwnerApportionAppointments] = useState<ApportionAppointment[]>([]);
   const [brandingFeedback, setBrandingFeedback] = useState<string | null>(null);
   const [brandingImageDataUrl, setBrandingImageDataUrl] = useState<string | null>(null);
   const [brandingInstituteName, setBrandingInstituteName] = useState("");
+  const [businessAppointmentQrCode, setBusinessAppointmentQrCode] = useState<string | null>(null);
   const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("");
   const [businessWorkingDays, setBusinessWorkingDays] = useState("");
   const [businessWorkingHours, setBusinessWorkingHours] = useState("");
@@ -983,7 +1007,7 @@ export function AdminQuestionWorkspace({
   const [isSearchingGroups, setIsSearchingGroups] = useState(false);
   const [isSendingGroupRequest, setIsSendingGroupRequest] = useState<string | null>(null);
   const [leaderboards, setLeaderboards] = useState<TestLeaderboard[]>([]);
-  const [openSection, setOpenSection] = useState<AdminWorkspaceSection | null>("history");
+  const [openSection, setOpenSection] = useState<AdminWorkspaceSection | null>(initialOpenSection ?? "history");
   const [outgoingGroupJoinRequests, setOutgoingGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
   const [participantPolls, setParticipantPolls] = useState<ScheduledPoll[]>([]);
   const [activeParticipantName, setActiveParticipantName] = useState("");
@@ -991,6 +1015,7 @@ export function AdminQuestionWorkspace({
   const [currentParticipantQuestionIndex, setCurrentParticipantQuestionIndex] = useState(0);
   const [participantTestHistory, setParticipantTestHistory] = useState<TestHistoryEntry[]>([]);
   const [participantTests, setParticipantTests] = useState<UserDashboardResponse["availableTests"]>([]);
+  const [requesterApportionAppointments, setRequesterApportionAppointments] = useState<ApportionAppointment[]>([]);
   const [participantAnswers, setParticipantAnswers] = useState<Record<string, number | undefined>>({});
   const [participantNamesByTest, setParticipantNamesByTest] = useState<Record<string, string>>({});
   const [participantRemainingMs, setParticipantRemainingMs] = useState<number | null>(null);
@@ -1074,7 +1099,7 @@ export function AdminQuestionWorkspace({
     }
 
     try {
-      const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, userDashboardPayload, pollsPayload, brandingPayload, categorySnapshotPayload, categoryManagementPayload] =
+      const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, userDashboardPayload, pollsPayload, brandingPayload, apportionPayload, categorySnapshotPayload, categoryManagementPayload] =
         await Promise.all([
           readJson<QuestionApiResponse>(await fetch("/api/admin/questions")),
           readJson<PoolsResponse>(await fetch("/api/admin/pools")),
@@ -1084,6 +1109,7 @@ export function AdminQuestionWorkspace({
           readJson<UserDashboardResponse>(await fetch("/api/user/dashboard")),
           readJson<PollsResponse>(await fetch("/api/admin/polls")),
           readJson<BrandingResponse>(await fetch("/api/admin/branding")),
+          readJson<ApportionDashboardResponse>(await fetch("/api/user/apportion")),
           currentActorRole === "user"
             ? readJson<UserCategorySnapshotResponse>(await fetch("/api/user/category"))
             : Promise.resolve<UserCategorySnapshotResponse | null>(null),
@@ -1110,6 +1136,8 @@ export function AdminQuestionWorkspace({
       setBusinessAppointmentsPerSlot(brandingPayload.branding?.appointmentsPerSlot ? String(brandingPayload.branding.appointmentsPerSlot) : "");
       setBusinessWorkingDays(brandingPayload.branding?.workingDays ?? "");
       setBusinessWorkingHours(brandingPayload.branding?.workingHours ?? "");
+      setOwnerApportionAppointments(apportionPayload.ownerAppointments);
+      setRequesterApportionAppointments(apportionPayload.requesterAppointments);
       setHistory(historyPayload.history);
       setLeaderboards(historyPayload.leaderboards);
       setSummary(historyPayload.summary);
@@ -1238,6 +1266,28 @@ export function AdminQuestionWorkspace({
   }, [scheduledTests]);
 
   useEffect(() => {
+    let isMounted = true;
+    const shareCode = workspaceBranding?.appointmentShareCode ?? "";
+
+    if (!shareCode) {
+      setBusinessAppointmentQrCode(null);
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    void QRCode.toDataURL(getApportionAccessUrl(shareCode), { margin: 1, width: 180 }).then((qrCode: string) => {
+      if (isMounted) {
+        setBusinessAppointmentQrCode(qrCode);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [workspaceBranding?.appointmentShareCode]);
+
+  useEffect(() => {
     const activeParticipantTest = participantTests.find((test) => test.id === activeParticipantTestId) ?? null;
 
     if (!activeParticipantTest || !participantStartedAt) {
@@ -1307,6 +1357,18 @@ export function AdminQuestionWorkspace({
     }
 
     return `${window.location.origin}/group/${shareCode}`;
+  }
+
+  function getApportionAccessUrl(shareCode: string) {
+    if (!shareCode.trim()) {
+      return "";
+    }
+
+    if (typeof window === "undefined") {
+      return `/apportion/${shareCode}`;
+    }
+
+    return `${window.location.origin}/apportion/${shareCode}`;
   }
 
   async function handleCopyLink(linkKey: string, url: string) {
@@ -2642,6 +2704,7 @@ export function AdminQuestionWorkspace({
     }
 
     const nextBranding = normalizeBrandingInput({
+      appointmentShareCode: workspaceBranding?.appointmentShareCode ?? null,
       appointmentsPerSlot,
       imageDataUrl: brandingImageDataUrl,
       instituteName: brandingInstituteName,
@@ -3238,8 +3301,12 @@ export function AdminQuestionWorkspace({
   const pollToggleLiveCount = filteredMergedPolls.filter((poll) => poll.status === "live").length;
   const pollToggleUpcomingCount = filteredMergedPolls.filter((poll) => poll.status === "scheduled").length;
   const brandingPreview = normalizeBrandingInput({
+    appointmentShareCode: workspaceBranding?.appointmentShareCode ?? null,
+    appointmentsPerSlot: Number.parseInt(businessAppointmentsPerSlot, 10),
     imageDataUrl: brandingImageDataUrl,
     instituteName: brandingInstituteName,
+    workingDays: businessWorkingDays,
+    workingHours: businessWorkingHours,
   });
   const filteredManagedUsers = categoryManagement?.managedUsers.filter((user) => {
     const query = categorySearchQuery.trim().toLowerCase();
@@ -3636,6 +3703,34 @@ export function AdminQuestionWorkspace({
                         <img alt="Branding preview" className="branding-preview-image" src={brandingPreview.imageDataUrl} />
                       </div>
                     ) : null}
+                    {workspaceBranding?.appointmentShareCode ? (
+                      <div className="question-card nested-card business-share-card">
+                        <div className="question-head">
+                          <div>
+                            <strong>Appointment booking link</strong>
+                            <p className="muted-text">Share this link or QR code with registered users who want to book an appointment.</p>
+                          </div>
+                          <span className="status-chip">QR</span>
+                        </div>
+                        <div className="inline-actions">
+                          <button
+                            className="button-secondary small-button"
+                            type="button"
+                            onClick={() => void handleCopyLink("business-apportion", getApportionAccessUrl(workspaceBranding.appointmentShareCode ?? ""))}
+                          >
+                            {copiedLinkKey === "business-apportion" ? "Copied" : "Copy link"}
+                          </button>
+                          <a className="button-secondary small-button" href={getApportionAccessUrl(workspaceBranding.appointmentShareCode)} target="_blank" rel="noreferrer">
+                            Open page
+                          </a>
+                        </div>
+                        {businessAppointmentQrCode ? (
+                          <img alt="QR code for appointment booking" height={180} src={businessAppointmentQrCode} width={180} />
+                        ) : null}
+                      </div>
+                    ) : (
+                      <p className="muted-text">Save business details to generate an appointment booking link and QR code.</p>
+                    )}
                     {brandingFeedback ? <p className="muted-text">{brandingFeedback}</p> : null}
                     <div className="inline-actions">
                       <button className="button" disabled={isMutating} type="button" onClick={() => void handleSaveBranding()}>
@@ -3672,7 +3767,7 @@ export function AdminQuestionWorkspace({
               { label: "Schedule", section: "schedule" },
             ])}
             {renderMenuItem("R...", "reports-coming-soon")}
-            {renderMenuItem("Apportion", "analytics-coming-soon")}
+            {renderMenuItem("Apportion", "apportion")}
             {renderMenuGroup("Poll", "poll", [
               { label: "Add Questions", section: "poll-questions" },
               { label: "Schedule", section: "poll-schedule" },
@@ -3685,6 +3780,72 @@ export function AdminQuestionWorkspace({
             <section className="panel workspace-card">
               <div className="empty-state">
                 <p className="muted-text">Feature coming soon.......</p>
+              </div>
+            </section>
+          ) : openSection === "apportion" ? (
+            <section className="panel workspace-card">
+              <div className="section-head compact-head">
+                <div>
+                  <p className="eyebrow">Apportion</p>
+                  <h2 className="section-title">Appointments</h2>
+                  <p className="muted-text">Track appointments you requested and appointments booked with your business.</p>
+                </div>
+                {workspaceBranding?.appointmentShareCode ? (
+                  <button
+                    className="button-secondary small-button"
+                    type="button"
+                    onClick={() => void handleCopyLink("apportion-section", getApportionAccessUrl(workspaceBranding.appointmentShareCode ?? ""))}
+                  >
+                    {copiedLinkKey === "apportion-section" ? "Copied" : "Copy booking link"}
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="stack-grid two-column-grid">
+                <article className="question-card nested-card">
+                  <div className="question-head">
+                    <strong>My booked appointments</strong>
+                    <span className="status-chip">{requesterApportionAppointments.length}</span>
+                  </div>
+                  {requesterApportionAppointments.length ? (
+                    <div className="notification-panel-list">
+                      {requesterApportionAppointments.map((appointment) => (
+                        <div className="notification-panel-item" key={appointment.id}>
+                          <div>
+                            <strong>{formatShortDateTime(appointment.startsAt)}</strong>
+                            {appointment.notes ? <p className="muted-text">{appointment.notes}</p> : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted-text">No appointments booked yet.</p>
+                  )}
+                </article>
+
+                <article className="question-card nested-card">
+                  <div className="question-head">
+                    <strong>Business appointments</strong>
+                    <span className="status-chip">{ownerApportionAppointments.length}</span>
+                  </div>
+                  {ownerApportionAppointments.length ? (
+                    <div className="notification-panel-list">
+                      {ownerApportionAppointments.map((appointment) => (
+                        <div className="notification-panel-item" key={appointment.id}>
+                          <div>
+                            <strong>{formatShortDateTime(appointment.startsAt)}</strong>
+                            <p className="muted-text">
+                              {appointment.requesterName} - {formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier)}
+                            </p>
+                            {appointment.notes ? <p className="muted-text">{appointment.notes}</p> : null}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted-text">No users have booked appointments with your business yet.</p>
+                  )}
+                </article>
               </div>
             </section>
           ) : (

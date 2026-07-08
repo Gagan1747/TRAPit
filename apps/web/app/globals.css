@@ -1183,6 +1183,10 @@ main {
   align-content: start;
 }
 
+.two-column-grid {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
 .option-list,
 .question-list,
 .answer-grid {

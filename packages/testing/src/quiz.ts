@@ -62,6 +62,7 @@ export type PersistentPollQuestion = PollQuestionDraft & {
 export type PollParticipantType = "open" | "registered";
 
 export type WorkspaceBranding = {
+  appointmentShareCode: string | null;
   appointmentsPerSlot: number | null;
   imageDataUrl: string | null;
   instituteName: string;
@@ -540,6 +541,7 @@ export function normalizeWorkspaceBranding(
 
   const instituteName = branding.instituteName?.trim() ?? "";
   const imageDataUrl = branding.imageDataUrl?.trim() ?? null;
+  const appointmentShareCode = branding.appointmentShareCode?.trim() || null;
   const workingDays = branding.workingDays?.trim() ?? "";
   const workingHours = branding.workingHours?.trim() ?? "";
   const appointmentsPerSlot = Number.isFinite(branding.appointmentsPerSlot) && branding.appointmentsPerSlot && branding.appointmentsPerSlot > 0
@@ -551,6 +553,7 @@ export function normalizeWorkspaceBranding(
   }
 
   return {
+    appointmentShareCode,
     appointmentsPerSlot,
     imageDataUrl,
     instituteName,

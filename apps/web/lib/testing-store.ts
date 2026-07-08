@@ -303,11 +303,22 @@ export async function updateWorkspaceBranding(
   const state = await readStore();
   const normalizedBranding = normalizeWorkspaceBranding(branding);
   const normalizedActorKey = normalizeBrandingActorKey(actorKey);
+  const existingBranding = normalizedActorKey
+    ? state.workspaceBrandingByActor[normalizedActorKey] ?? null
+    : state.workspaceBranding;
+  const brandingWithShareCode = normalizedBranding
+    ? {
+        ...normalizedBranding,
+        appointmentShareCode: normalizedBranding.appointmentShareCode
+          ?? existingBranding?.appointmentShareCode
+          ?? `TRAPIT-APPT-${createEntityId("access").replace(/-/g, "").toUpperCase()}`,
+      }
+    : null;
 
   if (!normalizedActorKey) {
-    state.workspaceBranding = normalizedBranding;
-  } else if (normalizedBranding) {
-    state.workspaceBrandingByActor[normalizedActorKey] = normalizedBranding;
+    state.workspaceBranding = brandingWithShareCode;
+  } else if (brandingWithShareCode) {
+    state.workspaceBrandingByActor[normalizedActorKey] = brandingWithShareCode;
   } else {
     delete state.workspaceBrandingByActor[normalizedActorKey];
   }
@@ -319,6 +330,30 @@ export async function updateWorkspaceBranding(
   }
 
   return state.workspaceBrandingByActor[normalizedActorKey] ?? null;
+}
+
+export async function getWorkspaceBrandingByAppointmentShareCode(shareCode: string) {
+  const state = await readStore();
+  const normalizedShareCode = shareCode.trim().toLowerCase();
+
+  if (!normalizedShareCode) {
+    return null;
+  }
+
+  const entry = Object.entries(state.workspaceBrandingByActor).find(([, branding]) =>
+    branding.appointmentShareCode?.trim().toLowerCase() === normalizedShareCode,
+  );
+
+  if (!entry) {
+    return null;
+  }
+
+  const [ownerIdentifier, branding] = entry;
+
+  return {
+    branding,
+    ownerIdentifier,
+  };
 }
 
 function isOwnedByActor(ownerId: string | null | undefined, actorId: string | null) {
