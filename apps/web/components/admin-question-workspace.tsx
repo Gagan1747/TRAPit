@@ -4032,7 +4032,7 @@ export function AdminQuestionWorkspace({
               { label: "Add Questions", section: "question-bank" },
               { label: "Schedule", section: "schedule" },
             ])}
-            {renderMenuItem("Reports", "reports-coming-soon")}
+            {renderMenuItem("R...", "reports-coming-soon")}
             {renderMenuItem("Apportion", "apportion")}
             {renderMenuGroup("Poll", "poll", [
               { label: "Add Questions", section: "poll-questions" },
