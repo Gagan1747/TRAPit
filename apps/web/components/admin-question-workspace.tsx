@@ -1094,6 +1094,7 @@ export function AdminQuestionWorkspace({
   const [importText, setImportText] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
   const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
   const [isPollImporting, setIsPollImporting] = useState(false);
@@ -3860,6 +3861,15 @@ export function AdminQuestionWorkspace({
                           "--business-range-end": `${businessRangeEndPercent}%`,
                           "--business-range-start": `${businessRangeStartPercent}%`,
                         } as CSSProperties}
+                        onPointerMove={(event) => {
+                          const bounds = event.currentTarget.getBoundingClientRect();
+                          const pointerPercent = ((event.clientX - bounds.left) / bounds.width) * 100;
+
+                          event.currentTarget.dataset.activeHandle = pointerPercent > (businessRangeStartPercent + businessRangeEndPercent) / 2 ? "end" : "start";
+                        }}
+                        onPointerLeave={(event) => {
+                          delete event.currentTarget.dataset.activeHandle;
+                        }}
                       >
                         <div className="business-range-track" aria-hidden="true" />
                         <div className="business-range-fill" aria-hidden="true" />
@@ -4021,24 +4031,39 @@ export function AdminQuestionWorkspace({
       </div>
 
       <div className="admin-shell">
-        <aside className="admin-menu panel workspace-card">
-          <div className="section-head compact-head">
-            <div>
-              <h2 className="section-title">Menu</h2>
-            </div>
-          </div>
-          <div className="admin-menu-stack">
-            {renderMenuGroup("Test", "test", [
-              { label: "Add Questions", section: "question-bank" },
-              { label: "Schedule", section: "schedule" },
-            ])}
-            {renderMenuItem("R...", "reports-coming-soon")}
-            {renderMenuItem("Apportion", "apportion")}
-            {renderMenuGroup("Poll", "poll", [
-              { label: "Add Questions", section: "poll-questions" },
-              { label: "Schedule", section: "poll-schedule" },
-            ])}
-          </div>
+        <aside
+          aria-label="Workspace menu"
+          className={`admin-menu panel workspace-card${isMenuCollapsed ? " is-collapsed" : ""}`}
+        >
+          {isMenuCollapsed ? (
+            <button className="admin-menu-collapsed-rail" type="button" onClick={() => setIsMenuCollapsed(false)}>
+              <span className="admin-menu-collapsed-title">Menu</span>
+              <span className="admin-menu-collapsed-copy">Open</span>
+            </button>
+          ) : (
+            <>
+              <div className="section-head compact-head">
+                <div>
+                  <h2 className="section-title">Menu</h2>
+                </div>
+                <button className="button-secondary small-button admin-menu-toggle" type="button" onClick={() => setIsMenuCollapsed(true)}>
+                  Collapse
+                </button>
+              </div>
+              <div className="admin-menu-stack">
+                {renderMenuGroup("Test", "test", [
+                  { label: "Add Questions", section: "question-bank" },
+                  { label: "Schedule", section: "schedule" },
+                ])}
+                {renderMenuItem("R...", "reports-coming-soon")}
+                {renderMenuItem("Apportion", "apportion")}
+                {renderMenuGroup("Poll", "poll", [
+                  { label: "Add Questions", section: "poll-questions" },
+                  { label: "Schedule", section: "poll-schedule" },
+                ])}
+              </div>
+            </>
+          )}
         </aside>
 
         <div className="admin-main-column">

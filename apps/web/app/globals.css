@@ -823,12 +823,17 @@ main {
   height: 44px;
 }
 
-.business-range-handle-start {
+.business-range-handle-start,
+.business-range-control[data-active-handle="start"] .business-range-handle-start {
   z-index: 4;
 }
 
 .business-range-handle-end {
   z-index: 3;
+}
+
+.business-range-control[data-active-handle="end"] .business-range-handle-end {
+  z-index: 5;
 }
 
 .business-range-handle input[type="range"] {
@@ -920,7 +925,7 @@ main {
 
 .business-logo-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 76px;
+  grid-template-columns: minmax(0, 0.78fr) 132px;
   gap: 12px;
   align-items: stretch;
 }
@@ -929,8 +934,8 @@ main {
   display: grid;
   place-items: center;
   gap: 4px;
-  min-height: 86px;
-  padding: 14px;
+  min-height: 74px;
+  padding: 10px;
   border: 2px dashed rgba(81, 55, 133, 0.42);
   border-radius: 18px;
   background: rgba(127, 99, 201, 0.08);
@@ -964,8 +969,8 @@ main {
 .business-logo-preview {
   display: grid;
   place-items: center;
-  width: 76px;
-  min-height: 86px;
+  width: 132px;
+  min-height: 112px;
   border: 1px solid rgba(28, 20, 15, 0.1);
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.76);
@@ -977,8 +982,9 @@ main {
 }
 
 .business-logo-preview img {
-  width: 62px;
-  height: 62px;
+  display: block;
+  width: 104px;
+  height: 104px;
   border-radius: 999px;
   object-fit: cover;
 }
