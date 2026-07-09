@@ -1,9 +1,83 @@
 import { getSessionDisplayName, getSessionIdentifier } from "@trapit/auth";
+import { type WorkspaceBranding } from "@trapit/testing";
 import { NextResponse } from "next/server";
 
 import { createApportionAppointment, listApportionSlotCounts } from "../../../../lib/apportion-store";
 import { getWebSession } from "../../../../lib/session";
 import { getWorkspaceBrandingByAppointmentShareCode } from "../../../../lib/testing-store";
+
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function parseTimeToMinutes(value: string) {
+  const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  let hours = Number.parseInt(match[1], 10);
+  const minutes = Number.parseInt(match[2] ?? "0", 10);
+  const suffix = match[3]?.toUpperCase();
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || minutes > 59) {
+    return null;
+  }
+
+  if (suffix === "PM" && hours < 12) {
+    hours += 12;
+  }
+
+  if (suffix === "AM" && hours === 12) {
+    hours = 0;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function parseTimeRange(value: string) {
+  const [startValue, endValue] = value.split(/\s*-\s*/);
+  const startMinutes = parseTimeToMinutes(startValue ?? "");
+  const endMinutes = parseTimeToMinutes(endValue ?? "");
+
+  return startMinutes === null || endMinutes === null || startMinutes >= endMinutes
+    ? null
+    : { endMinutes, startMinutes };
+}
+
+function parseWorkingDays(value: string) {
+  const normalizedValue = value.toLowerCase();
+
+  if (!normalizedValue.trim()) {
+    return new Set(WEEKDAY_NAMES);
+  }
+
+  return new Set(WEEKDAY_NAMES.filter((day) => normalizedValue.includes(day.toLowerCase()) || normalizedValue.includes(day.slice(0, 3).toLowerCase())));
+}
+
+function validateRequestedSlot(branding: WorkspaceBranding, startsAt: Date) {
+  const workingDays = parseWorkingDays(branding.workingDays);
+  const workingRange = parseTimeRange(branding.workingHours);
+  const breakRange = parseTimeRange(branding.breakHours);
+  const dayName = WEEKDAY_NAMES[startsAt.getDay()];
+  const requestedMinutes = startsAt.getHours() * 60 + startsAt.getMinutes();
+  const slotDurationMinutes = branding.slotDurationMinutes ?? 30;
+
+  if (!workingDays.has(dayName)) {
+    throw new Error("Choose a working day for this business.");
+  }
+
+  if (workingRange && (requestedMinutes < workingRange.startMinutes || requestedMinutes + slotDurationMinutes > workingRange.endMinutes)) {
+    throw new Error("Choose a time within working hours.");
+  }
+
+  if (breakRange && requestedMinutes < breakRange.endMinutes && requestedMinutes + slotDurationMinutes > breakRange.startMinutes) {
+    throw new Error("Choose a time outside the lunch or break hour.");
+  }
+
+  if (workingRange && (requestedMinutes - workingRange.startMinutes) % slotDurationMinutes !== 0) {
+    throw new Error("Choose one of the available appointment slots.");
+  }
+}
 
 export async function GET(
   request: Request,
@@ -26,6 +100,7 @@ export async function GET(
   return NextResponse.json({
     business: {
       appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
+      breakHours: business.branding.breakHours,
       imageDataUrl: business.branding.imageDataUrl,
       name: business.branding.instituteName,
       slotDurationMinutes: business.branding.slotDurationMinutes ?? null,
@@ -62,6 +137,14 @@ export async function POST(
   let appointment;
 
   try {
+    const requestedStart = new Date(body.startsAt ?? "");
+
+    if (Number.isNaN(requestedStart.getTime())) {
+      throw new Error("Choose a valid appointment date and time.");
+    }
+
+    validateRequestedSlot(business.branding, requestedStart);
+
     appointment = await createApportionAppointment({
       appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
       notes: body.notes,
@@ -69,7 +152,7 @@ export async function POST(
       requesterIdentifier,
       requesterName: getSessionDisplayName(session) ?? requesterIdentifier,
       requesterPhone: session.phoneNumber ?? requesterIdentifier,
-      startsAt: body.startsAt ?? "",
+      startsAt: requestedStart.toISOString(),
     });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to book appointment." }, { status: 400 });

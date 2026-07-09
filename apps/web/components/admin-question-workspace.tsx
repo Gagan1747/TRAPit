@@ -533,6 +533,7 @@ function createEmptyBranding(): WorkspaceBranding {
   return {
     appointmentShareCode: null,
     appointmentsPerSlot: null,
+    breakHours: "",
     imageDataUrl: null,
     instituteName: "",
     slotDurationMinutes: null,
@@ -545,6 +546,7 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
   const instituteName = branding?.instituteName.trim() ?? "";
   const imageDataUrl = branding?.imageDataUrl?.trim() ?? null;
   const appointmentShareCode = branding?.appointmentShareCode?.trim() || null;
+  const breakHours = branding?.breakHours.trim() ?? "";
   const workingDays = branding?.workingDays.trim() ?? "";
   const workingHours = branding?.workingHours.trim() ?? "";
   const appointmentsPerSlot = Number.isFinite(branding?.appointmentsPerSlot) && branding?.appointmentsPerSlot && branding.appointmentsPerSlot > 0
@@ -554,13 +556,14 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
     ? branding?.slotDurationMinutes ?? null
     : null;
 
-  if (!instituteName && !imageDataUrl && !workingDays && !workingHours && appointmentsPerSlot === null && slotDurationMinutes === null) {
+  if (!instituteName && !imageDataUrl && !breakHours && !workingDays && !workingHours && appointmentsPerSlot === null && slotDurationMinutes === null) {
     return null;
   }
 
   return {
     appointmentShareCode,
     appointmentsPerSlot,
+    breakHours,
     imageDataUrl,
     instituteName,
     slotDurationMinutes,
@@ -1092,6 +1095,7 @@ export function AdminQuestionWorkspace({
   const [isBrandingDragActive, setIsBrandingDragActive] = useState(false);
   const [businessAppointmentQrCode, setBusinessAppointmentQrCode] = useState<string | null>(null);
   const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("");
+  const [businessBreakHours, setBusinessBreakHours] = useState("");
   const [businessSlotDurationMinutes, setBusinessSlotDurationMinutes] = useState("");
   const [businessWorkingDays, setBusinessWorkingDays] = useState("");
   const [businessWorkingHours, setBusinessWorkingHours] = useState("");
@@ -1199,6 +1203,7 @@ export function AdminQuestionWorkspace({
     setBrandingInstituteName(branding?.instituteName ?? "");
     setBrandingImageDataUrl(branding?.imageDataUrl ?? null);
     setBusinessAppointmentsPerSlot(branding?.appointmentsPerSlot ? String(branding.appointmentsPerSlot) : "");
+    setBusinessBreakHours(branding?.breakHours ?? "");
     setBusinessSlotDurationMinutes(branding?.slotDurationMinutes ? String(branding.slotDurationMinutes) : "");
     setBusinessWorkingDays(branding?.workingDays ?? "");
     setBusinessWorkingHours(branding?.workingHours ?? "");
@@ -2830,6 +2835,7 @@ export function AdminQuestionWorkspace({
     const nextBranding = normalizeBrandingInput({
       appointmentShareCode: workspaceBranding?.appointmentShareCode ?? null,
       appointmentsPerSlot,
+      breakHours: businessBreakHours,
       imageDataUrl: brandingImageDataUrl,
       instituteName: brandingInstituteName,
       slotDurationMinutes,
@@ -2889,6 +2895,28 @@ export function AdminQuestionWorkspace({
     setBusinessWorkingHours(formatBusinessTimeRange(nextRange.startMinutes, nextRange.endMinutes));
   }
 
+  function handleBusinessBreakRangeChange(boundary: "end" | "start", nextValue: string) {
+    markBrandingDraftDirty();
+    const nextMinutes = Number.parseInt(nextValue, 10);
+    const currentRange = parseBusinessTimeRange(businessBreakHours || "1:00 PM - 2:00 PM");
+
+    if (!Number.isFinite(nextMinutes)) {
+      return;
+    }
+
+    const nextRange = boundary === "start"
+      ? {
+          endMinutes: Math.max(currentRange.endMinutes, nextMinutes + BUSINESS_TIME_STEP_MINUTES),
+          startMinutes: Math.min(nextMinutes, currentRange.endMinutes - BUSINESS_TIME_STEP_MINUTES),
+        }
+      : {
+          endMinutes: Math.max(nextMinutes, currentRange.startMinutes + BUSINESS_TIME_STEP_MINUTES),
+          startMinutes: currentRange.startMinutes,
+        };
+
+    setBusinessBreakHours(formatBusinessTimeRange(nextRange.startMinutes, nextRange.endMinutes));
+  }
+
   function handleBrandingDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setIsBrandingDragActive(false);
@@ -2900,6 +2928,7 @@ export function AdminQuestionWorkspace({
     setBrandingInstituteName("");
     setBrandingImageDataUrl(null);
     setBusinessAppointmentsPerSlot("");
+    setBusinessBreakHours("");
     setBusinessSlotDurationMinutes("");
     setBusinessWorkingDays("");
     setBusinessWorkingHours("");
@@ -3461,6 +3490,7 @@ export function AdminQuestionWorkspace({
   const brandingPreview = normalizeBrandingInput({
     appointmentShareCode: workspaceBranding?.appointmentShareCode ?? null,
     appointmentsPerSlot: Number.parseInt(businessAppointmentsPerSlot, 10),
+    breakHours: businessBreakHours,
     imageDataUrl: brandingImageDataUrl,
     instituteName: brandingInstituteName,
     slotDurationMinutes: Number.parseInt(businessSlotDurationMinutes, 10),
@@ -3929,6 +3959,52 @@ export function AdminQuestionWorkspace({
                       </div>
                     </div>
                     <div className="field business-field-card">
+                      <span className="field-label">Lunch / break hour</span>
+                      <div className="business-time-summary">
+                        <strong>{formatBusinessTime(parseBusinessTimeRange(businessBreakHours || "1:00 PM - 2:00 PM").startMinutes)}</strong>
+                        <span>{businessBreakHours || "No break saved"}</span>
+                        <strong>{formatBusinessTime(parseBusinessTimeRange(businessBreakHours || "1:00 PM - 2:00 PM").endMinutes)}</strong>
+                      </div>
+                      <div className="business-range-control">
+                        <div className="business-range-track" aria-hidden="true" />
+                        <label className="business-range-handle business-range-handle-start">
+                          <span className="sr-only">Break start time</span>
+                          <input
+                            aria-label="Break start time"
+                            max={BUSINESS_DAY_END_MINUTES - BUSINESS_TIME_STEP_MINUTES}
+                            min={BUSINESS_DAY_START_MINUTES}
+                            step={BUSINESS_TIME_STEP_MINUTES}
+                            type="range"
+                            value={parseBusinessTimeRange(businessBreakHours || "1:00 PM - 2:00 PM").startMinutes}
+                            onChange={(event) => handleBusinessBreakRangeChange("start", event.target.value)}
+                          />
+                        </label>
+                        <label className="business-range-handle business-range-handle-end">
+                          <span className="sr-only">Break end time</span>
+                          <input
+                            aria-label="Break end time"
+                            max={BUSINESS_DAY_END_MINUTES}
+                            min={BUSINESS_DAY_START_MINUTES + BUSINESS_TIME_STEP_MINUTES}
+                            step={BUSINESS_TIME_STEP_MINUTES}
+                            type="range"
+                            value={parseBusinessTimeRange(businessBreakHours || "1:00 PM - 2:00 PM").endMinutes}
+                            onChange={(event) => handleBusinessBreakRangeChange("end", event.target.value)}
+                          />
+                        </label>
+                        <div className="business-range-scale" aria-hidden="true">
+                          {[BUSINESS_DAY_START_MINUTES, 10 * 60, 14 * 60, 18 * 60, BUSINESS_DAY_END_MINUTES].map((minutes) => (
+                            <span key={minutes}>{formatBusinessTime(minutes).replace(":00", "")}</span>
+                          ))}
+                        </div>
+                      </div>
+                      <button className="button-secondary small-button" type="button" onClick={() => {
+                        markBrandingDraftDirty();
+                        setBusinessBreakHours("");
+                      }}>
+                        No break
+                      </button>
+                    </div>
+                    <div className="field business-field-card">
                       <label htmlFor="business-appointments-per-slot">Appointments per slot</label>
                       <input
                         id="business-appointments-per-slot"
@@ -4122,8 +4198,11 @@ export function AdminQuestionWorkspace({
                       {requesterApportionAppointments.map((appointment) => (
                         <div className="notification-panel-item" key={appointment.id}>
                           <div>
-                            <strong>{formatShortDateTime(appointment.startsAt)}</strong>
-                            {appointment.notes ? <p className="muted-text">{appointment.notes}</p> : null}
+                            <strong>{appointment.requesterName}</strong>
+                            <p className="muted-text">
+                              {formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier)} - {formatShortDateTime(appointment.startsAt)}
+                            </p>
+                            <p className="muted-text">Notes: {appointment.notes ?? "None"}</p>
                           </div>
                         </div>
                       ))}
@@ -4143,11 +4222,11 @@ export function AdminQuestionWorkspace({
                       {ownerApportionAppointments.map((appointment) => (
                         <div className="notification-panel-item" key={appointment.id}>
                           <div>
-                            <strong>{formatShortDateTime(appointment.startsAt)}</strong>
+                            <strong>{appointment.requesterName}</strong>
                             <p className="muted-text">
-                              {appointment.requesterName} - {formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier)}
+                              {formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier)} - {formatShortDateTime(appointment.startsAt)}
                             </p>
-                            {appointment.notes ? <p className="muted-text">{appointment.notes}</p> : null}
+                            <p className="muted-text">Notes: {appointment.notes ?? "None"}</p>
                           </div>
                         </div>
                       ))}

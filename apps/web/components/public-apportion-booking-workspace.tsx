@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from "react";
 
-import { formatShortDateTime } from "../lib/date-format";
+const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const WEEKDAY_SHORT_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 type BookingPayload = {
   business: {
     appointmentsPerSlot: number;
+    breakHours: string;
     imageDataUrl: string | null;
     name: string;
     slotDurationMinutes: number | null;
@@ -26,9 +28,86 @@ async function readJson<T>(response: Response): Promise<T> {
   return payload;
 }
 
-function toDateTimeInputValue(value: Date) {
-  const offsetMs = value.getTimezoneOffset() * 60 * 1000;
-  return new Date(value.getTime() - offsetMs).toISOString().slice(0, 16);
+function createDateKey(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function createDateFromKey(value: string) {
+  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
+
+  return new Date(year, month - 1, day);
+}
+
+function formatTime(minutes: number) {
+  const hours24 = Math.floor(minutes / 60);
+  const displayHour = hours24 % 12 || 12;
+  const displayMinutes = String(minutes % 60).padStart(2, "0");
+  const suffix = hours24 >= 12 ? "PM" : "AM";
+
+  return `${displayHour}:${displayMinutes} ${suffix}`;
+}
+
+function parseTimeToMinutes(value: string) {
+  const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  let hours = Number.parseInt(match[1], 10);
+  const minutes = Number.parseInt(match[2] ?? "0", 10);
+  const suffix = match[3]?.toUpperCase();
+
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || minutes > 59) {
+    return null;
+  }
+
+  if (suffix === "PM" && hours < 12) {
+    hours += 12;
+  }
+
+  if (suffix === "AM" && hours === 12) {
+    hours = 0;
+  }
+
+  return hours * 60 + minutes;
+}
+
+function parseTimeRange(value: string) {
+  const [startValue, endValue] = value.split(/\s*-\s*/);
+  const startMinutes = parseTimeToMinutes(startValue ?? "");
+  const endMinutes = parseTimeToMinutes(endValue ?? "");
+
+  return startMinutes === null || endMinutes === null || startMinutes >= endMinutes
+    ? null
+    : { endMinutes, startMinutes };
+}
+
+function parseWorkingDays(value: string) {
+  const normalizedValue = value.toLowerCase();
+
+  if (!normalizedValue.trim()) {
+    return new Set(WEEKDAY_NAMES);
+  }
+
+  return new Set(WEEKDAY_NAMES.filter((day) => normalizedValue.includes(day.toLowerCase()) || normalizedValue.includes(day.slice(0, 3).toLowerCase())));
+}
+
+function isSameDay(left: Date, right: Date) {
+  return left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate();
+}
+
+function createSlotIso(dateKey: string, minutes: number) {
+  const date = createDateFromKey(dateKey);
+  date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
+
+  return date.toISOString();
 }
 
 type PublicApportionBookingWorkspaceProps = {
@@ -36,12 +115,13 @@ type PublicApportionBookingWorkspaceProps = {
 };
 
 export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBookingWorkspaceProps) {
-  const [appointmentDateTime, setAppointmentDateTime] = useState(toDateTimeInputValue(new Date(Date.now() + 60 * 60 * 1000)));
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isBooking, setIsBooking] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [notes, setNotes] = useState("");
   const [payload, setPayload] = useState<BookingPayload | null>(null);
+  const [selectedDateKey, setSelectedDateKey] = useState(createDateKey(new Date()));
+  const [selectedSlotIso, setSelectedSlotIso] = useState<string | null>(null);
 
   async function loadBookingPage() {
     setIsLoading(true);
@@ -51,6 +131,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
         await fetch(`/api/apportion/${encodeURIComponent(shareCode)}`),
       );
       setPayload(nextPayload);
+      setSelectedSlotIso(null);
       setFeedback(null);
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to load this booking page.");
@@ -63,8 +144,26 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     void loadBookingPage();
   }, [shareCode]);
 
+  useEffect(() => {
+    if (!payload) {
+      return;
+    }
+
+    const workingDays = parseWorkingDays(payload.business.workingDays);
+    const today = new Date();
+    const nextWorkingDate = Array.from({ length: 28 }, (_, offset) => {
+      const date = new Date(today);
+      date.setDate(today.getDate() + offset);
+      return date;
+    }).find((date) => workingDays.has(WEEKDAY_NAMES[date.getDay()]));
+
+    if (nextWorkingDate) {
+      setSelectedDateKey(createDateKey(nextWorkingDate));
+    }
+  }, [payload]);
+
   async function handleBookAppointment() {
-    if (!appointmentDateTime) {
+    if (!selectedSlotIso) {
       setFeedback("Choose an appointment date and time.");
       return;
     }
@@ -76,7 +175,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
         await fetch(`/api/apportion/${encodeURIComponent(shareCode)}`, {
           body: JSON.stringify({
             notes,
-            startsAt: new Date(appointmentDateTime).toISOString(),
+            startsAt: selectedSlotIso,
           }),
           headers: { "Content-Type": "application/json" },
           method: "POST",
@@ -84,6 +183,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       );
       setFeedback("Appointment booked. You can see it in the Apportion tab on your dashboard.");
       setNotes("");
+      setSelectedSlotIso(null);
       await loadBookingPage();
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to book the appointment.");
@@ -100,6 +200,38 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     return <div className="empty-state"><p className="muted-text">{feedback ?? "Unable to load this appointment page."}</p></div>;
   }
 
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const workingDays = parseWorkingDays(payload.business.workingDays);
+  const workingRange = parseTimeRange(payload.business.workingHours) ?? { endMinutes: 18 * 60, startMinutes: 10 * 60 };
+  const breakRange = parseTimeRange(payload.business.breakHours);
+  const slotDurationMinutes = payload.business.slotDurationMinutes ?? 30;
+  const slotCountsByIso = Object.fromEntries(payload.slotCounts.map((slot) => [slot.startsAt, slot.count]));
+  const calendarDays = Array.from({ length: 28 }, (_, offset) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() + offset);
+    return date;
+  });
+  const availableSlots = Array.from(
+    { length: Math.max(0, Math.floor((workingRange.endMinutes - workingRange.startMinutes) / slotDurationMinutes)) },
+    (_, index) => workingRange.startMinutes + (index * slotDurationMinutes),
+  ).filter((minutes) => {
+    const slotEnd = minutes + slotDurationMinutes;
+
+    return !breakRange || minutes >= breakRange.endMinutes || slotEnd <= breakRange.startMinutes;
+  }).map((minutes) => {
+    const startsAt = createSlotIso(selectedDateKey, minutes);
+    const slotDate = new Date(startsAt);
+    const isPast = slotDate.getTime() <= Date.now();
+    const isFull = (slotCountsByIso[startsAt] ?? 0) >= payload.business.appointmentsPerSlot;
+
+    return {
+      isAvailable: !isPast && !isFull,
+      label: formatTime(minutes),
+      startsAt,
+    };
+  });
+
   return (
     <div className="workspace-card-stack">
       <section className="workspace-card apportion-booking-hero">
@@ -111,29 +243,61 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
           <h1>{payload.business.name || "Business appointment"}</h1>
           <p className="muted-text">Working days: {payload.business.workingDays || "Not specified"}</p>
           <p className="muted-text">Working hours: {payload.business.workingHours || "Not specified"}</p>
-          <p className="muted-text">Appointments per slot: {payload.business.appointmentsPerSlot}</p>
+          {payload.business.breakHours ? <p className="muted-text">Break hour: {payload.business.breakHours}</p> : null}
           <p className="muted-text">Slot duration: {payload.business.slotDurationMinutes ? `${payload.business.slotDurationMinutes} mins` : "Not specified"}</p>
         </div>
       </section>
 
-      <section className="workspace-card">
+      <section className="workspace-card apportion-booking-panel">
         <p className="eyebrow">Choose appointment</p>
         <div className="form-stack">
-          <div className="field">
-            <label htmlFor="apportion-appointment-time">Day and time</label>
-            <input
-              id="apportion-appointment-time"
-              min={toDateTimeInputValue(new Date())}
-              type="datetime-local"
-              value={appointmentDateTime}
-              onChange={(event) => setAppointmentDateTime(event.target.value)}
-            />
+          <div className="apportion-calendar" aria-label="Appointment calendar">
+            {calendarDays.map((date) => {
+              const dateKey = createDateKey(date);
+              const isWorkingDay = workingDays.has(WEEKDAY_NAMES[date.getDay()]);
+              const isSelected = dateKey === selectedDateKey;
+
+              return (
+                <button
+                  className={`apportion-calendar-day${isWorkingDay ? " is-working" : ""}${isSelected ? " is-selected" : ""}`}
+                  disabled={!isWorkingDay}
+                  key={dateKey}
+                  type="button"
+                  onClick={() => {
+                    setSelectedDateKey(dateKey);
+                    setSelectedSlotIso(null);
+                  }}
+                >
+                  <span>{WEEKDAY_SHORT_NAMES[date.getDay()]}</span>
+                  <strong>{date.getDate()}</strong>
+                  {isSameDay(date, new Date()) ? <small>Today</small> : null}
+                </button>
+              );
+            })}
+            <p className="muted-text apportion-calendar-note">Slot duration: {slotDurationMinutes} mins</p>
+          </div>
+          <div className="apportion-slot-grid" aria-label="Available time slots">
+            {availableSlots.length ? availableSlots.map((slot) => (
+              <button
+                className={`apportion-slot-chip${selectedSlotIso === slot.startsAt ? " is-selected" : ""}`}
+                disabled={!slot.isAvailable}
+                key={slot.startsAt}
+                type="button"
+                onClick={() => {
+                  setSelectedSlotIso(slot.startsAt);
+                  setFeedback(null);
+                }}
+              >
+                {slot.label}
+                {!slot.isAvailable ? <span>Unavailable</span> : null}
+              </button>
+            )) : <p className="muted-text">No available slots for this date.</p>}
           </div>
           <div className="field">
             <label htmlFor="apportion-notes">Notes</label>
             <textarea
               id="apportion-notes"
-              placeholder="Reason for appointment"
+              placeholder="Tell us a bit about the student's current math level or goals!"
               rows={3}
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
@@ -149,21 +313,6 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
         </div>
       </section>
 
-      <section className="workspace-card">
-        <p className="eyebrow">Booked slots</p>
-        {payload.slotCounts.length ? (
-          <div className="notification-panel-list">
-            {payload.slotCounts.map((slot) => (
-              <div className="notification-panel-item" key={slot.startsAt}>
-                <span>{formatShortDateTime(slot.startsAt)}</span>
-                <strong>{slot.count}/{payload.business.appointmentsPerSlot}</strong>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="muted-text">No booked slots yet.</p>
-        )}
-      </section>
     </div>
   );
 }

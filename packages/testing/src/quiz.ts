@@ -64,6 +64,7 @@ export type PollParticipantType = "open" | "registered";
 export type WorkspaceBranding = {
   appointmentShareCode: string | null;
   appointmentsPerSlot: number | null;
+  breakHours: string;
   imageDataUrl: string | null;
   instituteName: string;
   slotDurationMinutes: number | null;
@@ -543,6 +544,7 @@ export function normalizeWorkspaceBranding(
   const instituteName = branding.instituteName?.trim() ?? "";
   const imageDataUrl = branding.imageDataUrl?.trim() ?? null;
   const appointmentShareCode = branding.appointmentShareCode?.trim() || null;
+  const breakHours = branding.breakHours?.trim() ?? "";
   const workingDays = branding.workingDays?.trim() ?? "";
   const workingHours = branding.workingHours?.trim() ?? "";
   const appointmentsPerSlot = Number.isFinite(branding.appointmentsPerSlot) && branding.appointmentsPerSlot && branding.appointmentsPerSlot > 0
@@ -552,13 +554,14 @@ export function normalizeWorkspaceBranding(
     ? branding.slotDurationMinutes
     : null;
 
-  if (!instituteName && !imageDataUrl && !workingDays && !workingHours && appointmentsPerSlot === null && slotDurationMinutes === null) {
+  if (!instituteName && !imageDataUrl && !breakHours && !workingDays && !workingHours && appointmentsPerSlot === null && slotDurationMinutes === null) {
     return null;
   }
 
   return {
     appointmentShareCode,
     appointmentsPerSlot,
+    breakHours,
     imageDataUrl,
     instituteName,
     slotDurationMinutes,
