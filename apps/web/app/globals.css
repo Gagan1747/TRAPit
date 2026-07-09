@@ -245,10 +245,6 @@ main {
   align-items: start;
 }
 
-.admin-shell.is-menu-collapsed {
-  grid-template-columns: 88px minmax(0, 1fr);
-}
-
 .admin-main-column {
   display: grid;
   gap: 20px;
@@ -264,39 +260,6 @@ main {
   overflow: hidden;
   box-shadow: 0 22px 54px rgba(81, 55, 133, 0.12);
   transition: padding 180ms ease, width 180ms ease;
-}
-
-.admin-menu.is-collapsed {
-  padding: 18px 14px;
-  cursor: pointer;
-}
-
-.admin-menu-toggle {
-  white-space: nowrap;
-}
-
-.admin-menu-collapsed-rail {
-  min-height: 240px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  text-align: center;
-}
-
-.admin-menu-collapsed-title {
-  margin: 0;
-  color: var(--accent-deep);
-  font-size: 0.76rem;
-  font-weight: 800;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-
-.admin-menu-collapsed-copy {
-  margin: 0;
-  max-width: 9ch;
 }
 
 .admin-menu-stack {

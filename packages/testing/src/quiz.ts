@@ -66,6 +66,7 @@ export type WorkspaceBranding = {
   appointmentsPerSlot: number | null;
   imageDataUrl: string | null;
   instituteName: string;
+  slotDurationMinutes: number | null;
   workingDays: string;
   workingHours: string;
 };
@@ -547,8 +548,11 @@ export function normalizeWorkspaceBranding(
   const appointmentsPerSlot = Number.isFinite(branding.appointmentsPerSlot) && branding.appointmentsPerSlot && branding.appointmentsPerSlot > 0
     ? Math.floor(branding.appointmentsPerSlot)
     : null;
+  const slotDurationMinutes = [15, 30, 45, 60].includes(branding.slotDurationMinutes ?? 0)
+    ? branding.slotDurationMinutes
+    : null;
 
-  if (!instituteName && !imageDataUrl && !workingDays && !workingHours && appointmentsPerSlot === null) {
+  if (!instituteName && !imageDataUrl && !workingDays && !workingHours && appointmentsPerSlot === null && slotDurationMinutes === null) {
     return null;
   }
 
@@ -557,6 +561,7 @@ export function normalizeWorkspaceBranding(
     appointmentsPerSlot,
     imageDataUrl,
     instituteName,
+    slotDurationMinutes,
     workingDays,
     workingHours,
   };

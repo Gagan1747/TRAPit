@@ -535,6 +535,7 @@ function createEmptyBranding(): WorkspaceBranding {
     appointmentsPerSlot: null,
     imageDataUrl: null,
     instituteName: "",
+    slotDurationMinutes: null,
     workingDays: "",
     workingHours: "",
   };
@@ -549,8 +550,11 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
   const appointmentsPerSlot = Number.isFinite(branding?.appointmentsPerSlot) && branding?.appointmentsPerSlot && branding.appointmentsPerSlot > 0
     ? Math.floor(branding.appointmentsPerSlot)
     : null;
+  const slotDurationMinutes = [15, 30, 45, 60].includes(branding?.slotDurationMinutes ?? 0)
+    ? branding?.slotDurationMinutes ?? null
+    : null;
 
-  if (!instituteName && !imageDataUrl && !workingDays && !workingHours && appointmentsPerSlot === null) {
+  if (!instituteName && !imageDataUrl && !workingDays && !workingHours && appointmentsPerSlot === null && slotDurationMinutes === null) {
     return null;
   }
 
@@ -559,6 +563,7 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
     appointmentsPerSlot,
     imageDataUrl,
     instituteName,
+    slotDurationMinutes,
     workingDays,
     workingHours,
   };
@@ -1087,6 +1092,7 @@ export function AdminQuestionWorkspace({
   const [isBrandingDragActive, setIsBrandingDragActive] = useState(false);
   const [businessAppointmentQrCode, setBusinessAppointmentQrCode] = useState<string | null>(null);
   const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("");
+  const [businessSlotDurationMinutes, setBusinessSlotDurationMinutes] = useState("");
   const [businessWorkingDays, setBusinessWorkingDays] = useState("");
   const [businessWorkingHours, setBusinessWorkingHours] = useState("");
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
@@ -1094,7 +1100,6 @@ export function AdminQuestionWorkspace({
   const [importText, setImportText] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isMenuCollapsed, setIsMenuCollapsed] = useState(false);
   const [isMutating, setIsMutating] = useState(false);
   const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
   const [isPollImporting, setIsPollImporting] = useState(false);
@@ -1194,6 +1199,7 @@ export function AdminQuestionWorkspace({
     setBrandingInstituteName(branding?.instituteName ?? "");
     setBrandingImageDataUrl(branding?.imageDataUrl ?? null);
     setBusinessAppointmentsPerSlot(branding?.appointmentsPerSlot ? String(branding.appointmentsPerSlot) : "");
+    setBusinessSlotDurationMinutes(branding?.slotDurationMinutes ? String(branding.slotDurationMinutes) : "");
     setBusinessWorkingDays(branding?.workingDays ?? "");
     setBusinessWorkingHours(branding?.workingHours ?? "");
   }
@@ -2809,9 +2815,15 @@ export function AdminQuestionWorkspace({
 
   async function handleSaveBranding() {
     const appointmentsPerSlot = businessAppointmentsPerSlot.trim() ? Number(businessAppointmentsPerSlot) : null;
+    const slotDurationMinutes = businessSlotDurationMinutes.trim() ? Number(businessSlotDurationMinutes) : null;
 
     if (appointmentsPerSlot !== null && (!Number.isFinite(appointmentsPerSlot) || appointmentsPerSlot < 1)) {
       setBrandingFeedback("Appointments per slot must be at least 1.");
+      return;
+    }
+
+    if (slotDurationMinutes !== null && ![15, 30, 45, 60].includes(slotDurationMinutes)) {
+      setBrandingFeedback("Slot duration must be 15, 30, 45, or 60 minutes.");
       return;
     }
 
@@ -2820,6 +2832,7 @@ export function AdminQuestionWorkspace({
       appointmentsPerSlot,
       imageDataUrl: brandingImageDataUrl,
       instituteName: brandingInstituteName,
+      slotDurationMinutes,
       workingDays: businessWorkingDays,
       workingHours: businessWorkingHours,
     });
@@ -2887,6 +2900,7 @@ export function AdminQuestionWorkspace({
     setBrandingInstituteName("");
     setBrandingImageDataUrl(null);
     setBusinessAppointmentsPerSlot("");
+    setBusinessSlotDurationMinutes("");
     setBusinessWorkingDays("");
     setBusinessWorkingHours("");
 
@@ -3449,6 +3463,7 @@ export function AdminQuestionWorkspace({
     appointmentsPerSlot: Number.parseInt(businessAppointmentsPerSlot, 10),
     imageDataUrl: brandingImageDataUrl,
     instituteName: brandingInstituteName,
+    slotDurationMinutes: Number.parseInt(businessSlotDurationMinutes, 10),
     workingDays: businessWorkingDays,
     workingHours: businessWorkingHours,
   });
@@ -3926,6 +3941,22 @@ export function AdminQuestionWorkspace({
                           setBusinessAppointmentsPerSlot(event.target.value);
                         }}
                       />
+                      <label htmlFor="business-slot-duration">Slot duration</label>
+                      <select
+                        className="select-field"
+                        id="business-slot-duration"
+                        value={businessSlotDurationMinutes}
+                        onChange={(event) => {
+                          markBrandingDraftDirty();
+                          setBusinessSlotDurationMinutes(event.target.value);
+                        }}
+                      >
+                        <option value="">Select duration</option>
+                        <option value="15">15 mins</option>
+                        <option value="30">30 mins</option>
+                        <option value="45">45 mins</option>
+                        <option value="60">60 mins</option>
+                      </select>
                     </div>
                     <div className="field business-field-card">
                       <span className="field-label">Logo or business image</span>
@@ -4015,7 +4046,7 @@ export function AdminQuestionWorkspace({
                       </button>
                       <button
                         className="button-secondary"
-                        disabled={isMutating || (!brandingInstituteName.trim() && !brandingImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && !businessAppointmentsPerSlot.trim())}
+                        disabled={isMutating || (!brandingInstituteName.trim() && !brandingImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && !businessAppointmentsPerSlot.trim() && !businessSlotDurationMinutes.trim())}
                         type="button"
                         onClick={() => void handleClearBranding()}
                       >
@@ -4033,37 +4064,25 @@ export function AdminQuestionWorkspace({
       <div className="admin-shell">
         <aside
           aria-label="Workspace menu"
-          className={`admin-menu panel workspace-card${isMenuCollapsed ? " is-collapsed" : ""}`}
+          className="admin-menu panel workspace-card"
         >
-          {isMenuCollapsed ? (
-            <button className="admin-menu-collapsed-rail" type="button" onClick={() => setIsMenuCollapsed(false)}>
-              <span className="admin-menu-collapsed-title">Menu</span>
-              <span className="admin-menu-collapsed-copy">Open</span>
-            </button>
-          ) : (
-            <>
-              <div className="section-head compact-head">
-                <div>
-                  <h2 className="section-title">Menu</h2>
-                </div>
-                <button className="button-secondary small-button admin-menu-toggle" type="button" onClick={() => setIsMenuCollapsed(true)}>
-                  Collapse
-                </button>
-              </div>
-              <div className="admin-menu-stack">
-                {renderMenuGroup("Test", "test", [
-                  { label: "Add Questions", section: "question-bank" },
-                  { label: "Schedule", section: "schedule" },
-                ])}
-                {renderMenuItem("R...", "reports-coming-soon")}
-                {renderMenuItem("Apportion", "apportion")}
-                {renderMenuGroup("Poll", "poll", [
-                  { label: "Add Questions", section: "poll-questions" },
-                  { label: "Schedule", section: "poll-schedule" },
-                ])}
-              </div>
-            </>
-          )}
+          <div className="section-head compact-head">
+            <div>
+              <h2 className="section-title">Menu</h2>
+            </div>
+          </div>
+          <div className="admin-menu-stack">
+            {renderMenuGroup("Test", "test", [
+              { label: "Add Questions", section: "question-bank" },
+              { label: "Schedule", section: "schedule" },
+            ])}
+            {renderMenuItem("R...", "reports-coming-soon")}
+            {renderMenuItem("Apportion", "apportion")}
+            {renderMenuGroup("Poll", "poll", [
+              { label: "Add Questions", section: "poll-questions" },
+              { label: "Schedule", section: "poll-schedule" },
+            ])}
+          </div>
         </aside>
 
         <div className="admin-main-column">

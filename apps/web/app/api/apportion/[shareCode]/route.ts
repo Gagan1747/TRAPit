@@ -28,6 +28,7 @@ export async function GET(
       appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
       imageDataUrl: business.branding.imageDataUrl,
       name: business.branding.instituteName,
+      slotDurationMinutes: business.branding.slotDurationMinutes ?? null,
       workingDays: business.branding.workingDays,
       workingHours: business.branding.workingHours,
     },

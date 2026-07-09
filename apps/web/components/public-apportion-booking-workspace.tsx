@@ -9,6 +9,7 @@ type BookingPayload = {
     appointmentsPerSlot: number;
     imageDataUrl: string | null;
     name: string;
+    slotDurationMinutes: number | null;
     workingDays: string;
     workingHours: string;
   };
@@ -111,6 +112,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
           <p className="muted-text">Working days: {payload.business.workingDays || "Not specified"}</p>
           <p className="muted-text">Working hours: {payload.business.workingHours || "Not specified"}</p>
           <p className="muted-text">Appointments per slot: {payload.business.appointmentsPerSlot}</p>
+          <p className="muted-text">Slot duration: {payload.business.slotDurationMinutes ? `${payload.business.slotDurationMinutes} mins` : "Not specified"}</p>
         </div>
       </section>
 
