@@ -23,9 +23,10 @@ export default async function AdminPage() {
           <div>
             <h1 className="hero-title">
               <a className="dashboard-title-link" href="/admin?home=both">
-                {displayName} TRAPit dashboard
+                Welcome, {displayName}!
               </a>
             </h1>
+            <p className="hero-kicker">TRAPit admin workspace</p>
             <p className="hero-text">
               {authConfigured
                 ? `Signed in with ${formatPhoneNumberForDisplay(sessionIdentifier ?? "admin", { showFullPhoneNumber: isSuperAdmin })}`

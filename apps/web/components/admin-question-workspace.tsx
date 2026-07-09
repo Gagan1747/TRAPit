@@ -1185,8 +1185,21 @@ export function AdminQuestionWorkspace({
   const participantAnswersRef = useRef<Record<string, number | undefined>>({});
   const participantIsSubmittingRef = useRef(false);
   const brandingFileInputRef = useRef<HTMLInputElement | null>(null);
+  const isBrandingDraftDirtyRef = useRef(false);
   const copiedLinkTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toolbarMenuRef = useRef<HTMLDivElement | null>(null);
+
+  function syncBrandingDraft(branding: WorkspaceBranding | null) {
+    setBrandingInstituteName(branding?.instituteName ?? "");
+    setBrandingImageDataUrl(branding?.imageDataUrl ?? null);
+    setBusinessAppointmentsPerSlot(branding?.appointmentsPerSlot ? String(branding.appointmentsPerSlot) : "");
+    setBusinessWorkingDays(branding?.workingDays ?? "");
+    setBusinessWorkingHours(branding?.workingHours ?? "");
+  }
+
+  function markBrandingDraftDirty() {
+    isBrandingDraftDirtyRef.current = true;
+  }
 
   async function loadWorkspace(options?: { silent?: boolean }) {
     if (!options?.silent) {
@@ -1226,11 +1239,9 @@ export function AdminQuestionWorkspace({
       setScheduledPolls(pollsPayload.scheduledPolls);
       setScheduledTests(testsPayload.scheduledTests);
       setWorkspaceBranding(brandingPayload.branding);
-      setBrandingInstituteName(brandingPayload.branding?.instituteName ?? "");
-      setBrandingImageDataUrl(brandingPayload.branding?.imageDataUrl ?? null);
-      setBusinessAppointmentsPerSlot(brandingPayload.branding?.appointmentsPerSlot ? String(brandingPayload.branding.appointmentsPerSlot) : "");
-      setBusinessWorkingDays(brandingPayload.branding?.workingDays ?? "");
-      setBusinessWorkingHours(brandingPayload.branding?.workingHours ?? "");
+      if (!isBrandingDraftDirtyRef.current) {
+        syncBrandingDraft(brandingPayload.branding);
+      }
       setOwnerApportionAppointments(apportionPayload.ownerAppointments);
       setRequesterApportionAppointments(apportionPayload.requesterAppointments);
       setHistory(historyPayload.history);
@@ -2154,7 +2165,11 @@ export function AdminQuestionWorkspace({
           onClick={() => setOpenMenuGroup((currentGroup) => (currentGroup === group ? null : group))}
         >
           <span>{label}</span>
-          <span className="admin-menu-group-toggle-symbol" aria-hidden="true">{isOpen ? "▲" : "▼"}</span>
+          <span className="admin-menu-group-toggle-symbol" aria-hidden="true">
+            <svg viewBox="0 0 20 20" focusable="false">
+              <path d="M5.5 7.5 10 12l4.5-4.5" />
+            </svg>
+          </span>
         </button>
         {isOpen ? (
           <div className="admin-menu-substack">
@@ -2515,6 +2530,7 @@ export function AdminQuestionWorkspace({
 
     try {
       const imageDataUrl = await fileToDataUrl(file);
+      markBrandingDraftDirty();
       setBrandingImageDataUrl(imageDataUrl);
       setBrandingFeedback(null);
     } catch (error) {
@@ -2819,11 +2835,8 @@ export function AdminQuestionWorkspace({
       );
 
       setWorkspaceBranding(payload.branding);
-      setBrandingInstituteName(payload.branding?.instituteName ?? "");
-      setBrandingImageDataUrl(payload.branding?.imageDataUrl ?? null);
-      setBusinessAppointmentsPerSlot(payload.branding?.appointmentsPerSlot ? String(payload.branding.appointmentsPerSlot) : "");
-      setBusinessWorkingDays(payload.branding?.workingDays ?? "");
-      setBusinessWorkingHours(payload.branding?.workingHours ?? "");
+      isBrandingDraftDirtyRef.current = false;
+      syncBrandingDraft(payload.branding);
       setBrandingFeedback(payload.branding ? "Business details saved." : "Business details cleared.");
     } catch (error) {
       setBrandingFeedback(error instanceof Error ? error.message : "Unable to save business details.");
@@ -2831,6 +2844,7 @@ export function AdminQuestionWorkspace({
   }
 
   function handleToggleBusinessDay(dayKey: string) {
+    markBrandingDraftDirty();
     const selectedDays = parseBusinessDays(businessWorkingDays);
     const nextSelectedDays = selectedDays.includes(dayKey)
       ? selectedDays.filter((selectedDayKey) => selectedDayKey !== dayKey)
@@ -2840,6 +2854,7 @@ export function AdminQuestionWorkspace({
   }
 
   function handleBusinessTimeRangeChange(boundary: "end" | "start", nextValue: string) {
+    markBrandingDraftDirty();
     const nextMinutes = Number.parseInt(nextValue, 10);
     const currentRange = parseBusinessTimeRange(businessWorkingHours);
 
@@ -2867,6 +2882,7 @@ export function AdminQuestionWorkspace({
   }
 
   async function handleClearBranding() {
+    isBrandingDraftDirtyRef.current = false;
     setBrandingInstituteName("");
     setBrandingImageDataUrl(null);
     setBusinessAppointmentsPerSlot("");
@@ -2885,11 +2901,7 @@ export function AdminQuestionWorkspace({
       );
 
       setWorkspaceBranding(payload.branding);
-      setBrandingInstituteName(payload.branding?.instituteName ?? "");
-      setBrandingImageDataUrl(payload.branding?.imageDataUrl ?? null);
-      setBusinessAppointmentsPerSlot(payload.branding?.appointmentsPerSlot ? String(payload.branding.appointmentsPerSlot) : "");
-      setBusinessWorkingDays(payload.branding?.workingDays ?? "");
-      setBusinessWorkingHours(payload.branding?.workingHours ?? "");
+      syncBrandingDraft(payload.branding);
       setBrandingFeedback("Business details cleared.");
     } catch (error) {
       setBrandingFeedback(error instanceof Error ? error.message : "Unable to clear business details.");
@@ -3685,7 +3697,7 @@ export function AdminQuestionWorkspace({
 
   return (
     <div className="workspace-stack">
-      {currentActorRole === "user" ? (
+      {currentActorRole === "user" || isSuperAdmin ? (
         <BrowserPushPrompt publicKey={process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY ?? null} />
       ) : null}
 
@@ -3743,15 +3755,13 @@ export function AdminQuestionWorkspace({
                       User details
                     </button>
                   ) : null}
-                  {!isSuperAdmin ? (
-                    <button
-                      className="workspace-overflow-action"
-                      type="button"
-                      onClick={() => setToolbarMenuView("branding")}
-                    >
-                      Business
-                    </button>
-                  ) : null}
+                  <button
+                    className="workspace-overflow-action"
+                    type="button"
+                    onClick={() => setToolbarMenuView("branding")}
+                  >
+                    Business
+                  </button>
                   <p className="eyebrow">Groups</p>
                   {groupMenuItems.map((item) => renderOverflowSectionItem(item.label, item.section))}
                 </div>
@@ -3810,7 +3820,10 @@ export function AdminQuestionWorkspace({
                         id="branding-institute-name"
                         placeholder="Enter business name"
                         value={brandingInstituteName}
-                        onChange={(event) => setBrandingInstituteName(event.target.value)}
+                        onChange={(event) => {
+                          markBrandingDraftDirty();
+                          setBrandingInstituteName(event.target.value);
+                        }}
                       />
                     </div>
                     <div className="field business-field-card">
@@ -3850,6 +3863,11 @@ export function AdminQuestionWorkspace({
                       >
                         <div className="business-range-track" aria-hidden="true" />
                         <div className="business-range-fill" aria-hidden="true" />
+                        <div className="business-range-ticks" aria-hidden="true">
+                          {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, tickIndex) => (
+                            <span key={tickIndex} className={tickIndex % 4 === 0 ? "is-major" : undefined} />
+                          ))}
+                        </div>
                         <label className="business-range-handle business-range-handle-start">
                           <span className="sr-only">Open time</span>
                           <input
@@ -3878,6 +3896,11 @@ export function AdminQuestionWorkspace({
                           <span>Open</span>
                           <span>Close</span>
                         </div>
+                        <div className="business-range-scale" aria-hidden="true">
+                          {[BUSINESS_DAY_START_MINUTES, 10 * 60, 14 * 60, 18 * 60, BUSINESS_DAY_END_MINUTES].map((minutes) => (
+                            <span key={minutes}>{formatBusinessTime(minutes).replace(":00", "")}</span>
+                          ))}
+                        </div>
                       </div>
                     </div>
                     <div className="field business-field-card">
@@ -3888,7 +3911,10 @@ export function AdminQuestionWorkspace({
                         placeholder="1"
                         type="number"
                         value={businessAppointmentsPerSlot}
-                        onChange={(event) => setBusinessAppointmentsPerSlot(event.target.value)}
+                        onChange={(event) => {
+                          markBrandingDraftDirty();
+                          setBusinessAppointmentsPerSlot(event.target.value);
+                        }}
                       />
                     </div>
                     <div className="field business-field-card">
@@ -3998,8 +4024,7 @@ export function AdminQuestionWorkspace({
         <aside className="admin-menu panel workspace-card">
           <div className="section-head compact-head">
             <div>
-              <p className="eyebrow">Workspace menu</p>
-              <h2 className="section-title">Admin navigation</h2>
+              <h2 className="section-title">Menu</h2>
             </div>
           </div>
           <div className="admin-menu-stack">
@@ -4007,7 +4032,7 @@ export function AdminQuestionWorkspace({
               { label: "Add Questions", section: "question-bank" },
               { label: "Schedule", section: "schedule" },
             ])}
-            {renderMenuItem("R...", "reports-coming-soon")}
+            {renderMenuItem("Reports", "reports-coming-soon")}
             {renderMenuItem("Apportion", "apportion")}
             {renderMenuGroup("Poll", "poll", [
               { label: "Add Questions", section: "poll-questions" },

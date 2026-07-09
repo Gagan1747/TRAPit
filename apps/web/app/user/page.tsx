@@ -30,9 +30,10 @@ export default async function UserPage({
           <div>
             <h1 className="hero-title">
               <a className="dashboard-title-link" href="/user?home=both">
-                {displayName} TRAPit dashboard
+                Welcome, {displayName}!
               </a>
             </h1>
+            <p className="hero-kicker">TRAPit workspace</p>
             <p className="hero-text">
               {authConfigured
                 ? `Signed in with ${formatPhoneNumberForDisplay(sessionIdentifier ?? "user", { showFullPhoneNumber: isSuperAdmin })}${categoryLabel ? ` as ${categoryLabel}` : ""}`
