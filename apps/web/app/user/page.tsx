@@ -22,6 +22,8 @@ export default async function UserPage({
   const isSuperAdmin = isSuperAdminIdentifier(session.phoneNumber ?? sessionIdentifier);
   const previousSignInAt = authConfigured ? await getPreviousWebSignIn(session) : null;
   const openTestsView = searchParams?.view === "tests";
+  const openApportionView = searchParams?.tab === "apportion";
+  const showWorkspace = !openTestsView && (session.role === "user" || (isSuperAdmin && openApportionView));
 
   return (
     <main className="page-shell">
@@ -45,12 +47,12 @@ export default async function UserPage({
           </div>
           {authConfigured ? <SignOutButton /> : null}
         </div>
-        {session.role === "user" && !openTestsView ? (
+        {showWorkspace ? (
           <AdminQuestionWorkspace
-            currentActorRole="user"
+            currentActorRole={session.role === "admin" ? "admin" : "user"}
             currentAdminIdentifier={sessionIdentifier}
             currentUserCategory={session.userCategory}
-            initialOpenSection={searchParams?.tab === "apportion" ? "apportion" : undefined}
+            initialOpenSection={openApportionView ? "apportion" : undefined}
             isSuperAdmin={isSuperAdmin}
             previousSignInAt={previousSignInAt}
           />

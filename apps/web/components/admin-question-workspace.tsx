@@ -4183,12 +4183,13 @@ export function AdminQuestionWorkspace({
                     <div className="notification-panel-list">
                       {requesterApportionAppointments.map((appointment) => (
                         <div className="notification-panel-item" key={appointment.id}>
-                          <div>
-                            <strong>{appointment.requesterName}</strong>
-                            <p className="muted-text">
-                              {formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier)} - {formatShortDateTime(appointment.startsAt)}
+                          <div className="apportion-appointment-summary">
+                            <p className="apportion-appointment-line">
+                              <strong>{appointment.requesterName}</strong>
+                              <span>{formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier)}</span>
+                              <span>{formatShortDateTime(appointment.startsAt)}</span>
                             </p>
-                            <p className="muted-text">Notes: {appointment.notes ?? "None"}</p>
+                            <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes ?? "None"}</p>
                           </div>
                         </div>
                       ))}
@@ -4207,12 +4208,13 @@ export function AdminQuestionWorkspace({
                     <div className="notification-panel-list">
                       {ownerApportionAppointments.map((appointment) => (
                         <div className="notification-panel-item" key={appointment.id}>
-                          <div>
-                            <strong>{appointment.requesterName}</strong>
-                            <p className="muted-text">
-                              {formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier)} - {formatShortDateTime(appointment.startsAt)}
+                          <div className="apportion-appointment-summary">
+                            <p className="apportion-appointment-line">
+                              <strong>{appointment.requesterName}</strong>
+                              <span>{formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier)}</span>
+                              <span>{formatShortDateTime(appointment.startsAt)}</span>
                             </p>
-                            <p className="muted-text">Notes: {appointment.notes ?? "None"}</p>
+                            <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes ?? "None"}</p>
                           </div>
                         </div>
                       ))}

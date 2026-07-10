@@ -1109,6 +1109,40 @@ main {
   font-weight: 700;
 }
 
+.apportion-appointment-summary {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.apportion-appointment-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: baseline;
+  margin: 0;
+  color: var(--muted);
+}
+
+.apportion-appointment-line strong {
+  color: var(--ink);
+}
+
+.apportion-appointment-line span:not(:last-child)::after {
+  content: "";
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin-left: 12px;
+  border-radius: 999px;
+  background: rgba(28, 20, 15, 0.32);
+  vertical-align: middle;
+}
+
+.apportion-appointment-notes {
+  margin: 0;
+}
+
 @media (max-width: 900px) {
   .apportion-booking-grid {
     grid-template-columns: 1fr;
