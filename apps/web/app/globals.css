@@ -946,14 +946,21 @@ main {
   line-height: 1;
 }
 
+.apportion-booking-title-block {
+  width: 100%;
+  text-align: center;
+}
+
 .apportion-business-logo {
   display: block;
   width: 112px;
   height: 112px;
   flex: 0 0 112px;
   border-radius: 24px;
-  object-fit: contain;
-  background: rgba(255, 255, 255, 0.78);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  background-color: rgba(255, 255, 255, 0.78);
   border: 1px solid rgba(81, 55, 133, 0.14);
   padding: 10px;
 }
@@ -982,6 +989,10 @@ main {
   font-weight: 900;
   text-align: center;
   text-transform: uppercase;
+}
+
+.apportion-calendar-blank {
+  min-height: 82px;
 }
 
 .apportion-calendar-day {
@@ -1036,6 +1047,10 @@ main {
 .apportion-calendar-day small {
   font-size: 0.72rem;
   font-weight: 800;
+}
+
+.apportion-working-hours {
+  margin: -2px 0 8px;
 }
 
 .apportion-calendar-note {

@@ -19,6 +19,10 @@ type BookingPayload = {
   slotCounts: Array<{ count: number; startsAt: string }>;
 };
 
+type CalendarCell =
+  | { date: Date; key: string; type: "date" }
+  | { key: string; type: "blank" };
+
 async function readJson<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as T & { error?: string };
 
@@ -109,6 +113,63 @@ function createSlotIso(dateKey: string, minutes: number) {
   date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
 
   return date.toISOString();
+}
+
+function createCalendarCells(startDate: Date, endDate: Date): CalendarCell[] {
+  const cells: CalendarCell[] = [];
+  const cursor = new Date(startDate);
+  cursor.setHours(0, 0, 0, 0);
+  const lastDate = new Date(endDate);
+  lastDate.setHours(0, 0, 0, 0);
+  let currentRowMonth: number | null = null;
+  let cellsInRow = 0;
+
+  while (cursor <= lastDate) {
+    const cursorMonth = cursor.getMonth();
+
+    if (cellsInRow === 0) {
+      currentRowMonth = cursorMonth;
+
+      for (let index = 0; index < cursor.getDay(); index += 1) {
+        cells.push({ key: `blank-${createDateKey(cursor)}-${index}`, type: "blank" });
+        cellsInRow += 1;
+      }
+    }
+
+    if (currentRowMonth !== cursorMonth) {
+      while (cellsInRow < 7) {
+        cells.push({ key: `blank-month-end-${createDateKey(cursor)}-${cellsInRow}`, type: "blank" });
+        cellsInRow += 1;
+      }
+
+      cellsInRow = 0;
+      currentRowMonth = cursorMonth;
+
+      for (let index = 0; index < cursor.getDay(); index += 1) {
+        cells.push({ key: `blank-month-start-${createDateKey(cursor)}-${index}`, type: "blank" });
+        cellsInRow += 1;
+      }
+    }
+
+    cells.push({ date: new Date(cursor), key: createDateKey(cursor), type: "date" });
+    cellsInRow += 1;
+
+    if (cellsInRow === 7) {
+      cellsInRow = 0;
+      currentRowMonth = null;
+    }
+
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  if (cellsInRow > 0) {
+    while (cellsInRow < 7) {
+      cells.push({ key: `blank-final-${cellsInRow}`, type: "blank" });
+      cellsInRow += 1;
+    }
+  }
+
+  return cells;
 }
 
 type PublicApportionBookingWorkspaceProps = {
@@ -218,11 +279,8 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   const slotCountsByIso = Object.fromEntries(payload.slotCounts.map((slot) => [slot.startsAt, slot.count]));
   const maxBookableDate = new Date(today);
   maxBookableDate.setDate(today.getDate() + (payload.business.advanceBookingWeeks * 7) - 1);
-  const calendarDays = Array.from({ length: 28 }, (_, offset) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() + offset);
-    return date;
-  });
+  const calendarCells = createCalendarCells(today, maxBookableDate);
+  const workingHoursText = [payload.business.workingHours, payload.business.workingHoursSecondWindow].filter(Boolean).join(" and ");
   const availableSlots = effectiveWorkingRanges.flatMap((range) => Array.from(
     { length: Math.max(0, Math.floor((range.endMinutes - range.startMinutes - slotDurationMinutes) / slotStepMinutes) + 1) },
     (_, index) => range.startMinutes + (index * slotStepMinutes),
@@ -244,13 +302,11 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     <div className="workspace-card-stack">
       <section className="workspace-card apportion-booking-hero">
         {payload.business.imageDataUrl ? (
-          <img alt="Business logo" className="apportion-business-logo" src={payload.business.imageDataUrl} />
+          <div aria-label="Business logo" className="apportion-business-logo" role="img" style={{ backgroundImage: `url(${payload.business.imageDataUrl})` }} />
         ) : null}
-        <div>
+        <div className="apportion-booking-title-block">
           <p className="eyebrow">Apportion booking</p>
           <h1>{payload.business.name || "Business appointment"}</h1>
-          <p className="muted-text">Working hours: {payload.business.workingHours || "Not specified"}</p>
-          {payload.business.workingHoursSecondWindow ? <p className="muted-text">Second window: {payload.business.workingHoursSecondWindow}</p> : null}
         </div>
       </section>
 
@@ -261,12 +317,18 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
             {WEEKDAY_SHORT_NAMES.map((dayName) => (
               <span className="apportion-calendar-weekday" key={dayName}>{dayName}</span>
             ))}
-            {calendarDays.map((date) => {
+            {calendarCells.map((cell) => {
+              if (cell.type === "blank") {
+                return <span aria-hidden="true" className="apportion-calendar-blank" key={cell.key} />;
+              }
+
+              const date = cell.date;
               const dateKey = createDateKey(date);
               const isWorkingDay = workingDays.has(WEEKDAY_NAMES[date.getDay()]);
+              const isPastDate = date < today;
               const isWithinAdvanceBooking = date <= maxBookableDate;
               const isSelected = dateKey === selectedDateKey;
-              const isAvailableDate = isWorkingDay && isWithinAdvanceBooking;
+              const isAvailableDate = isWorkingDay && !isPastDate && isWithinAdvanceBooking;
               const isAlternateMonth = date.getMonth() !== today.getMonth();
 
               return (
@@ -280,7 +342,6 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                     setSelectedSlotIso(null);
                   }}
                 >
-                  <span>{WEEKDAY_SHORT_NAMES[date.getDay()]}</span>
                   <strong>{date.getDate()}</strong>
                   {isSameDay(date, new Date()) ? <small>Today</small> : null}
                 </button>
@@ -291,6 +352,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
           <div className="form-stack apportion-booking-form">
             <div className="field">
               <label htmlFor="apportion-appointment-time">Appointment time</label>
+              <p className="muted-text apportion-working-hours">Working hours: {workingHoursText || "Not specified"}</p>
               <select
                 className="select-field"
                 id="apportion-appointment-time"
@@ -313,7 +375,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
               <label htmlFor="apportion-notes">Notes</label>
               <textarea
                 id="apportion-notes"
-                placeholder="Tell us a bit about the student's current math level or goals!"
+                placeholder="Share a brief about appointment purpose"
                 rows={3}
                 value={notes}
                 onChange={(event) => setNotes(event.target.value)}
