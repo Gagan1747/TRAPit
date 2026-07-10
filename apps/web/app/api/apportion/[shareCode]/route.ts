@@ -54,13 +54,27 @@ function parseWorkingDays(value: string) {
   return new Set(WEEKDAY_NAMES.filter((day) => normalizedValue.includes(day.toLowerCase()) || normalizedValue.includes(day.slice(0, 3).toLowerCase())));
 }
 
-function validateRequestedSlot(branding: WorkspaceBranding, startsAt: Date) {
+function createDateFromKey(value: string) {
+  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+
+  return new Date(year, month - 1, day);
+}
+
+function validateRequestedSlot(branding: WorkspaceBranding, startsAt: Date, slotDateKey?: string, slotMinutes?: number) {
   const workingDays = parseWorkingDays(branding.workingDays);
   const workingRanges = [branding.workingHours, branding.workingHoursSecondWindow]
     .map((range) => parseTimeRange(range))
     .filter((range): range is { endMinutes: number; startMinutes: number } => Boolean(range));
-  const dayName = WEEKDAY_NAMES[startsAt.getDay()];
-  const requestedMinutes = startsAt.getHours() * 60 + startsAt.getMinutes();
+  const requestedLocalDate = slotDateKey ? createDateFromKey(slotDateKey) : null;
+  const validationDate = requestedLocalDate ?? startsAt;
+  const dayName = WEEKDAY_NAMES[validationDate.getDay()];
+  const requestedMinutes = typeof slotMinutes === "number" && Number.isFinite(slotMinutes)
+    ? slotMinutes
+    : startsAt.getHours() * 60 + startsAt.getMinutes();
   const slotDurationMinutes = branding.slotDurationMinutes ?? 30;
   const slotStepMinutes = slotDurationMinutes === 60 ? 30 : 15;
   const advanceBookingWeeks = branding.advanceBookingWeeks ?? 4;
@@ -74,7 +88,11 @@ function validateRequestedSlot(branding: WorkspaceBranding, startsAt: Date) {
     throw new Error("Choose a working day for this business.");
   }
 
-  if (startsAt.getTime() > maxDate.getTime()) {
+  if (validationDate.getTime() < today.getTime()) {
+    throw new Error("Choose a future appointment date.");
+  }
+
+  if (validationDate.getTime() > maxDate.getTime()) {
     throw new Error("Choose a date within the allowed advance booking period.");
   }
 
@@ -144,7 +162,7 @@ export async function POST(
     return NextResponse.json({ error: "Business booking page not found." }, { status: 404 });
   }
 
-  const body = (await request.json()) as { notes?: string | null; startsAt?: string };
+  const body = (await request.json()) as { notes?: string | null; slotDateKey?: string; slotMinutes?: number; startsAt?: string };
   let appointment;
 
   try {
@@ -154,7 +172,7 @@ export async function POST(
       throw new Error("Choose a valid appointment date and time.");
     }
 
-    validateRequestedSlot(business.branding, requestedStart);
+    validateRequestedSlot(business.branding, requestedStart, body.slotDateKey, body.slotMinutes);
 
     appointment = await createApportionAppointment({
       appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,

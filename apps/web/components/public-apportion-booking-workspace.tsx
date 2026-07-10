@@ -115,6 +115,20 @@ function createSlotIso(dateKey: string, minutes: number) {
   return date.toISOString();
 }
 
+function normalizeImageDataUrl(value: string) {
+  if (!value.startsWith("data:image/svg+xml,")) {
+    return value;
+  }
+
+  const [, svgText = ""] = value.split(",");
+
+  try {
+    return `data:image/svg+xml,${encodeURIComponent(decodeURIComponent(svgText))}`;
+  } catch {
+    return `data:image/svg+xml,${encodeURIComponent(svgText)}`;
+  }
+}
+
 function createCalendarCells(startDate: Date, endDate: Date): CalendarCell[] {
   const cells: CalendarCell[] = [];
   const cursor = new Date(startDate);
@@ -230,7 +244,9 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   }, [payload]);
 
   async function handleBookAppointment() {
-    if (!selectedSlotIso) {
+    const selectedSlot = availableSlots.find((slot) => slot.startsAt === selectedSlotIso) ?? null;
+
+    if (!selectedSlot) {
       setFeedback("Choose an appointment date and time.");
       return;
     }
@@ -241,8 +257,10 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       await readJson(
         await fetch(`/api/apportion/${encodeURIComponent(shareCode)}`, {
           body: JSON.stringify({
+            slotDateKey: selectedDateKey,
+            slotMinutes: selectedSlot.minutes,
             notes,
-            startsAt: selectedSlotIso,
+            startsAt: selectedSlot.startsAt,
           }),
           headers: { "Content-Type": "application/json" },
           method: "POST",
@@ -293,16 +311,18 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     return {
       isAvailable: !isPast && !isFull,
       label: formatTime(minutes),
+      minutes,
       startsAt,
     };
   });
   const selectedSlot = availableSlots.find((slot) => slot.startsAt === selectedSlotIso) ?? null;
+  const logoDataUrl = payload.business.imageDataUrl ? normalizeImageDataUrl(payload.business.imageDataUrl) : null;
 
   return (
     <div className="workspace-card-stack">
       <section className="workspace-card apportion-booking-hero">
-        {payload.business.imageDataUrl ? (
-          <div aria-label="Business logo" className="apportion-business-logo" role="img" style={{ backgroundImage: `url(${payload.business.imageDataUrl})` }} />
+        {logoDataUrl ? (
+          <img alt="Business logo" className="apportion-business-logo" src={logoDataUrl} />
         ) : null}
         <div className="apportion-booking-title-block">
           <p className="eyebrow">Apportion booking</p>
