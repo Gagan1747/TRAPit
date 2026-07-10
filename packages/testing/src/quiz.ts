@@ -62,12 +62,14 @@ export type PersistentPollQuestion = PollQuestionDraft & {
 export type PollParticipantType = "open" | "registered";
 
 export type WorkspaceBranding = {
+  advanceBookingWeeks: number | null;
   appointmentShareCode: string | null;
   appointmentsPerSlot: number | null;
   breakHours: string;
   imageDataUrl: string | null;
   instituteName: string;
   slotDurationMinutes: number | null;
+  workingHoursSecondWindow: string;
   workingDays: string;
   workingHours: string;
 };
@@ -543,10 +545,14 @@ export function normalizeWorkspaceBranding(
 
   const instituteName = branding.instituteName?.trim() ?? "";
   const imageDataUrl = branding.imageDataUrl?.trim() ?? null;
+  const advanceBookingWeeks = [1, 2, 3, 4].includes(branding.advanceBookingWeeks ?? 0)
+    ? branding.advanceBookingWeeks
+    : null;
   const appointmentShareCode = branding.appointmentShareCode?.trim() || null;
   const breakHours = branding.breakHours?.trim() ?? "";
   const workingDays = branding.workingDays?.trim() ?? "";
   const workingHours = branding.workingHours?.trim() ?? "";
+  const workingHoursSecondWindow = branding.workingHoursSecondWindow?.trim() ?? "";
   const appointmentsPerSlot = Number.isFinite(branding.appointmentsPerSlot) && branding.appointmentsPerSlot && branding.appointmentsPerSlot > 0
     ? Math.floor(branding.appointmentsPerSlot)
     : null;
@@ -554,17 +560,19 @@ export function normalizeWorkspaceBranding(
     ? branding.slotDurationMinutes
     : null;
 
-  if (!instituteName && !imageDataUrl && !breakHours && !workingDays && !workingHours && appointmentsPerSlot === null && slotDurationMinutes === null) {
+  if (!instituteName && !imageDataUrl && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null) {
     return null;
   }
 
   return {
+    advanceBookingWeeks,
     appointmentShareCode,
     appointmentsPerSlot,
     breakHours,
     imageDataUrl,
     instituteName,
     slotDurationMinutes,
+    workingHoursSecondWindow,
     workingDays,
     workingHours,
   };

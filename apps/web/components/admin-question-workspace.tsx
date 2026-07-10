@@ -30,7 +30,7 @@ import {
   type TestResult,
   type WorkspaceBranding,
 } from "@trapit/testing";
-import { type CSSProperties, type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
@@ -531,12 +531,14 @@ type UpgradePrompt = {
 
 function createEmptyBranding(): WorkspaceBranding {
   return {
+    advanceBookingWeeks: null,
     appointmentShareCode: null,
     appointmentsPerSlot: null,
     breakHours: "",
     imageDataUrl: null,
     instituteName: "",
     slotDurationMinutes: null,
+    workingHoursSecondWindow: "",
     workingDays: "",
     workingHours: "",
   };
@@ -545,10 +547,14 @@ function createEmptyBranding(): WorkspaceBranding {
 function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBranding | null {
   const instituteName = branding?.instituteName.trim() ?? "";
   const imageDataUrl = branding?.imageDataUrl?.trim() ?? null;
+  const advanceBookingWeeks = [1, 2, 3, 4].includes(branding?.advanceBookingWeeks ?? 0)
+    ? branding?.advanceBookingWeeks ?? null
+    : null;
   const appointmentShareCode = branding?.appointmentShareCode?.trim() || null;
   const breakHours = branding?.breakHours.trim() ?? "";
   const workingDays = branding?.workingDays.trim() ?? "";
   const workingHours = branding?.workingHours.trim() ?? "";
+  const workingHoursSecondWindow = branding?.workingHoursSecondWindow.trim() ?? "";
   const appointmentsPerSlot = Number.isFinite(branding?.appointmentsPerSlot) && branding?.appointmentsPerSlot && branding.appointmentsPerSlot > 0
     ? Math.floor(branding.appointmentsPerSlot)
     : null;
@@ -556,17 +562,19 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
     ? branding?.slotDurationMinutes ?? null
     : null;
 
-  if (!instituteName && !imageDataUrl && !breakHours && !workingDays && !workingHours && appointmentsPerSlot === null && slotDurationMinutes === null) {
+  if (!instituteName && !imageDataUrl && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null) {
     return null;
   }
 
   return {
+    advanceBookingWeeks,
     appointmentShareCode,
     appointmentsPerSlot,
     breakHours,
     imageDataUrl,
     instituteName,
     slotDurationMinutes,
+    workingHoursSecondWindow,
     workingDays,
     workingHours,
   };
@@ -1093,12 +1101,13 @@ export function AdminQuestionWorkspace({
   const [brandingImageDataUrl, setBrandingImageDataUrl] = useState<string | null>(null);
   const [brandingInstituteName, setBrandingInstituteName] = useState("");
   const [isBrandingDragActive, setIsBrandingDragActive] = useState(false);
+  const [businessAdvanceBookingWeeks, setBusinessAdvanceBookingWeeks] = useState("4");
   const [businessAppointmentQrCode, setBusinessAppointmentQrCode] = useState<string | null>(null);
   const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("");
-  const [businessBreakHours, setBusinessBreakHours] = useState("");
   const [businessSlotDurationMinutes, setBusinessSlotDurationMinutes] = useState("");
   const [businessWorkingDays, setBusinessWorkingDays] = useState("");
   const [businessWorkingHours, setBusinessWorkingHours] = useState("");
+  const [businessWorkingHoursSecondWindow, setBusinessWorkingHoursSecondWindow] = useState("");
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const [importPreview, setImportPreview] = useState<BulkImportPreview | null>(null);
   const [importText, setImportText] = useState("");
@@ -1202,11 +1211,12 @@ export function AdminQuestionWorkspace({
   function syncBrandingDraft(branding: WorkspaceBranding | null) {
     setBrandingInstituteName(branding?.instituteName ?? "");
     setBrandingImageDataUrl(branding?.imageDataUrl ?? null);
+    setBusinessAdvanceBookingWeeks(branding?.advanceBookingWeeks ? String(branding.advanceBookingWeeks) : "4");
     setBusinessAppointmentsPerSlot(branding?.appointmentsPerSlot ? String(branding.appointmentsPerSlot) : "");
-    setBusinessBreakHours(branding?.breakHours ?? "");
     setBusinessSlotDurationMinutes(branding?.slotDurationMinutes ? String(branding.slotDurationMinutes) : "");
     setBusinessWorkingDays(branding?.workingDays ?? "");
     setBusinessWorkingHours(branding?.workingHours ?? "");
+    setBusinessWorkingHoursSecondWindow(branding?.workingHoursSecondWindow ?? "");
   }
 
   function markBrandingDraftDirty() {
@@ -2820,6 +2830,7 @@ export function AdminQuestionWorkspace({
 
   async function handleSaveBranding() {
     const appointmentsPerSlot = businessAppointmentsPerSlot.trim() ? Number(businessAppointmentsPerSlot) : null;
+    const advanceBookingWeeks = businessAdvanceBookingWeeks.trim() ? Number(businessAdvanceBookingWeeks) : null;
     const slotDurationMinutes = businessSlotDurationMinutes.trim() ? Number(businessSlotDurationMinutes) : null;
 
     if (appointmentsPerSlot !== null && (!Number.isFinite(appointmentsPerSlot) || appointmentsPerSlot < 1)) {
@@ -2832,13 +2843,20 @@ export function AdminQuestionWorkspace({
       return;
     }
 
+    if (advanceBookingWeeks !== null && ![1, 2, 3, 4].includes(advanceBookingWeeks)) {
+      setBrandingFeedback("Advance booking must be between 1 and 4 weeks.");
+      return;
+    }
+
     const nextBranding = normalizeBrandingInput({
+      advanceBookingWeeks,
       appointmentShareCode: workspaceBranding?.appointmentShareCode ?? null,
       appointmentsPerSlot,
-      breakHours: businessBreakHours,
+      breakHours: "",
       imageDataUrl: brandingImageDataUrl,
       instituteName: brandingInstituteName,
       slotDurationMinutes,
+      workingHoursSecondWindow: businessWorkingHoursSecondWindow,
       workingDays: businessWorkingDays,
       workingHours: businessWorkingHours,
     });
@@ -2873,12 +2891,14 @@ export function AdminQuestionWorkspace({
     setBusinessWorkingDays(formatBusinessDays(nextSelectedDays));
   }
 
-  function handleBusinessTimeRangeChange(boundary: "end" | "start", nextValue: string) {
+  function handleBusinessTimeDropdownChange(windowName: "first" | "second", boundary: "end" | "start", value: string) {
     markBrandingDraftDirty();
-    const nextMinutes = Number.parseInt(nextValue, 10);
-    const currentRange = parseBusinessTimeRange(businessWorkingHours);
+    const currentRange = windowName === "first"
+      ? parseBusinessTimeRange(businessWorkingHours)
+      : parseBusinessTimeRange(businessWorkingHoursSecondWindow || "2:00 PM - 6:00 PM");
+    const nextMinutes = parseBusinessTime(value);
 
-    if (!Number.isFinite(nextMinutes)) {
+    if (nextMinutes === null) {
       return;
     }
 
@@ -2892,29 +2912,14 @@ export function AdminQuestionWorkspace({
           startMinutes: currentRange.startMinutes,
         };
 
-    setBusinessWorkingHours(formatBusinessTimeRange(nextRange.startMinutes, nextRange.endMinutes));
-  }
+    const nextValue = formatBusinessTimeRange(nextRange.startMinutes, nextRange.endMinutes);
 
-  function handleBusinessBreakRangeChange(boundary: "end" | "start", nextValue: string) {
-    markBrandingDraftDirty();
-    const nextMinutes = Number.parseInt(nextValue, 10);
-    const currentRange = parseBusinessTimeRange(businessBreakHours || "1:00 PM - 2:00 PM");
-
-    if (!Number.isFinite(nextMinutes)) {
+    if (windowName === "first") {
+      setBusinessWorkingHours(nextValue);
       return;
     }
 
-    const nextRange = boundary === "start"
-      ? {
-          endMinutes: Math.max(currentRange.endMinutes, nextMinutes + BUSINESS_TIME_STEP_MINUTES),
-          startMinutes: Math.min(nextMinutes, currentRange.endMinutes - BUSINESS_TIME_STEP_MINUTES),
-        }
-      : {
-          endMinutes: Math.max(nextMinutes, currentRange.startMinutes + BUSINESS_TIME_STEP_MINUTES),
-          startMinutes: currentRange.startMinutes,
-        };
-
-    setBusinessBreakHours(formatBusinessTimeRange(nextRange.startMinutes, nextRange.endMinutes));
+    setBusinessWorkingHoursSecondWindow(nextValue);
   }
 
   function handleBrandingDrop(event: DragEvent<HTMLDivElement>) {
@@ -2927,11 +2932,12 @@ export function AdminQuestionWorkspace({
     isBrandingDraftDirtyRef.current = false;
     setBrandingInstituteName("");
     setBrandingImageDataUrl(null);
+    setBusinessAdvanceBookingWeeks("4");
     setBusinessAppointmentsPerSlot("");
-    setBusinessBreakHours("");
     setBusinessSlotDurationMinutes("");
     setBusinessWorkingDays("");
     setBusinessWorkingHours("");
+    setBusinessWorkingHoursSecondWindow("");
 
     try {
       const payload = await readJson<BrandingResponse>(
@@ -3488,19 +3494,20 @@ export function AdminQuestionWorkspace({
   const pollToggleLiveCount = filteredMergedPolls.filter((poll) => poll.status === "live").length;
   const pollToggleUpcomingCount = filteredMergedPolls.filter((poll) => poll.status === "scheduled").length;
   const brandingPreview = normalizeBrandingInput({
+    advanceBookingWeeks: Number.parseInt(businessAdvanceBookingWeeks, 10),
     appointmentShareCode: workspaceBranding?.appointmentShareCode ?? null,
     appointmentsPerSlot: Number.parseInt(businessAppointmentsPerSlot, 10),
-    breakHours: businessBreakHours,
+    breakHours: "",
     imageDataUrl: brandingImageDataUrl,
     instituteName: brandingInstituteName,
     slotDurationMinutes: Number.parseInt(businessSlotDurationMinutes, 10),
+    workingHoursSecondWindow: businessWorkingHoursSecondWindow,
     workingDays: businessWorkingDays,
     workingHours: businessWorkingHours,
   });
   const selectedBusinessDayKeys = parseBusinessDays(businessWorkingDays);
-  const businessTimeRange = parseBusinessTimeRange(businessWorkingHours);
-  const businessRangeStartPercent = ((businessTimeRange.startMinutes - BUSINESS_DAY_START_MINUTES) / (BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES)) * 100;
-  const businessRangeEndPercent = ((businessTimeRange.endMinutes - BUSINESS_DAY_START_MINUTES) / (BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES)) * 100;
+  const businessTimeRange = parseBusinessTimeRange(businessWorkingHours || "10:00 AM - 1:00 PM");
+  const businessSecondTimeRange = parseBusinessTimeRange(businessWorkingHoursSecondWindow || "2:00 PM - 6:00 PM");
   const hasBusinessSetupDraft = Boolean(
     brandingInstituteName.trim() &&
     selectedBusinessDayKeys.length &&
@@ -3853,12 +3860,6 @@ export function AdminQuestionWorkspace({
                     <p className="eyebrow">Business</p>
                   </div>
                   <h2 className="section-title">Business details</h2>
-                  <div className="business-setup-steps" aria-label="Business setup progress">
-                    <span className="is-complete">Setup</span>
-                    <span className={selectedBusinessDayKeys.length ? "is-complete" : ""}>Days</span>
-                    <span className={brandingImageDataUrl ? "is-complete" : ""}>Logo</span>
-                    <span className={workspaceBranding?.appointmentShareCode ? "is-complete" : ""}>Confirm</span>
-                  </div>
                   <div className="form-stack business-details-form">
                     <div className="field business-field-card">
                       <label htmlFor="branding-institute-name">Business name</label>
@@ -3895,113 +3896,57 @@ export function AdminQuestionWorkspace({
                     </div>
                     <div className="field business-field-card">
                       <span className="field-label">Working hours</span>
-                      <div className="business-time-summary">
-                        <strong>{formatBusinessTime(businessTimeRange.startMinutes)}</strong>
-                        <span>{formatBusinessTimeRange(businessTimeRange.startMinutes, businessTimeRange.endMinutes)}</span>
-                        <strong>{formatBusinessTime(businessTimeRange.endMinutes)}</strong>
-                      </div>
-                      <div
-                        className="business-range-control"
-                        style={{
-                          "--business-range-end": `${businessRangeEndPercent}%`,
-                          "--business-range-start": `${businessRangeStartPercent}%`,
-                        } as CSSProperties}
-                        onPointerMove={(event) => {
-                          const bounds = event.currentTarget.getBoundingClientRect();
-                          const pointerPercent = ((event.clientX - bounds.left) / bounds.width) * 100;
-
-                          event.currentTarget.dataset.activeHandle = pointerPercent > (businessRangeStartPercent + businessRangeEndPercent) / 2 ? "end" : "start";
-                        }}
-                        onPointerLeave={(event) => {
-                          delete event.currentTarget.dataset.activeHandle;
-                        }}
-                      >
-                        <div className="business-range-track" aria-hidden="true" />
-                        <div className="business-range-fill" aria-hidden="true" />
-                        <div className="business-range-ticks" aria-hidden="true">
-                          {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, tickIndex) => (
-                            <span key={tickIndex} className={tickIndex % 4 === 0 ? "is-major" : undefined} />
+                      <div className="business-time-window-grid">
+                        <label htmlFor="business-window-one-start">Start 1</label>
+                        <select
+                          className="select-field"
+                          id="business-window-one-start"
+                          value={formatBusinessTime(businessTimeRange.startMinutes)}
+                          onChange={(event) => handleBusinessTimeDropdownChange("first", "start", event.target.value)}
+                        >
+                          {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
+                            <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
                           ))}
-                        </div>
-                        <label className="business-range-handle business-range-handle-start">
-                          <span className="sr-only">Open time</span>
-                          <input
-                            aria-label="Open time"
-                            max={BUSINESS_DAY_END_MINUTES - BUSINESS_TIME_STEP_MINUTES}
-                            min={BUSINESS_DAY_START_MINUTES}
-                            step={BUSINESS_TIME_STEP_MINUTES}
-                            type="range"
-                            value={businessTimeRange.startMinutes}
-                            onChange={(event) => handleBusinessTimeRangeChange("start", event.target.value)}
-                          />
-                        </label>
-                        <label className="business-range-handle business-range-handle-end">
-                          <span className="sr-only">Close time</span>
-                          <input
-                            aria-label="Close time"
-                            max={BUSINESS_DAY_END_MINUTES}
-                            min={BUSINESS_DAY_START_MINUTES + BUSINESS_TIME_STEP_MINUTES}
-                            step={BUSINESS_TIME_STEP_MINUTES}
-                            type="range"
-                            value={businessTimeRange.endMinutes}
-                            onChange={(event) => handleBusinessTimeRangeChange("end", event.target.value)}
-                          />
-                        </label>
-                        <div className="business-range-labels" aria-hidden="true">
-                          <span>Open</span>
-                          <span>Close</span>
-                        </div>
-                        <div className="business-range-scale" aria-hidden="true">
-                          {[BUSINESS_DAY_START_MINUTES, 10 * 60, 14 * 60, 18 * 60, BUSINESS_DAY_END_MINUTES].map((minutes) => (
-                            <span key={minutes}>{formatBusinessTime(minutes).replace(":00", "")}</span>
+                        </select>
+                        <label htmlFor="business-window-one-end">Close 1</label>
+                        <select
+                          className="select-field"
+                          id="business-window-one-end"
+                          value={formatBusinessTime(businessTimeRange.endMinutes)}
+                          onChange={(event) => handleBusinessTimeDropdownChange("first", "end", event.target.value)}
+                        >
+                          {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
+                            <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
                           ))}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="field business-field-card">
-                      <span className="field-label">Lunch / break hour</span>
-                      <div className="business-time-summary">
-                        <strong>{formatBusinessTime(parseBusinessTimeRange(businessBreakHours || "1:00 PM - 2:00 PM").startMinutes)}</strong>
-                        <span>{businessBreakHours || "No break saved"}</span>
-                        <strong>{formatBusinessTime(parseBusinessTimeRange(businessBreakHours || "1:00 PM - 2:00 PM").endMinutes)}</strong>
-                      </div>
-                      <div className="business-range-control">
-                        <div className="business-range-track" aria-hidden="true" />
-                        <label className="business-range-handle business-range-handle-start">
-                          <span className="sr-only">Break start time</span>
-                          <input
-                            aria-label="Break start time"
-                            max={BUSINESS_DAY_END_MINUTES - BUSINESS_TIME_STEP_MINUTES}
-                            min={BUSINESS_DAY_START_MINUTES}
-                            step={BUSINESS_TIME_STEP_MINUTES}
-                            type="range"
-                            value={parseBusinessTimeRange(businessBreakHours || "1:00 PM - 2:00 PM").startMinutes}
-                            onChange={(event) => handleBusinessBreakRangeChange("start", event.target.value)}
-                          />
-                        </label>
-                        <label className="business-range-handle business-range-handle-end">
-                          <span className="sr-only">Break end time</span>
-                          <input
-                            aria-label="Break end time"
-                            max={BUSINESS_DAY_END_MINUTES}
-                            min={BUSINESS_DAY_START_MINUTES + BUSINESS_TIME_STEP_MINUTES}
-                            step={BUSINESS_TIME_STEP_MINUTES}
-                            type="range"
-                            value={parseBusinessTimeRange(businessBreakHours || "1:00 PM - 2:00 PM").endMinutes}
-                            onChange={(event) => handleBusinessBreakRangeChange("end", event.target.value)}
-                          />
-                        </label>
-                        <div className="business-range-scale" aria-hidden="true">
-                          {[BUSINESS_DAY_START_MINUTES, 10 * 60, 14 * 60, 18 * 60, BUSINESS_DAY_END_MINUTES].map((minutes) => (
-                            <span key={minutes}>{formatBusinessTime(minutes).replace(":00", "")}</span>
+                        </select>
+                        <label htmlFor="business-window-two-start">Start 2</label>
+                        <select
+                          className="select-field"
+                          id="business-window-two-start"
+                          value={formatBusinessTime(businessSecondTimeRange.startMinutes)}
+                          onChange={(event) => handleBusinessTimeDropdownChange("second", "start", event.target.value)}
+                        >
+                          {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
+                            <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
                           ))}
-                        </div>
+                        </select>
+                        <label htmlFor="business-window-two-end">Close 2</label>
+                        <select
+                          className="select-field"
+                          id="business-window-two-end"
+                          value={formatBusinessTime(businessSecondTimeRange.endMinutes)}
+                          onChange={(event) => handleBusinessTimeDropdownChange("second", "end", event.target.value)}
+                        >
+                          {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
+                            <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
+                          ))}
+                        </select>
                       </div>
                       <button className="button-secondary small-button" type="button" onClick={() => {
                         markBrandingDraftDirty();
-                        setBusinessBreakHours("");
+                        setBusinessWorkingHoursSecondWindow("");
                       }}>
-                        No break
+                        Clear second window
                       </button>
                     </div>
                     <div className="field business-field-card">
@@ -4032,6 +3977,21 @@ export function AdminQuestionWorkspace({
                         <option value="30">30 mins</option>
                         <option value="45">45 mins</option>
                         <option value="60">60 mins</option>
+                      </select>
+                      <label htmlFor="business-advance-booking">Allowed advance booking</label>
+                      <select
+                        className="select-field"
+                        id="business-advance-booking"
+                        value={businessAdvanceBookingWeeks}
+                        onChange={(event) => {
+                          markBrandingDraftDirty();
+                          setBusinessAdvanceBookingWeeks(event.target.value);
+                        }}
+                      >
+                        <option value="1">1 week</option>
+                        <option value="2">2 weeks</option>
+                        <option value="3">3 weeks</option>
+                        <option value="4">4 weeks</option>
                       </select>
                     </div>
                     <div className="field business-field-card">

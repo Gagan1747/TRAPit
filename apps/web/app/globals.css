@@ -617,55 +617,6 @@ main {
   gap: 14px;
 }
 
-.business-setup-steps {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-  color: var(--muted);
-  font-size: 0.82rem;
-  font-weight: 700;
-}
-
-.business-setup-steps span {
-  position: relative;
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-}
-
-.business-setup-steps span::before {
-  content: "";
-  width: 16px;
-  height: 16px;
-  border-radius: 999px;
-  background: rgba(28, 20, 15, 0.12);
-  box-shadow: inset 0 0 0 1px rgba(28, 20, 15, 0.08);
-}
-
-.business-setup-steps span::after {
-  content: "";
-  position: absolute;
-  top: 7px;
-  left: calc(-50% + 8px);
-  width: calc(100% - 16px);
-  height: 3px;
-  background: rgba(28, 20, 15, 0.12);
-}
-
-.business-setup-steps span:first-child::after {
-  display: none;
-}
-
-.business-setup-steps span.is-complete {
-  color: var(--accent-deep);
-}
-
-.business-setup-steps span.is-complete::before,
-.business-setup-steps span.is-complete::after {
-  background: var(--accent-deep);
-  box-shadow: 0 0 18px rgba(81, 55, 133, 0.28);
-}
-
 .business-field-card {
   padding: 14px;
   border: 1px solid rgba(81, 55, 133, 0.12);
@@ -727,6 +678,19 @@ main {
 .business-time-summary span {
   color: var(--muted);
   text-align: center;
+}
+
+.business-time-window-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.business-time-window-grid label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
 }
 
 .business-range-control {
@@ -982,15 +946,42 @@ main {
   line-height: 1;
 }
 
+.apportion-business-logo {
+  display: block;
+  width: 112px;
+  height: 112px;
+  flex: 0 0 112px;
+  border-radius: 24px;
+  object-fit: contain;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(81, 55, 133, 0.14);
+  padding: 10px;
+}
+
 .apportion-booking-panel {
   display: grid;
   gap: 18px;
 }
 
+.apportion-booking-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr);
+  gap: 22px;
+  align-items: start;
+}
+
 .apportion-calendar {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 10px;
+}
+
+.apportion-calendar-weekday {
+  color: var(--accent-deep);
+  font-size: 0.78rem;
+  font-weight: 900;
+  text-align: center;
+  text-transform: uppercase;
 }
 
 .apportion-calendar-day {
@@ -998,7 +989,8 @@ main {
   justify-items: center;
   gap: 4px;
   min-height: 82px;
-  padding: 10px 8px;
+  min-width: 0;
+  padding: 10px 6px;
   border: 1px solid rgba(28, 20, 15, 0.12);
   border-radius: 18px;
   background: rgba(28, 20, 15, 0.05);
@@ -1011,6 +1003,14 @@ main {
   background: rgba(127, 99, 201, 0.1);
   color: var(--ink);
   cursor: pointer;
+}
+
+.apportion-calendar-day.is-next-month {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.apportion-calendar-day.is-next-month.is-working {
+  background: rgba(59, 130, 246, 0.16);
 }
 
 .apportion-calendar-day.is-selected {
@@ -1083,6 +1083,12 @@ main {
 .apportion-slot-chip span {
   font-size: 0.72rem;
   font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .apportion-booking-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .business-share-copy strong {

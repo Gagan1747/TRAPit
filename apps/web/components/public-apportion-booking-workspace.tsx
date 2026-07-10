@@ -7,13 +7,14 @@ const WEEKDAY_SHORT_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 type BookingPayload = {
   business: {
+    advanceBookingWeeks: number;
     appointmentsPerSlot: number;
-    breakHours: string;
     imageDataUrl: string | null;
     name: string;
     slotDurationMinutes: number | null;
     workingDays: string;
     workingHours: string;
+    workingHoursSecondWindow: string;
   };
   slotCounts: Array<{ count: number; startsAt: string }>;
 };
@@ -155,7 +156,12 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       const date = new Date(today);
       date.setDate(today.getDate() + offset);
       return date;
-    }).find((date) => workingDays.has(WEEKDAY_NAMES[date.getDay()]));
+    }).find((date) => {
+      const maxDate = new Date(today);
+      maxDate.setDate(today.getDate() + (payload.business.advanceBookingWeeks * 7) - 1);
+
+      return workingDays.has(WEEKDAY_NAMES[date.getDay()]) && date <= maxDate;
+    });
 
     if (nextWorkingDate) {
       setSelectedDateKey(createDateKey(nextWorkingDate));
@@ -203,23 +209,24 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const workingDays = parseWorkingDays(payload.business.workingDays);
-  const workingRange = parseTimeRange(payload.business.workingHours) ?? { endMinutes: 18 * 60, startMinutes: 10 * 60 };
-  const breakRange = parseTimeRange(payload.business.breakHours);
+  const workingRanges = [payload.business.workingHours, payload.business.workingHoursSecondWindow]
+    .map((range) => parseTimeRange(range))
+    .filter((range): range is { endMinutes: number; startMinutes: number } => Boolean(range));
+  const effectiveWorkingRanges = workingRanges.length ? workingRanges : [{ endMinutes: 18 * 60, startMinutes: 10 * 60 }];
   const slotDurationMinutes = payload.business.slotDurationMinutes ?? 30;
+  const slotStepMinutes = slotDurationMinutes === 60 ? 30 : 15;
   const slotCountsByIso = Object.fromEntries(payload.slotCounts.map((slot) => [slot.startsAt, slot.count]));
+  const maxBookableDate = new Date(today);
+  maxBookableDate.setDate(today.getDate() + (payload.business.advanceBookingWeeks * 7) - 1);
   const calendarDays = Array.from({ length: 28 }, (_, offset) => {
     const date = new Date(today);
     date.setDate(today.getDate() + offset);
     return date;
   });
-  const availableSlots = Array.from(
-    { length: Math.max(0, Math.floor((workingRange.endMinutes - workingRange.startMinutes) / slotDurationMinutes)) },
-    (_, index) => workingRange.startMinutes + (index * slotDurationMinutes),
-  ).filter((minutes) => {
-    const slotEnd = minutes + slotDurationMinutes;
-
-    return !breakRange || minutes >= breakRange.endMinutes || slotEnd <= breakRange.startMinutes;
-  }).map((minutes) => {
+  const availableSlots = effectiveWorkingRanges.flatMap((range) => Array.from(
+    { length: Math.max(0, Math.floor((range.endMinutes - range.startMinutes - slotDurationMinutes) / slotStepMinutes) + 1) },
+    (_, index) => range.startMinutes + (index * slotStepMinutes),
+  )).map((minutes) => {
     const startsAt = createSlotIso(selectedDateKey, minutes);
     const slotDate = new Date(startsAt);
     const isPast = slotDate.getTime() <= Date.now();
@@ -231,36 +238,41 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       startsAt,
     };
   });
+  const selectedSlot = availableSlots.find((slot) => slot.startsAt === selectedSlotIso) ?? null;
 
   return (
     <div className="workspace-card-stack">
       <section className="workspace-card apportion-booking-hero">
         {payload.business.imageDataUrl ? (
-          <img alt="Business logo" className="branding-preview-image" src={payload.business.imageDataUrl} />
+          <img alt="Business logo" className="apportion-business-logo" src={payload.business.imageDataUrl} />
         ) : null}
         <div>
           <p className="eyebrow">Apportion booking</p>
           <h1>{payload.business.name || "Business appointment"}</h1>
-          <p className="muted-text">Working days: {payload.business.workingDays || "Not specified"}</p>
           <p className="muted-text">Working hours: {payload.business.workingHours || "Not specified"}</p>
-          {payload.business.breakHours ? <p className="muted-text">Break hour: {payload.business.breakHours}</p> : null}
-          <p className="muted-text">Slot duration: {payload.business.slotDurationMinutes ? `${payload.business.slotDurationMinutes} mins` : "Not specified"}</p>
+          {payload.business.workingHoursSecondWindow ? <p className="muted-text">Second window: {payload.business.workingHoursSecondWindow}</p> : null}
         </div>
       </section>
 
       <section className="workspace-card apportion-booking-panel">
         <p className="eyebrow">Choose appointment</p>
-        <div className="form-stack">
+        <div className="apportion-booking-grid">
           <div className="apportion-calendar" aria-label="Appointment calendar">
+            {WEEKDAY_SHORT_NAMES.map((dayName) => (
+              <span className="apportion-calendar-weekday" key={dayName}>{dayName}</span>
+            ))}
             {calendarDays.map((date) => {
               const dateKey = createDateKey(date);
               const isWorkingDay = workingDays.has(WEEKDAY_NAMES[date.getDay()]);
+              const isWithinAdvanceBooking = date <= maxBookableDate;
               const isSelected = dateKey === selectedDateKey;
+              const isAvailableDate = isWorkingDay && isWithinAdvanceBooking;
+              const isAlternateMonth = date.getMonth() !== today.getMonth();
 
               return (
                 <button
-                  className={`apportion-calendar-day${isWorkingDay ? " is-working" : ""}${isSelected ? " is-selected" : ""}`}
-                  disabled={!isWorkingDay}
+                  className={`apportion-calendar-day${isAvailableDate ? " is-working" : ""}${isSelected ? " is-selected" : ""}${isAlternateMonth ? " is-next-month" : ""}`}
+                  disabled={!isAvailableDate}
                   key={dateKey}
                   type="button"
                   onClick={() => {
@@ -274,41 +286,46 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                 </button>
               );
             })}
-            <p className="muted-text apportion-calendar-note">Slot duration: {slotDurationMinutes} mins</p>
+            <p className="muted-text apportion-calendar-note">Available dates are highlighted for the next {payload.business.advanceBookingWeeks} week{payload.business.advanceBookingWeeks === 1 ? "" : "s"}.</p>
           </div>
-          <div className="apportion-slot-grid" aria-label="Available time slots">
-            {availableSlots.length ? availableSlots.map((slot) => (
-              <button
-                className={`apportion-slot-chip${selectedSlotIso === slot.startsAt ? " is-selected" : ""}`}
-                disabled={!slot.isAvailable}
-                key={slot.startsAt}
-                type="button"
-                onClick={() => {
-                  setSelectedSlotIso(slot.startsAt);
+          <div className="form-stack apportion-booking-form">
+            <div className="field">
+              <label htmlFor="apportion-appointment-time">Appointment time</label>
+              <select
+                className="select-field"
+                id="apportion-appointment-time"
+                value={selectedSlotIso ?? ""}
+                onChange={(event) => {
+                  setSelectedSlotIso(event.target.value || null);
                   setFeedback(null);
                 }}
               >
-                {slot.label}
-                {!slot.isAvailable ? <span>Unavailable</span> : null}
+                <option value="">Select a time</option>
+                {availableSlots.map((slot) => (
+                  <option disabled={!slot.isAvailable} key={slot.startsAt} value={slot.startsAt}>
+                    {slot.label} - {slot.isAvailable ? "Available" : "Unavailable"}
+                  </option>
+                ))}
+              </select>
+              <p className="muted-text">{selectedSlot ? `${selectedSlot.label} selected` : "Filled slots are greyed out in the list."}</p>
+            </div>
+            <div className="field">
+              <label htmlFor="apportion-notes">Notes</label>
+              <textarea
+                id="apportion-notes"
+                placeholder="Tell us a bit about the student's current math level or goals!"
+                rows={3}
+                value={notes}
+                onChange={(event) => setNotes(event.target.value)}
+              />
+            </div>
+            {feedback ? <p className="muted-text">{feedback}</p> : null}
+            <div className="inline-actions">
+              <button className="button" disabled={isBooking} type="button" onClick={() => void handleBookAppointment()}>
+                {isBooking ? "Booking..." : "Book appointment"}
               </button>
-            )) : <p className="muted-text">No available slots for this date.</p>}
-          </div>
-          <div className="field">
-            <label htmlFor="apportion-notes">Notes</label>
-            <textarea
-              id="apportion-notes"
-              placeholder="Tell us a bit about the student's current math level or goals!"
-              rows={3}
-              value={notes}
-              onChange={(event) => setNotes(event.target.value)}
-            />
-          </div>
-          {feedback ? <p className="muted-text">{feedback}</p> : null}
-          <div className="inline-actions">
-            <button className="button" disabled={isBooking} type="button" onClick={() => void handleBookAppointment()}>
-              {isBooking ? "Booking..." : "Book appointment"}
-            </button>
-            <a className="button-secondary" href="/user?tab=apportion">Open Apportion dashboard</a>
+              <a className="button-secondary" href="/user?tab=apportion">Open my dashboard</a>
+            </div>
           </div>
         </div>
       </section>

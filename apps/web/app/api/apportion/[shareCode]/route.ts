@@ -56,25 +56,35 @@ function parseWorkingDays(value: string) {
 
 function validateRequestedSlot(branding: WorkspaceBranding, startsAt: Date) {
   const workingDays = parseWorkingDays(branding.workingDays);
-  const workingRange = parseTimeRange(branding.workingHours);
-  const breakRange = parseTimeRange(branding.breakHours);
+  const workingRanges = [branding.workingHours, branding.workingHoursSecondWindow]
+    .map((range) => parseTimeRange(range))
+    .filter((range): range is { endMinutes: number; startMinutes: number } => Boolean(range));
   const dayName = WEEKDAY_NAMES[startsAt.getDay()];
   const requestedMinutes = startsAt.getHours() * 60 + startsAt.getMinutes();
   const slotDurationMinutes = branding.slotDurationMinutes ?? 30;
+  const slotStepMinutes = slotDurationMinutes === 60 ? 30 : 15;
+  const advanceBookingWeeks = branding.advanceBookingWeeks ?? 4;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const maxDate = new Date(today);
+  maxDate.setDate(today.getDate() + (advanceBookingWeeks * 7) - 1);
+  maxDate.setHours(23, 59, 59, 999);
 
   if (!workingDays.has(dayName)) {
     throw new Error("Choose a working day for this business.");
   }
 
-  if (workingRange && (requestedMinutes < workingRange.startMinutes || requestedMinutes + slotDurationMinutes > workingRange.endMinutes)) {
+  if (startsAt.getTime() > maxDate.getTime()) {
+    throw new Error("Choose a date within the allowed advance booking period.");
+  }
+
+  const matchingRange = workingRanges.find((range) => requestedMinutes >= range.startMinutes && requestedMinutes + slotDurationMinutes <= range.endMinutes);
+
+  if (!matchingRange) {
     throw new Error("Choose a time within working hours.");
   }
 
-  if (breakRange && requestedMinutes < breakRange.endMinutes && requestedMinutes + slotDurationMinutes > breakRange.startMinutes) {
-    throw new Error("Choose a time outside the lunch or break hour.");
-  }
-
-  if (workingRange && (requestedMinutes - workingRange.startMinutes) % slotDurationMinutes !== 0) {
+  if ((requestedMinutes - matchingRange.startMinutes) % slotStepMinutes !== 0) {
     throw new Error("Choose one of the available appointment slots.");
   }
 }
@@ -99,13 +109,14 @@ export async function GET(
 
   return NextResponse.json({
     business: {
+      advanceBookingWeeks: business.branding.advanceBookingWeeks ?? 4,
       appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
-      breakHours: business.branding.breakHours,
       imageDataUrl: business.branding.imageDataUrl,
       name: business.branding.instituteName,
       slotDurationMinutes: business.branding.slotDurationMinutes ?? null,
       workingDays: business.branding.workingDays,
       workingHours: business.branding.workingHours,
+      workingHoursSecondWindow: business.branding.workingHoursSecondWindow,
     },
     slotCounts,
   });
