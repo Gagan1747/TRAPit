@@ -1000,6 +1000,21 @@ main {
   text-transform: uppercase;
 }
 
+.apportion-calendar-month {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(81, 55, 133, 0.1);
+  color: var(--accent-deep);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-align: center;
+  text-transform: uppercase;
+}
+
 .apportion-calendar-blank {
   min-height: 82px;
 }

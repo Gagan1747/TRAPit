@@ -20,6 +20,7 @@ type BookingPayload = {
 };
 
 type CalendarCell =
+  | { key: string; label: string; type: "month" }
   | { date: Date; key: string; type: "date" }
   | { key: string; type: "blank" };
 
@@ -140,8 +141,10 @@ function createCalendarCells(startDate: Date, endDate: Date): CalendarCell[] {
 
   while (cursor <= lastDate) {
     const cursorMonth = cursor.getMonth();
+    const monthLabel = cursor.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 
     if (cellsInRow === 0) {
+      cells.push({ key: `month-${createDateKey(cursor)}`, label: monthLabel, type: "month" });
       currentRowMonth = cursorMonth;
 
       for (let index = 0; index < cursor.getDay(); index += 1) {
@@ -158,6 +161,7 @@ function createCalendarCells(startDate: Date, endDate: Date): CalendarCell[] {
 
       cellsInRow = 0;
       currentRowMonth = cursorMonth;
+      cells.push({ key: `month-${createDateKey(cursor)}`, label: monthLabel, type: "month" });
 
       for (let index = 0; index < cursor.getDay(); index += 1) {
         cells.push({ key: `blank-month-start-${createDateKey(cursor)}-${index}`, type: "blank" });
@@ -338,6 +342,10 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
               <span className="apportion-calendar-weekday" key={dayName}>{dayName}</span>
             ))}
             {calendarCells.map((cell) => {
+              if (cell.type === "month") {
+                return <span className="apportion-calendar-month" key={cell.key}>{cell.label}</span>;
+              }
+
               if (cell.type === "blank") {
                 return <span aria-hidden="true" className="apportion-calendar-blank" key={cell.key} />;
               }

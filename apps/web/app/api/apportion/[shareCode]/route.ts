@@ -178,6 +178,7 @@ export async function POST(
       appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
       notes: body.notes,
       ownerIdentifier: business.ownerIdentifier,
+      ownerName: business.branding.instituteName,
       requesterIdentifier,
       requesterName: getSessionDisplayName(session) ?? requesterIdentifier,
       requesterPhone: session.phoneNumber ?? requesterIdentifier,

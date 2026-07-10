@@ -11,6 +11,7 @@ export type ApportionAppointment = {
   id: string;
   notes: string | null;
   ownerIdentifier: string;
+  ownerName: string | null;
   requesterIdentifier: string;
   requesterName: string;
   requesterPhone: string | null;
@@ -47,6 +48,7 @@ function normalizeState(parsed: Partial<ApportionState>): ApportionState {
         id: appointment.id ?? createEntityId("appointment"),
         notes: appointment.notes?.trim() || null,
         ownerIdentifier: appointment.ownerIdentifier?.trim() ?? "",
+        ownerName: appointment.ownerName?.trim() || null,
         requesterIdentifier: appointment.requesterIdentifier?.trim() ?? "",
         requesterName: appointment.requesterName?.trim() || "Registered user",
         requesterPhone: appointment.requesterPhone?.trim() || null,
@@ -113,6 +115,7 @@ export async function createApportionAppointment(input: {
   appointmentsPerSlot: number;
   notes?: string | null;
   ownerIdentifier: string;
+  ownerName?: string | null;
   requesterIdentifier: string;
   requesterName: string;
   requesterPhone?: string | null;
@@ -150,6 +153,7 @@ export async function createApportionAppointment(input: {
     id: createEntityId("appointment"),
     notes: input.notes?.trim() || null,
     ownerIdentifier,
+    ownerName: input.ownerName?.trim() || null,
     requesterIdentifier,
     requesterName: input.requesterName.trim() || "Registered user",
     requesterPhone: input.requesterPhone?.trim() || null,

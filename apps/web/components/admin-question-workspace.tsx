@@ -391,6 +391,7 @@ type ApportionAppointment = {
   id: string;
   notes: string | null;
   ownerIdentifier: string;
+  ownerName: string | null;
   requesterIdentifier: string;
   requesterName: string;
   requesterPhone: string | null;
@@ -4185,8 +4186,8 @@ export function AdminQuestionWorkspace({
                         <div className="notification-panel-item" key={appointment.id}>
                           <div className="apportion-appointment-summary">
                             <p className="apportion-appointment-line">
-                              <strong>{appointment.requesterName}</strong>
-                              <span>{formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier)}</span>
+                              <strong>{appointment.ownerName ?? appointment.ownerIdentifier}</strong>
+                              <span>{formatPhoneNumberForDisplay(appointment.ownerIdentifier)}</span>
                               <span>{formatShortDateTime(appointment.startsAt)}</span>
                             </p>
                             <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes ?? "None"}</p>
