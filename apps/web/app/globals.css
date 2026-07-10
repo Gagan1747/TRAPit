@@ -1908,6 +1908,21 @@ main {
   margin-bottom: 8px;
 }
 
+.apportion-list-toggle {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.apportion-list-toggle[aria-expanded="true"] strong {
+  color: var(--accent-deep);
+}
+
 .question-options {
   margin: 0;
   padding-left: 20px;

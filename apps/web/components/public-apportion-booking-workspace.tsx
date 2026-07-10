@@ -136,15 +136,21 @@ function createCalendarCells(startDate: Date, endDate: Date): CalendarCell[] {
   cursor.setHours(0, 0, 0, 0);
   const lastDate = new Date(endDate);
   lastDate.setHours(0, 0, 0, 0);
+  const emittedMonthKeys = new Set<string>();
   let currentRowMonth: number | null = null;
   let cellsInRow = 0;
 
   while (cursor <= lastDate) {
     const cursorMonth = cursor.getMonth();
+    const cursorMonthKey = `${cursor.getFullYear()}-${cursorMonth}`;
     const monthLabel = cursor.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 
     if (cellsInRow === 0) {
-      cells.push({ key: `month-${createDateKey(cursor)}`, label: monthLabel, type: "month" });
+      if (!emittedMonthKeys.has(cursorMonthKey)) {
+        cells.push({ key: `month-${createDateKey(cursor)}`, label: monthLabel, type: "month" });
+        emittedMonthKeys.add(cursorMonthKey);
+      }
+
       currentRowMonth = cursorMonth;
 
       for (let index = 0; index < cursor.getDay(); index += 1) {
@@ -161,7 +167,11 @@ function createCalendarCells(startDate: Date, endDate: Date): CalendarCell[] {
 
       cellsInRow = 0;
       currentRowMonth = cursorMonth;
-      cells.push({ key: `month-${createDateKey(cursor)}`, label: monthLabel, type: "month" });
+
+      if (!emittedMonthKeys.has(cursorMonthKey)) {
+        cells.push({ key: `month-${createDateKey(cursor)}`, label: monthLabel, type: "month" });
+        emittedMonthKeys.add(cursorMonthKey);
+      }
 
       for (let index = 0; index < cursor.getDay(); index += 1) {
         cells.push({ key: `blank-month-start-${createDateKey(cursor)}-${index}`, type: "blank" });

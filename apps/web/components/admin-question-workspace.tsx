@@ -1131,6 +1131,7 @@ export function AdminQuestionWorkspace({
   const [participantTestHistory, setParticipantTestHistory] = useState<TestHistoryEntry[]>([]);
   const [participantTests, setParticipantTests] = useState<UserDashboardResponse["availableTests"]>([]);
   const [requesterApportionAppointments, setRequesterApportionAppointments] = useState<ApportionAppointment[]>([]);
+  const [openApportionList, setOpenApportionList] = useState<"business" | "appointments">("business");
   const [participantAnswers, setParticipantAnswers] = useState<Record<string, number | undefined>>({});
   const [participantNamesByTest, setParticipantNamesByTest] = useState<Record<string, string>>({});
   const [participantRemainingMs, setParticipantRemainingMs] = useState<number | null>(null);
@@ -4176,11 +4177,16 @@ export function AdminQuestionWorkspace({
 
               <div className="stack-grid two-column-grid">
                 <article className="question-card nested-card">
-                  <div className="question-head">
-                    <strong>My booked appointments</strong>
+                  <button
+                    aria-expanded={openApportionList === "appointments"}
+                    className="question-head apportion-list-toggle"
+                    type="button"
+                    onClick={() => setOpenApportionList("appointments")}
+                  >
+                    <strong>My appointments</strong>
                     <span className="status-chip">{requesterApportionAppointments.length}</span>
-                  </div>
-                  {requesterApportionAppointments.length ? (
+                  </button>
+                  {openApportionList === "appointments" && requesterApportionAppointments.length ? (
                     <div className="notification-panel-list">
                       {requesterApportionAppointments.map((appointment) => (
                         <div className="notification-panel-item" key={appointment.id}>
@@ -4195,17 +4201,22 @@ export function AdminQuestionWorkspace({
                         </div>
                       ))}
                     </div>
-                  ) : (
+                  ) : openApportionList === "appointments" ? (
                     <p className="muted-text">No appointments booked yet.</p>
-                  )}
+                  ) : null}
                 </article>
 
                 <article className="question-card nested-card">
-                  <div className="question-head">
-                    <strong>Business appointments</strong>
+                  <button
+                    aria-expanded={openApportionList === "business"}
+                    className="question-head apportion-list-toggle"
+                    type="button"
+                    onClick={() => setOpenApportionList("business")}
+                  >
+                    <strong>My Business</strong>
                     <span className="status-chip">{ownerApportionAppointments.length}</span>
-                  </div>
-                  {ownerApportionAppointments.length ? (
+                  </button>
+                  {openApportionList === "business" && ownerApportionAppointments.length ? (
                     <div className="notification-panel-list">
                       {ownerApportionAppointments.map((appointment) => (
                         <div className="notification-panel-item" key={appointment.id}>
@@ -4220,9 +4231,9 @@ export function AdminQuestionWorkspace({
                         </div>
                       ))}
                     </div>
-                  ) : (
+                  ) : openApportionList === "business" ? (
                     <p className="muted-text">No users have booked appointments with your business yet.</p>
-                  )}
+                  ) : null}
                 </article>
               </div>
             </section>
