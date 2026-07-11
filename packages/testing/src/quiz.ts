@@ -64,10 +64,12 @@ export type PollParticipantType = "open" | "registered";
 export type WorkspaceBranding = {
   advanceBookingWeeks: number | null;
   appointmentShareCode: string | null;
+  appointmentNotesPrompt: string;
   appointmentsPerSlot: number | null;
   breakHours: string;
   imageDataUrl: string | null;
   instituteName: string;
+  showRemainingBookings: boolean;
   slotDurationMinutes: number | null;
   workingHoursSecondWindow: string;
   workingDays: string;
@@ -239,6 +241,7 @@ export type TestingWorkspaceState = {
   questionReports: TestQuestionReport[];
   scheduledPolls: ScheduledPoll[];
   scheduledTests: ScheduledTest[];
+  workspaceAppointmentShareCodesByActor: Record<string, string>;
   workspaceBranding: WorkspaceBranding | null;
   workspaceBrandingByActor: Record<string, WorkspaceBranding>;
 };
@@ -549,14 +552,16 @@ export function normalizeWorkspaceBranding(
     ? branding.advanceBookingWeeks
     : null;
   const appointmentShareCode = branding.appointmentShareCode?.trim() || null;
+  const appointmentNotesPrompt = branding.appointmentNotesPrompt?.trim() || "Share a brief about appointment purpose";
   const breakHours = branding.breakHours?.trim() ?? "";
   const workingDays = branding.workingDays?.trim() ?? "";
   const workingHours = branding.workingHours?.trim() ?? "";
   const workingHoursSecondWindow = branding.workingHoursSecondWindow?.trim() ?? "";
+  const showRemainingBookings = branding.showRemainingBookings === true;
   const appointmentsPerSlot = Number.isFinite(branding.appointmentsPerSlot) && branding.appointmentsPerSlot && branding.appointmentsPerSlot > 0
     ? Math.floor(branding.appointmentsPerSlot)
     : null;
-  const slotDurationMinutes = [15, 30, 45, 60].includes(branding.slotDurationMinutes ?? 0)
+  const slotDurationMinutes = [15, 30, 45, 60, 120, 180, 240].includes(branding.slotDurationMinutes ?? 0)
     ? branding.slotDurationMinutes
     : null;
 
@@ -567,10 +572,12 @@ export function normalizeWorkspaceBranding(
   return {
     advanceBookingWeeks,
     appointmentShareCode,
+    appointmentNotesPrompt,
     appointmentsPerSlot,
     breakHours,
     imageDataUrl,
     instituteName,
+    showRemainingBookings,
     slotDurationMinutes,
     workingHoursSecondWindow,
     workingDays,
@@ -848,6 +855,7 @@ export function createEmptyTestingWorkspaceState(): TestingWorkspaceState {
     questionReports: [],
     scheduledPolls: [],
     scheduledTests: [],
+    workspaceAppointmentShareCodesByActor: {},
     workspaceBranding: null,
     workspaceBrandingByActor: {},
   };

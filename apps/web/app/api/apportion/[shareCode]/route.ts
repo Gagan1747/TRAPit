@@ -76,7 +76,7 @@ function validateRequestedSlot(branding: WorkspaceBranding, startsAt: Date, slot
     ? slotMinutes
     : startsAt.getHours() * 60 + startsAt.getMinutes();
   const slotDurationMinutes = branding.slotDurationMinutes ?? 30;
-  const slotStepMinutes = slotDurationMinutes === 60 ? 30 : 15;
+  const slotStepMinutes = slotDurationMinutes >= 60 ? 30 : 15;
   const advanceBookingWeeks = branding.advanceBookingWeeks ?? 4;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -128,9 +128,11 @@ export async function GET(
   return NextResponse.json({
     business: {
       advanceBookingWeeks: business.branding.advanceBookingWeeks ?? 4,
+      appointmentNotesPrompt: business.branding.appointmentNotesPrompt,
       appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
       imageDataUrl: business.branding.imageDataUrl,
       name: business.branding.instituteName,
+      showRemainingBookings: business.branding.showRemainingBookings,
       slotDurationMinutes: business.branding.slotDurationMinutes ?? null,
       workingDays: business.branding.workingDays,
       workingHours: business.branding.workingHours,

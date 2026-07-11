@@ -286,6 +286,7 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       };
     }),
     scheduledTests: parsed.scheduledTests ?? [],
+    workspaceAppointmentShareCodesByActor: parsed.workspaceAppointmentShareCodesByActor ?? {},
     workspaceBranding: parsed.workspaceBranding ?? null,
     workspaceBrandingByActor: parsed.workspaceBrandingByActor ?? {},
   };

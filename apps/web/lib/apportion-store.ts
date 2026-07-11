@@ -7,6 +7,8 @@ import path from "node:path";
 const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
 
 export type ApportionAppointment = {
+  canceledAt: string | null;
+  canceledByIdentifier: string | null;
   createdAt: string;
   id: string;
   notes: string | null;
@@ -44,6 +46,8 @@ function normalizeState(parsed: Partial<ApportionState>): ApportionState {
   return {
     appointments: (parsed.appointments ?? [])
       .map((appointment) => ({
+        canceledAt: appointment.canceledAt?.trim() || null,
+        canceledByIdentifier: appointment.canceledByIdentifier?.trim() || null,
         createdAt: appointment.createdAt ?? new Date().toISOString(),
         id: appointment.id ?? createEntityId("appointment"),
         notes: appointment.notes?.trim() || null,
@@ -87,7 +91,7 @@ export async function listApportionAppointmentsForOwner(ownerIdentifier: string)
   const state = await readState();
 
   return state.appointments
-    .filter((appointment) => normalizeIdentifier(appointment.ownerIdentifier) === normalizedOwner)
+    .filter((appointment) => normalizeIdentifier(appointment.ownerIdentifier) === normalizedOwner && !appointment.canceledAt)
     .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
 }
 
@@ -96,7 +100,7 @@ export async function listApportionAppointmentsForRequester(requesterIdentifier:
   const state = await readState();
 
   return state.appointments
-    .filter((appointment) => normalizeIdentifier(appointment.requesterIdentifier) === normalizedRequester)
+    .filter((appointment) => normalizeIdentifier(appointment.requesterIdentifier) === normalizedRequester && !appointment.canceledAt)
     .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
 }
 
@@ -149,6 +153,8 @@ export async function createApportionAppointment(input: {
   }
 
   const appointment: ApportionAppointment = {
+    canceledAt: null,
+    canceledByIdentifier: null,
     createdAt: new Date().toISOString(),
     id: createEntityId("appointment"),
     notes: input.notes?.trim() || null,
@@ -161,6 +167,39 @@ export async function createApportionAppointment(input: {
   };
 
   state.appointments.push(appointment);
+  await writeState(state);
+
+  return appointment;
+}
+
+export async function cancelApportionAppointment(input: {
+  actorIdentifier: string;
+  appointmentId: string;
+}) {
+  const actorIdentifier = input.actorIdentifier.trim();
+  const appointmentId = input.appointmentId.trim();
+
+  if (!actorIdentifier || !appointmentId) {
+    throw new Error("Appointment and signed-in user are required.");
+  }
+
+  const state = await readState();
+  const appointment = state.appointments.find((entry) => entry.id === appointmentId);
+
+  if (!appointment || appointment.canceledAt) {
+    throw new Error("Appointment not found.");
+  }
+
+  const normalizedActor = normalizeIdentifier(actorIdentifier);
+  const canCancel = normalizeIdentifier(appointment.ownerIdentifier) === normalizedActor
+    || normalizeIdentifier(appointment.requesterIdentifier) === normalizedActor;
+
+  if (!canCancel) {
+    throw new Error("You can only cancel your own appointments.");
+  }
+
+  appointment.canceledAt = new Date().toISOString();
+  appointment.canceledByIdentifier = actorIdentifier;
   await writeState(state);
 
   return appointment;

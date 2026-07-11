@@ -85,6 +85,7 @@ const BUSINESS_DAY_START_MINUTES = 6 * 60;
 const BUSINESS_DAY_END_MINUTES = 22 * 60;
 const DEFAULT_BUSINESS_START_MINUTES = 10 * 60;
 const DEFAULT_BUSINESS_END_MINUTES = 18 * 60;
+const DEFAULT_APPOINTMENT_NOTES_PROMPT = "Share a brief about appointment purpose";
 
 type TestRepeatMode = "none" | "daily" | "weekly" | "monthly";
 
@@ -387,6 +388,8 @@ type BrandingResponse = {
 };
 
 type ApportionAppointment = {
+  canceledAt: string | null;
+  canceledByIdentifier: string | null;
   createdAt: string;
   id: string;
   notes: string | null;
@@ -399,6 +402,7 @@ type ApportionAppointment = {
 };
 
 type ApportionDashboardResponse = {
+  appointmentShareCode: string | null;
   ownerAppointments: ApportionAppointment[];
   requesterAppointments: ApportionAppointment[];
 };
@@ -534,10 +538,12 @@ function createEmptyBranding(): WorkspaceBranding {
   return {
     advanceBookingWeeks: null,
     appointmentShareCode: null,
+    appointmentNotesPrompt: DEFAULT_APPOINTMENT_NOTES_PROMPT,
     appointmentsPerSlot: null,
     breakHours: "",
     imageDataUrl: null,
     instituteName: "",
+    showRemainingBookings: false,
     slotDurationMinutes: null,
     workingHoursSecondWindow: "",
     workingDays: "",
@@ -552,14 +558,16 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
     ? branding?.advanceBookingWeeks ?? null
     : null;
   const appointmentShareCode = branding?.appointmentShareCode?.trim() || null;
+  const appointmentNotesPrompt = branding?.appointmentNotesPrompt?.trim() || DEFAULT_APPOINTMENT_NOTES_PROMPT;
   const breakHours = branding?.breakHours.trim() ?? "";
   const workingDays = branding?.workingDays.trim() ?? "";
   const workingHours = branding?.workingHours.trim() ?? "";
   const workingHoursSecondWindow = branding?.workingHoursSecondWindow.trim() ?? "";
+  const showRemainingBookings = branding?.showRemainingBookings === true;
   const appointmentsPerSlot = Number.isFinite(branding?.appointmentsPerSlot) && branding?.appointmentsPerSlot && branding.appointmentsPerSlot > 0
     ? Math.floor(branding.appointmentsPerSlot)
     : null;
-  const slotDurationMinutes = [15, 30, 45, 60].includes(branding?.slotDurationMinutes ?? 0)
+  const slotDurationMinutes = [15, 30, 45, 60, 120, 180, 240].includes(branding?.slotDurationMinutes ?? 0)
     ? branding?.slotDurationMinutes ?? null
     : null;
 
@@ -570,10 +578,12 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
   return {
     advanceBookingWeeks,
     appointmentShareCode,
+    appointmentNotesPrompt,
     appointmentsPerSlot,
     breakHours,
     imageDataUrl,
     instituteName,
+    showRemainingBookings,
     slotDurationMinutes,
     workingHoursSecondWindow,
     workingDays,
@@ -1104,7 +1114,10 @@ export function AdminQuestionWorkspace({
   const [isBrandingDragActive, setIsBrandingDragActive] = useState(false);
   const [businessAdvanceBookingWeeks, setBusinessAdvanceBookingWeeks] = useState("4");
   const [businessAppointmentQrCode, setBusinessAppointmentQrCode] = useState<string | null>(null);
+  const [businessAppointmentShareCode, setBusinessAppointmentShareCode] = useState<string | null>(null);
   const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("");
+  const [businessAppointmentNotesPrompt, setBusinessAppointmentNotesPrompt] = useState(DEFAULT_APPOINTMENT_NOTES_PROMPT);
+  const [businessShowRemainingBookings, setBusinessShowRemainingBookings] = useState(false);
   const [businessSlotDurationMinutes, setBusinessSlotDurationMinutes] = useState("");
   const [businessWorkingDays, setBusinessWorkingDays] = useState("");
   const [businessWorkingHours, setBusinessWorkingHours] = useState("");
@@ -1131,7 +1144,6 @@ export function AdminQuestionWorkspace({
   const [participantTestHistory, setParticipantTestHistory] = useState<TestHistoryEntry[]>([]);
   const [participantTests, setParticipantTests] = useState<UserDashboardResponse["availableTests"]>([]);
   const [requesterApportionAppointments, setRequesterApportionAppointments] = useState<ApportionAppointment[]>([]);
-  const [openApportionList, setOpenApportionList] = useState<"business" | "appointments">("business");
   const [participantAnswers, setParticipantAnswers] = useState<Record<string, number | undefined>>({});
   const [participantNamesByTest, setParticipantNamesByTest] = useState<Record<string, string>>({});
   const [participantRemainingMs, setParticipantRemainingMs] = useState<number | null>(null);
@@ -1216,6 +1228,8 @@ export function AdminQuestionWorkspace({
     setBrandingImageDataUrl(branding?.imageDataUrl ?? null);
     setBusinessAdvanceBookingWeeks(branding?.advanceBookingWeeks ? String(branding.advanceBookingWeeks) : "4");
     setBusinessAppointmentsPerSlot(branding?.appointmentsPerSlot ? String(branding.appointmentsPerSlot) : "");
+    setBusinessAppointmentNotesPrompt(branding?.appointmentNotesPrompt ?? DEFAULT_APPOINTMENT_NOTES_PROMPT);
+    setBusinessShowRemainingBookings(branding?.showRemainingBookings === true);
     setBusinessSlotDurationMinutes(branding?.slotDurationMinutes ? String(branding.slotDurationMinutes) : "");
     setBusinessWorkingDays(branding?.workingDays ?? "");
     setBusinessWorkingHours(branding?.workingHours ?? "");
@@ -1265,6 +1279,7 @@ export function AdminQuestionWorkspace({
       setScheduledPolls(pollsPayload.scheduledPolls);
       setScheduledTests(testsPayload.scheduledTests);
       setWorkspaceBranding(brandingPayload.branding);
+      setBusinessAppointmentShareCode(apportionPayload.appointmentShareCode ?? brandingPayload.branding?.appointmentShareCode ?? null);
       if (!isBrandingDraftDirtyRef.current) {
         syncBrandingDraft(brandingPayload.branding);
       }
@@ -1399,7 +1414,7 @@ export function AdminQuestionWorkspace({
 
   useEffect(() => {
     let isMounted = true;
-    const shareCode = workspaceBranding?.appointmentShareCode ?? "";
+    const shareCode = businessAppointmentShareCode ?? workspaceBranding?.appointmentShareCode ?? "";
 
     if (!shareCode) {
       setBusinessAppointmentQrCode(null);
@@ -1417,7 +1432,7 @@ export function AdminQuestionWorkspace({
     return () => {
       isMounted = false;
     };
-  }, [workspaceBranding?.appointmentShareCode]);
+  }, [businessAppointmentShareCode, workspaceBranding?.appointmentShareCode]);
 
   useEffect(() => {
     const activeParticipantTest = participantTests.find((test) => test.id === activeParticipantTestId) ?? null;
@@ -1518,6 +1533,27 @@ export function AdminQuestionWorkspace({
       }, 2000);
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to copy the link.");
+    }
+  }
+
+  async function handleCancelApportionAppointment(appointmentId: string) {
+    setFeedback(null);
+
+    try {
+      const payload = await readJson<ApportionDashboardResponse>(
+        await fetch("/api/user/apportion", {
+          body: JSON.stringify({ appointmentId }),
+          headers: { "Content-Type": "application/json" },
+          method: "DELETE",
+        }),
+      );
+
+      setBusinessAppointmentShareCode(payload.appointmentShareCode ?? businessAppointmentShareCode);
+      setOwnerApportionAppointments(payload.ownerAppointments);
+      setRequesterApportionAppointments(payload.requesterAppointments);
+      setFeedback("Appointment cancelled.");
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to cancel appointment.");
     }
   }
 
@@ -2842,8 +2878,8 @@ export function AdminQuestionWorkspace({
       return;
     }
 
-    if (slotDurationMinutes !== null && ![15, 30, 45, 60].includes(slotDurationMinutes)) {
-      setBrandingFeedback("Slot duration must be 15, 30, 45, or 60 minutes.");
+    if (slotDurationMinutes !== null && ![15, 30, 45, 60, 120, 180, 240].includes(slotDurationMinutes)) {
+      setBrandingFeedback("Slot duration must be 15 minutes, 30 minutes, 45 minutes, 1 hour, 2 hours, 3 hours, or 4 hours.");
       return;
     }
 
@@ -2854,11 +2890,13 @@ export function AdminQuestionWorkspace({
 
     const nextBranding = normalizeBrandingInput({
       advanceBookingWeeks,
-      appointmentShareCode: workspaceBranding?.appointmentShareCode ?? null,
+      appointmentNotesPrompt: businessAppointmentNotesPrompt,
+      appointmentShareCode: businessAppointmentShareCode ?? workspaceBranding?.appointmentShareCode ?? null,
       appointmentsPerSlot,
       breakHours: "",
       imageDataUrl: brandingImageDataUrl,
       instituteName: brandingInstituteName,
+      showRemainingBookings: businessShowRemainingBookings,
       slotDurationMinutes,
       workingHoursSecondWindow: businessWorkingHoursSecondWindow,
       workingDays: businessWorkingDays,
@@ -2877,6 +2915,7 @@ export function AdminQuestionWorkspace({
       );
 
       setWorkspaceBranding(payload.branding);
+      setBusinessAppointmentShareCode(payload.branding?.appointmentShareCode ?? businessAppointmentShareCode);
       isBrandingDraftDirtyRef.current = false;
       syncBrandingDraft(payload.branding);
       setBrandingFeedback(payload.branding ? "Business details saved." : "Business details cleared.");
@@ -2942,6 +2981,8 @@ export function AdminQuestionWorkspace({
     setBrandingImageDataUrl(null);
     setBusinessAdvanceBookingWeeks("4");
     setBusinessAppointmentsPerSlot("");
+    setBusinessAppointmentNotesPrompt(DEFAULT_APPOINTMENT_NOTES_PROMPT);
+    setBusinessShowRemainingBookings(false);
     setBusinessSlotDurationMinutes("");
     setBusinessWorkingDays("");
     setBusinessWorkingHours("");
@@ -3504,11 +3545,13 @@ export function AdminQuestionWorkspace({
   const pollToggleUpcomingCount = filteredMergedPolls.filter((poll) => poll.status === "scheduled").length;
   const brandingPreview = normalizeBrandingInput({
     advanceBookingWeeks: Number.parseInt(businessAdvanceBookingWeeks, 10),
-    appointmentShareCode: workspaceBranding?.appointmentShareCode ?? null,
+    appointmentNotesPrompt: businessAppointmentNotesPrompt,
+    appointmentShareCode: businessAppointmentShareCode ?? workspaceBranding?.appointmentShareCode ?? null,
     appointmentsPerSlot: Number.parseInt(businessAppointmentsPerSlot, 10),
     breakHours: "",
     imageDataUrl: brandingImageDataUrl,
     instituteName: brandingInstituteName,
+    showRemainingBookings: businessShowRemainingBookings,
     slotDurationMinutes: Number.parseInt(businessSlotDurationMinutes, 10),
     workingHoursSecondWindow: businessWorkingHoursSecondWindow,
     workingDays: businessWorkingDays,
@@ -3519,18 +3562,10 @@ export function AdminQuestionWorkspace({
   const businessSecondTimeRange = businessWorkingHoursSecondWindow.trim()
     ? parseBusinessTimeRange(businessWorkingHoursSecondWindow)
     : null;
-  const hasBusinessSetupDraft = Boolean(
-    brandingInstituteName.trim() &&
-    selectedBusinessDayKeys.length &&
-    businessWorkingHours.trim() &&
-    businessAppointmentsPerSlot.trim(),
-  );
-  const businessAppointmentUrl = workspaceBranding?.appointmentShareCode
-    ? getApportionAccessUrl(workspaceBranding.appointmentShareCode)
+  const activeAppointmentShareCode = businessAppointmentShareCode ?? workspaceBranding?.appointmentShareCode ?? null;
+  const businessAppointmentUrl = activeAppointmentShareCode
+    ? getApportionAccessUrl(activeAppointmentShareCode)
     : "";
-  const businessAppointmentDisplayUrl = businessAppointmentUrl
-    ? businessAppointmentUrl.replace(/^https?:\/\//i, "")
-    : "trapit.in/b/mybusiness";
   const filteredManagedUsers = categoryManagement?.managedUsers.filter((user) => {
     const query = categorySearchQuery.trim().toLowerCase();
     const normalizedQueryCandidates = Array.from(getParticipantIdentifierCandidates(query));
@@ -4004,7 +4039,10 @@ export function AdminQuestionWorkspace({
                         <option value="15">15 mins</option>
                         <option value="30">30 mins</option>
                         <option value="45">45 mins</option>
-                        <option value="60">60 mins</option>
+                        <option value="60">1 hr</option>
+                        <option value="120">2 hrs</option>
+                        <option value="180">3 hrs</option>
+                        <option value="240">4 hrs</option>
                       </select>
                       <label htmlFor="business-advance-booking">Allowed advance booking</label>
                       <select
@@ -4021,6 +4059,28 @@ export function AdminQuestionWorkspace({
                         <option value="3">3 weeks</option>
                         <option value="4">4 weeks</option>
                       </select>
+                      <label htmlFor="business-notes-prompt">Notes explanation text</label>
+                      <input
+                        id="business-notes-prompt"
+                        placeholder={DEFAULT_APPOINTMENT_NOTES_PROMPT}
+                        value={businessAppointmentNotesPrompt}
+                        onChange={(event) => {
+                          markBrandingDraftDirty();
+                          setBusinessAppointmentNotesPrompt(event.target.value);
+                        }}
+                      />
+                      <label className="checkbox-row" htmlFor="business-show-remaining-bookings">
+                        <input
+                          checked={businessShowRemainingBookings}
+                          id="business-show-remaining-bookings"
+                          type="checkbox"
+                          onChange={(event) => {
+                            markBrandingDraftDirty();
+                            setBusinessShowRemainingBookings(event.target.checked);
+                          }}
+                        />
+                        <span>Show users remaining bookings per slot</span>
+                      </label>
                     </div>
                     <div className="field business-field-card">
                       <span className="field-label">Logo or business image</span>
@@ -4065,44 +4125,6 @@ export function AdminQuestionWorkspace({
                         </div>
                       </div>
                     </div>
-                    {workspaceBranding?.appointmentShareCode ? (
-                      <div className="business-share-card is-unlocked">
-                        <div className="business-share-copy">
-                          <span>Booking Link & QR</span>
-                          <strong>{businessAppointmentDisplayUrl}</strong>
-                        </div>
-                        <div className="inline-actions">
-                          <button
-                            className="button-secondary small-button"
-                            type="button"
-                            onClick={() => void handleCopyLink("business-apportion", businessAppointmentUrl)}
-                          >
-                            {copiedLinkKey === "business-apportion" ? "Copied" : "Copy link"}
-                          </button>
-                          <a className="button-secondary small-button" href={businessAppointmentUrl} target="_blank" rel="noreferrer">
-                            Open page
-                          </a>
-                        </div>
-                        <div className="business-qr-preview">
-                          {businessAppointmentQrCode ? (
-                            <img alt="QR code for appointment booking" height={132} src={businessAppointmentQrCode} width={132} />
-                          ) : null}
-                          {businessAppointmentQrCode ? (
-                            <a className="button-secondary small-button" download="trapit-apportion-qr.png" href={businessAppointmentQrCode}>
-                              Download QR
-                            </a>
-                          ) : null}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className={`business-share-card is-locked${hasBusinessSetupDraft ? " is-ready" : ""}`}>
-                        <div className="business-share-copy">
-                          <span>Booking Link & QR</span>
-                          <strong>{hasBusinessSetupDraft ? businessAppointmentDisplayUrl : "Complete setup"}</strong>
-                        </div>
-                        <div className="business-locked-qr" aria-hidden="true" />
-                      </div>
-                    )}
                     {brandingFeedback ? <p className="muted-text">{brandingFeedback}</p> : null}
                     <div className="inline-actions">
                       <button className="button" disabled={isMutating} type="button" onClick={() => void handleSaveBranding()}>
@@ -4110,7 +4132,7 @@ export function AdminQuestionWorkspace({
                       </button>
                       <button
                         className="button-secondary"
-                        disabled={isMutating || (!brandingInstituteName.trim() && !brandingImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && !businessAppointmentsPerSlot.trim() && !businessSlotDurationMinutes.trim())}
+                        disabled={isMutating || (!brandingInstituteName.trim() && !brandingImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && !businessAppointmentsPerSlot.trim() && !businessSlotDurationMinutes.trim() && businessAppointmentNotesPrompt.trim() === DEFAULT_APPOINTMENT_NOTES_PROMPT && !businessShowRemainingBookings)}
                         type="button"
                         onClick={() => void handleClearBranding()}
                       >
@@ -4164,29 +4186,15 @@ export function AdminQuestionWorkspace({
                   <h2 className="section-title">Appointments</h2>
                   <p className="muted-text">Track appointments you requested and appointments booked with your business.</p>
                 </div>
-                {workspaceBranding?.appointmentShareCode ? (
-                  <button
-                    className="button-secondary small-button"
-                    type="button"
-                    onClick={() => void handleCopyLink("apportion-section", getApportionAccessUrl(workspaceBranding.appointmentShareCode ?? ""))}
-                  >
-                    {copiedLinkKey === "apportion-section" ? "Copied" : "Copy booking link"}
-                  </button>
-                ) : null}
               </div>
 
               <div className="stack-grid two-column-grid">
                 <article className="question-card nested-card">
-                  <button
-                    aria-expanded={openApportionList === "appointments"}
-                    className="question-head apportion-list-toggle"
-                    type="button"
-                    onClick={() => setOpenApportionList("appointments")}
-                  >
+                  <div className="question-head">
                     <strong>My appointments</strong>
                     <span className="status-chip">{requesterApportionAppointments.length}</span>
-                  </button>
-                  {openApportionList === "appointments" && requesterApportionAppointments.length ? (
+                  </div>
+                  {requesterApportionAppointments.length ? (
                     <div className="notification-panel-list">
                       {requesterApportionAppointments.map((appointment) => (
                         <div className="notification-panel-item" key={appointment.id}>
@@ -4197,43 +4205,59 @@ export function AdminQuestionWorkspace({
                               <span>{formatShortDateTime(appointment.startsAt)}</span>
                             </p>
                             <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes ?? "None"}</p>
+                            <button className="button-secondary small-button" type="button" onClick={() => void handleCancelApportionAppointment(appointment.id)}>
+                              Cancel appointment
+                            </button>
                           </div>
                         </div>
                       ))}
                     </div>
-                  ) : openApportionList === "appointments" ? (
+                  ) : (
                     <p className="muted-text">No appointments booked yet.</p>
-                  ) : null}
+                  )}
                 </article>
 
                 <article className="question-card nested-card">
-                  <button
-                    aria-expanded={openApportionList === "business"}
-                    className="question-head apportion-list-toggle"
-                    type="button"
-                    onClick={() => setOpenApportionList("business")}
-                  >
+                  <div className="question-head">
                     <strong>My Business</strong>
                     <span className="status-chip">{ownerApportionAppointments.length}</span>
-                  </button>
-                  {openApportionList === "business" && ownerApportionAppointments.length ? (
+                  </div>
+                  {businessAppointmentUrl ? (
+                    <div className="apportion-link-actions" aria-label="Business booking link actions">
+                      <button className="button-secondary small-button" type="button" onClick={() => void handleCopyLink("apportion-section", businessAppointmentUrl)}>
+                        {copiedLinkKey === "apportion-section" ? "Copied" : "Copy link"}
+                      </button>
+                      <a className="button-secondary small-button" href={businessAppointmentUrl} target="_blank" rel="noreferrer">
+                        Open page
+                      </a>
+                      {businessAppointmentQrCode ? (
+                        <a className="button-secondary small-button" download="trapit-apportion-qr.png" href={businessAppointmentQrCode}>
+                          Download QR code
+                        </a>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {ownerApportionAppointments.length ? (
                     <div className="notification-panel-list">
                       {ownerApportionAppointments.map((appointment) => (
                         <div className="notification-panel-item" key={appointment.id}>
                           <div className="apportion-appointment-summary">
                             <p className="apportion-appointment-line">
                               <strong>{appointment.requesterName}</strong>
-                              <span>{formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier)}</span>
+                              <span>{formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier, { showFullPhoneNumber: true })}</span>
                               <span>{formatShortDateTime(appointment.startsAt)}</span>
                             </p>
                             <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes ?? "None"}</p>
+                            <button className="button-secondary small-button" type="button" onClick={() => void handleCancelApportionAppointment(appointment.id)}>
+                              Cancel appointment
+                            </button>
                           </div>
                         </div>
                       ))}
                     </div>
-                  ) : openApportionList === "business" ? (
+                  ) : (
                     <p className="muted-text">No users have booked appointments with your business yet.</p>
-                  ) : null}
+                  )}
                 </article>
               </div>
             </section>

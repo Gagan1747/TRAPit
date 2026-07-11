@@ -203,6 +203,27 @@ function normalizeWorkspaceBrandingByActor(
   );
 }
 
+function normalizeWorkspaceAppointmentShareCodesByActor(
+  shareCodesByActor: Record<string, string | null | undefined> | null | undefined,
+) {
+  if (!shareCodesByActor) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(shareCodesByActor)
+      .map(([actorKey, shareCode]) => {
+        const normalizedActorKey = normalizeBrandingActorKey(actorKey);
+        const normalizedShareCode = shareCode?.trim() ?? "";
+
+        return normalizedActorKey && normalizedShareCode
+          ? [normalizedActorKey, normalizedShareCode]
+          : null;
+      })
+      .filter((entry): entry is [string, string] => entry !== null),
+  );
+}
+
 function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspaceState {
   return {
     attempts: parsed.attempts ?? [],
@@ -280,9 +301,37 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       shareCode: test.shareCode?.trim() || null,
       title: test.title?.trim() || "Scheduled test",
     })),
+    workspaceAppointmentShareCodesByActor: normalizeWorkspaceAppointmentShareCodesByActor(parsed.workspaceAppointmentShareCodesByActor),
     workspaceBranding: normalizeWorkspaceBranding(parsed.workspaceBranding),
     workspaceBrandingByActor: normalizeWorkspaceBrandingByActor(parsed.workspaceBrandingByActor),
   };
+}
+
+export async function getOrCreateWorkspaceAppointmentShareCode(actorKey?: string | null) {
+  const state = await readStore();
+  const normalizedActorKey = normalizeBrandingActorKey(actorKey);
+
+  if (!normalizedActorKey) {
+    return null;
+  }
+
+  const existingShareCode = state.workspaceAppointmentShareCodesByActor[normalizedActorKey]
+    ?? state.workspaceBrandingByActor[normalizedActorKey]?.appointmentShareCode
+    ?? null;
+  const shareCode = existingShareCode ?? `TRAPIT-APPT-${createEntityId("access").replace(/-/g, "").toUpperCase()}`;
+
+  state.workspaceAppointmentShareCodesByActor[normalizedActorKey] = shareCode;
+
+  if (state.workspaceBrandingByActor[normalizedActorKey]?.appointmentShareCode !== shareCode) {
+    state.workspaceBrandingByActor[normalizedActorKey] = {
+      ...state.workspaceBrandingByActor[normalizedActorKey],
+      appointmentShareCode: shareCode,
+    };
+  }
+
+  await writeStore(state);
+
+  return shareCode;
 }
 
 export async function getWorkspaceBranding(actorKey?: string | null) {
@@ -306,12 +355,18 @@ export async function updateWorkspaceBranding(
   const existingBranding = normalizedActorKey
     ? state.workspaceBrandingByActor[normalizedActorKey] ?? null
     : state.workspaceBranding;
+  const ownerShareCode = normalizedActorKey
+    ? state.workspaceAppointmentShareCodesByActor[normalizedActorKey]
+      ?? existingBranding?.appointmentShareCode
+      ?? `TRAPIT-APPT-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
+    : null;
+  if (normalizedActorKey && ownerShareCode) {
+    state.workspaceAppointmentShareCodesByActor[normalizedActorKey] = ownerShareCode;
+  }
   const brandingWithShareCode = normalizedBranding
     ? {
         ...normalizedBranding,
-        appointmentShareCode: normalizedBranding.appointmentShareCode
-          ?? existingBranding?.appointmentShareCode
-          ?? `TRAPIT-APPT-${createEntityId("access").replace(/-/g, "").toUpperCase()}`,
+        appointmentShareCode: normalizedBranding.appointmentShareCode ?? ownerShareCode ?? existingBranding?.appointmentShareCode ?? null,
       }
     : null;
 
@@ -344,11 +399,20 @@ export async function getWorkspaceBrandingByAppointmentShareCode(shareCode: stri
     branding.appointmentShareCode?.trim().toLowerCase() === normalizedShareCode,
   );
 
-  if (!entry) {
+  const mappedEntry = Object.entries(state.workspaceAppointmentShareCodesByActor).find(([, shareCode]) =>
+    shareCode.trim().toLowerCase() === normalizedShareCode,
+  );
+
+  if (!entry && !mappedEntry) {
     return null;
   }
 
-  const [ownerIdentifier, branding] = entry;
+  const ownerIdentifier = mappedEntry?.[0] ?? entry?.[0] ?? "";
+  const branding = state.workspaceBrandingByActor[ownerIdentifier] ?? entry?.[1] ?? null;
+
+  if (!branding) {
+    return null;
+  }
 
   return {
     branding,

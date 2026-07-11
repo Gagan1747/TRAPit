@@ -8,9 +8,11 @@ const WEEKDAY_SHORT_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 type BookingPayload = {
   business: {
     advanceBookingWeeks: number;
+    appointmentNotesPrompt: string;
     appointmentsPerSlot: number;
     imageDataUrl: string | null;
     name: string;
+    showRemainingBookings: boolean;
     slotDurationMinutes: number | null;
     workingDays: string;
     workingHours: string;
@@ -307,7 +309,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     .filter((range): range is { endMinutes: number; startMinutes: number } => Boolean(range));
   const effectiveWorkingRanges = workingRanges.length ? workingRanges : [{ endMinutes: 18 * 60, startMinutes: 10 * 60 }];
   const slotDurationMinutes = payload.business.slotDurationMinutes ?? 30;
-  const slotStepMinutes = slotDurationMinutes === 60 ? 30 : 15;
+  const slotStepMinutes = slotDurationMinutes >= 60 ? 30 : 15;
   const slotCountsByIso = Object.fromEntries(payload.slotCounts.map((slot) => [slot.startsAt, slot.count]));
   const maxBookableDate = new Date(today);
   maxBookableDate.setDate(today.getDate() + (payload.business.advanceBookingWeeks * 7) - 1);
@@ -320,12 +322,15 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     const startsAt = createSlotIso(selectedDateKey, minutes);
     const slotDate = new Date(startsAt);
     const isPast = slotDate.getTime() <= Date.now();
-    const isFull = (slotCountsByIso[startsAt] ?? 0) >= payload.business.appointmentsPerSlot;
+    const bookedCount = slotCountsByIso[startsAt] ?? 0;
+    const remainingCount = Math.max(0, payload.business.appointmentsPerSlot - bookedCount);
+    const isFull = bookedCount >= payload.business.appointmentsPerSlot;
 
     return {
       isAvailable: !isPast && !isFull,
       label: formatTime(minutes),
       minutes,
+      remainingCount,
       startsAt,
     };
   });
@@ -403,17 +408,19 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                 <option value="">Select a time</option>
                 {availableSlots.map((slot) => (
                   <option disabled={!slot.isAvailable} key={slot.startsAt} value={slot.startsAt}>
-                    {slot.label} - {slot.isAvailable ? "Available" : "Unavailable"}
+                    {slot.label} - {slot.isAvailable ? `Available${payload.business.showRemainingBookings ? ` (${slot.remainingCount} left)` : ""}` : "Unavailable"}
                   </option>
                 ))}
               </select>
-              <p className="muted-text">{selectedSlot ? `${selectedSlot.label} selected` : "Filled slots are greyed out in the list."}</p>
+              <p className="muted-text">{selectedSlot ? `${selectedSlot.label} selected${payload.business.showRemainingBookings ? `, ${selectedSlot.remainingCount} booking${selectedSlot.remainingCount === 1 ? "" : "s"} left` : ""}` : "Filled slots are greyed out in the list."}</p>
             </div>
             <div className="field">
-              <label htmlFor="apportion-notes">Notes</label>
+              <div className="apportion-notes-label-row">
+                <label htmlFor="apportion-notes">Notes</label>
+                <span>{payload.business.appointmentNotesPrompt || "Share a brief about appointment purpose"}</span>
+              </div>
               <textarea
                 id="apportion-notes"
-                placeholder="Share a brief about appointment purpose"
                 rows={3}
                 value={notes}
                 onChange={(event) => setNotes(event.target.value)}
