@@ -394,21 +394,39 @@ type BrandingResponse = {
 type ApportionAppointment = {
   canceledAt: string | null;
   canceledByIdentifier: string | null;
+  bookedQueuePosition: number;
   createdAt: string;
+  currentStatus: "cancelled" | "done" | "pending" | "present-in-person" | "pushed-back" | "rejected";
+  history: Array<{
+    action: "booked" | "cancelled" | "done" | "present-in-person" | "pushed-back" | "rejected" | "rescheduled";
+    actorIdentifier: string;
+    at: string;
+    fromStartsAt: string | null;
+    note: string | null;
+    toStartsAt: string | null;
+  }>;
   id: string;
+  justAddToList: boolean;
   notes: string | null;
   ownerIdentifier: string;
   ownerName: string | null;
+  presentInPersonAt: string | null;
+  queueOrder: number;
   requesterIdentifier: string;
   requesterName: string;
   requesterPhone: string | null;
+  serviceDateKey: string;
+  statusUpdatedAt: string;
   startsAt: string;
 };
 
 type ApportionDashboardResponse = {
   appointmentShareCode: string | null;
+  appointments: ApportionAppointment[];
+  nextInPersonAppointment?: ApportionAppointment | null;
   ownerAppointments: ApportionAppointment[];
   requesterAppointments: ApportionAppointment[];
+  updatedAppointment?: ApportionAppointment;
 };
 
 type TestQuestionReportSummary = {
@@ -540,6 +558,7 @@ type UpgradePrompt = {
 
 function createEmptyBranding(): WorkspaceBranding {
   return {
+    address: "",
     advanceBookingWeeks: null,
     appointmentShareCode: null,
     appointmentNotesPrompt: DEFAULT_APPOINTMENT_NOTES_PROMPT,
@@ -547,6 +566,8 @@ function createEmptyBranding(): WorkspaceBranding {
     breakHours: "",
     imageDataUrl: null,
     instituteName: "",
+    justAddToList: false,
+    profileImageDataUrl: null,
     showRemainingBookings: false,
     slotDurationMinutes: null,
     workingHoursSecondWindow: "",
@@ -557,13 +578,16 @@ function createEmptyBranding(): WorkspaceBranding {
 
 function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBranding | null {
   const instituteName = branding?.instituteName.trim() ?? "";
+  const address = branding?.address.trim() ?? "";
   const imageDataUrl = branding?.imageDataUrl?.trim() ?? null;
+  const profileImageDataUrl = branding?.profileImageDataUrl?.trim() ?? null;
   const advanceBookingWeeks = [1, 2, 3, 4].includes(branding?.advanceBookingWeeks ?? 0)
     ? branding?.advanceBookingWeeks ?? null
     : null;
   const appointmentShareCode = branding?.appointmentShareCode?.trim() || null;
   const appointmentNotesPrompt = branding?.appointmentNotesPrompt?.trim() || DEFAULT_APPOINTMENT_NOTES_PROMPT;
   const breakHours = branding?.breakHours.trim() ?? "";
+  const justAddToList = branding?.justAddToList === true;
   const workingDays = branding?.workingDays.trim() ?? "";
   const workingHours = branding?.workingHours.trim() ?? "";
   const workingHoursSecondWindow = branding?.workingHoursSecondWindow.trim() ?? "";
@@ -575,11 +599,12 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
     ? branding?.slotDurationMinutes ?? null
     : null;
 
-  if (!instituteName && !imageDataUrl && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null) {
+  if (!instituteName && !address && !imageDataUrl && !profileImageDataUrl && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null && !justAddToList) {
     return null;
   }
 
   return {
+    address,
     advanceBookingWeeks,
     appointmentShareCode,
     appointmentNotesPrompt,
@@ -587,12 +612,53 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
     breakHours,
     imageDataUrl,
     instituteName,
+    justAddToList,
+    profileImageDataUrl,
     showRemainingBookings,
     slotDurationMinutes,
     workingHoursSecondWindow,
     workingDays,
     workingHours,
   };
+}
+
+function normalizeApportionIdentifier(value: string | null | undefined) {
+  return value?.trim().toLowerCase().replace(/[\s()-]/g, "") ?? "";
+}
+
+function isActiveApportionStatus(status: ApportionAppointment["currentStatus"]) {
+  return status === "pending" || status === "present-in-person" || status === "pushed-back";
+}
+
+function getApportionStatusLabel(status: ApportionAppointment["currentStatus"]) {
+  switch (status) {
+    case "present-in-person":
+      return "Present in person";
+    case "done":
+      return "Done";
+    case "pushed-back":
+      return "You are late";
+    case "rejected":
+      return "Rejected";
+    case "cancelled":
+      return "Cancelled";
+    default:
+      return "Pending";
+  }
+}
+
+function getLatestApportionActivitySummary(appointment: ApportionAppointment) {
+  const latestEntry = appointment.history[appointment.history.length - 1] ?? null;
+
+  if (!latestEntry) {
+    return null;
+  }
+
+  if (latestEntry.action === "rescheduled" && latestEntry.fromStartsAt && latestEntry.toStartsAt) {
+    return `Rescheduled from ${formatShortDateTime(latestEntry.fromStartsAt)} to ${formatShortDateTime(latestEntry.toStartsAt)}`;
+  }
+
+  return `${getApportionStatusLabel(appointment.currentStatus)} on ${formatShortDateTime(latestEntry.at)}`;
 }
 
 async function fileToDataUrl(file: File) {
@@ -1113,14 +1179,17 @@ export function AdminQuestionWorkspace({
   const [history, setHistory] = useState<TestHistoryEntry[]>([]);
   const [ownerApportionAppointments, setOwnerApportionAppointments] = useState<ApportionAppointment[]>([]);
   const [brandingFeedback, setBrandingFeedback] = useState<string | null>(null);
+  const [brandingAddress, setBrandingAddress] = useState("");
   const [brandingImageDataUrl, setBrandingImageDataUrl] = useState<string | null>(null);
   const [brandingInstituteName, setBrandingInstituteName] = useState("");
+  const [brandingProfileImageDataUrl, setBrandingProfileImageDataUrl] = useState<string | null>(null);
   const [isBrandingDragActive, setIsBrandingDragActive] = useState(false);
   const [businessAdvanceBookingWeeks, setBusinessAdvanceBookingWeeks] = useState("4");
   const [businessAppointmentQrCode, setBusinessAppointmentQrCode] = useState<string | null>(null);
   const [businessAppointmentShareCode, setBusinessAppointmentShareCode] = useState<string | null>(null);
   const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("");
   const [businessAppointmentNotesPrompt, setBusinessAppointmentNotesPrompt] = useState(DEFAULT_APPOINTMENT_NOTES_PROMPT);
+  const [businessJustAddToList, setBusinessJustAddToList] = useState(false);
   const [businessShowRemainingBookings, setBusinessShowRemainingBookings] = useState(false);
   const [businessSlotDurationMinutes, setBusinessSlotDurationMinutes] = useState("");
   const [businessWorkingDays, setBusinessWorkingDays] = useState("");
@@ -1157,6 +1226,8 @@ export function AdminQuestionWorkspace({
   const [participantStartedAt, setParticipantStartedAt] = useState<string | null>(null);
   const [participantGroups, setParticipantGroups] = useState<ParticipantGroup[]>([]);
   const [participants, setParticipants] = useState<ParticipantProfile[]>([]);
+  const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
+  const [rescheduleDateTimeInput, setRescheduleDateTimeInput] = useState("");
   const [pollFeedback, setPollFeedback] = useState<string | null>(null);
   const [pollImportFeedback, setPollImportFeedback] = useState<string | null>(null);
   const [pollImportPreview, setPollImportPreview] = useState<PollBulkImportPreview | null>(null);
@@ -1225,16 +1296,20 @@ export function AdminQuestionWorkspace({
   const participantAnswersRef = useRef<Record<string, number | undefined>>({});
   const participantIsSubmittingRef = useRef(false);
   const brandingFileInputRef = useRef<HTMLInputElement | null>(null);
+  const brandingProfileFileInputRef = useRef<HTMLInputElement | null>(null);
   const isBrandingDraftDirtyRef = useRef(false);
   const copiedLinkTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toolbarMenuRef = useRef<HTMLDivElement | null>(null);
 
   function syncBrandingDraft(branding: WorkspaceBranding | null) {
+    setBrandingAddress(branding?.address ?? "");
     setBrandingInstituteName(branding?.instituteName ?? "");
     setBrandingImageDataUrl(branding?.imageDataUrl ?? null);
+    setBrandingProfileImageDataUrl(branding?.profileImageDataUrl ?? null);
     setBusinessAdvanceBookingWeeks(branding?.advanceBookingWeeks ? String(branding.advanceBookingWeeks) : "4");
     setBusinessAppointmentsPerSlot(branding?.appointmentsPerSlot ? String(branding.appointmentsPerSlot) : "");
     setBusinessAppointmentNotesPrompt(branding?.appointmentNotesPrompt ?? DEFAULT_APPOINTMENT_NOTES_PROMPT);
+    setBusinessJustAddToList(branding?.justAddToList === true);
     setBusinessShowRemainingBookings(branding?.showRemainingBookings === true);
     setBusinessSlotDurationMinutes(branding?.slotDurationMinutes ? String(branding.slotDurationMinutes) : "");
     setBusinessWorkingDays(branding?.workingDays ?? "");
@@ -1543,6 +1618,10 @@ export function AdminQuestionWorkspace({
   }
 
   async function handleCancelApportionAppointment(appointmentId: string) {
+    if (!window.confirm("Cancel this appointment? It will stay visible in the appointment log.")) {
+      return;
+    }
+
     setFeedback(null);
 
     try {
@@ -1557,10 +1636,84 @@ export function AdminQuestionWorkspace({
       setBusinessAppointmentShareCode(payload.appointmentShareCode ?? businessAppointmentShareCode);
       setOwnerApportionAppointments(payload.ownerAppointments);
       setRequesterApportionAppointments(payload.requesterAppointments);
+      if (rescheduleAppointmentId === appointmentId) {
+        setRescheduleAppointmentId(null);
+        setRescheduleDateTimeInput("");
+      }
       setFeedback("Appointment cancelled.");
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to cancel appointment.");
     }
+  }
+
+  async function handleApportionAction(
+    appointmentId: string,
+    action: "done" | "present-in-person" | "push-back" | "reject" | "reschedule",
+    options?: { nextStartsAt?: string; requiresConfirmation?: boolean },
+  ) {
+    if (options?.requiresConfirmation && !window.confirm(action === "reject"
+      ? "Reject this appointment? It will remain in the appointment log."
+      : "Proceed with this appointment update?")) {
+      return;
+    }
+
+    setFeedback(null);
+
+    try {
+      const payload = await readJson<ApportionDashboardResponse>(
+        await fetch("/api/user/apportion", {
+          body: JSON.stringify({
+            action,
+            appointmentId,
+            nextStartsAt: options?.nextStartsAt,
+          }),
+          headers: { "Content-Type": "application/json" },
+          method: "PATCH",
+        }),
+      );
+
+      setBusinessAppointmentShareCode(payload.appointmentShareCode ?? businessAppointmentShareCode);
+      setOwnerApportionAppointments(payload.ownerAppointments);
+      setRequesterApportionAppointments(payload.requesterAppointments);
+      if (action === "reschedule") {
+        setRescheduleAppointmentId(null);
+        setRescheduleDateTimeInput("");
+      }
+      setFeedback(payload.nextInPersonAppointment
+        ? `${action === "done" ? "Appointment completed." : "Appointment updated."} Next present user: ${payload.nextInPersonAppointment.requesterName}.`
+        : action === "reschedule"
+          ? "Appointment rescheduled."
+          : "Appointment updated.");
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to update appointment.");
+    }
+  }
+
+  function beginRescheduleApportionAppointment(appointment: ApportionAppointment) {
+    setRescheduleAppointmentId(appointment.id);
+    setRescheduleDateTimeInput(toDateTimeInputValue(appointment.startsAt));
+    setFeedback(null);
+  }
+
+  function cancelRescheduleApportionAppointment() {
+    setRescheduleAppointmentId(null);
+    setRescheduleDateTimeInput("");
+  }
+
+  async function submitRescheduleApportionAppointment(appointment: ApportionAppointment) {
+    if (!rescheduleDateTimeInput.trim()) {
+      setFeedback("Choose a new appointment date and time.");
+      return;
+    }
+
+    const nextDate = new Date(rescheduleDateTimeInput);
+
+    if (Number.isNaN(nextDate.getTime()) || nextDate.getTime() <= Date.now()) {
+      setFeedback("Enter a valid future appointment date and time.");
+      return;
+    }
+
+    await handleApportionAction(appointment.id, "reschedule", { nextStartsAt: nextDate.toISOString() });
   }
 
   function resetPollScheduleForm() {
@@ -2611,6 +2764,21 @@ export function AdminQuestionWorkspace({
     }
   }
 
+  async function handleBrandingProfileFileSelection(file: File | null) {
+    if (!file) {
+      return;
+    }
+
+    try {
+      const imageDataUrl = await fileToDataUrl(file);
+      markBrandingDraftDirty();
+      setBrandingProfileImageDataUrl(imageDataUrl);
+      setBrandingFeedback(null);
+    } catch (error) {
+      setBrandingFeedback(error instanceof Error ? error.message : "Unable to read the selected profile image.");
+    }
+  }
+
   function handlePreviewPollImport() {
     if (!pollImportText.trim()) {
       setPollImportFeedback("Paste OCR text before previewing the poll import.");
@@ -2900,6 +3068,7 @@ export function AdminQuestionWorkspace({
     }
 
     const nextBranding = normalizeBrandingInput({
+      address: brandingAddress,
       advanceBookingWeeks,
       appointmentNotesPrompt: businessAppointmentNotesPrompt,
       appointmentShareCode: businessAppointmentShareCode ?? workspaceBranding?.appointmentShareCode ?? null,
@@ -2907,6 +3076,8 @@ export function AdminQuestionWorkspace({
       breakHours: "",
       imageDataUrl: brandingImageDataUrl,
       instituteName: brandingInstituteName,
+      justAddToList: businessJustAddToList,
+      profileImageDataUrl: brandingProfileImageDataUrl,
       showRemainingBookings: businessShowRemainingBookings,
       slotDurationMinutes,
       workingHoursSecondWindow: businessWorkingHoursSecondWindow,
@@ -2988,11 +3159,14 @@ export function AdminQuestionWorkspace({
 
   async function handleClearBranding() {
     isBrandingDraftDirtyRef.current = false;
+    setBrandingAddress("");
     setBrandingInstituteName("");
     setBrandingImageDataUrl(null);
+    setBrandingProfileImageDataUrl(null);
     setBusinessAdvanceBookingWeeks("4");
     setBusinessAppointmentsPerSlot("");
     setBusinessAppointmentNotesPrompt(DEFAULT_APPOINTMENT_NOTES_PROMPT);
+    setBusinessJustAddToList(false);
     setBusinessShowRemainingBookings(false);
     setBusinessSlotDurationMinutes("");
     setBusinessWorkingDays("");
@@ -3552,6 +3726,7 @@ export function AdminQuestionWorkspace({
   const pollToggleLiveCount = filteredMergedPolls.filter((poll) => poll.status === "live").length;
   const pollToggleUpcomingCount = filteredMergedPolls.filter((poll) => poll.status === "scheduled").length;
   const brandingPreview = normalizeBrandingInput({
+    address: brandingAddress,
     advanceBookingWeeks: Number.parseInt(businessAdvanceBookingWeeks, 10),
     appointmentNotesPrompt: businessAppointmentNotesPrompt,
     appointmentShareCode: businessAppointmentShareCode ?? workspaceBranding?.appointmentShareCode ?? null,
@@ -3559,6 +3734,8 @@ export function AdminQuestionWorkspace({
     breakHours: "",
     imageDataUrl: brandingImageDataUrl,
     instituteName: brandingInstituteName,
+    justAddToList: businessJustAddToList,
+    profileImageDataUrl: brandingProfileImageDataUrl,
     showRemainingBookings: businessShowRemainingBookings,
     slotDurationMinutes: Number.parseInt(businessSlotDurationMinutes, 10),
     workingHoursSecondWindow: businessWorkingHoursSecondWindow,
@@ -3574,6 +3751,41 @@ export function AdminQuestionWorkspace({
   const businessAppointmentUrl = activeAppointmentShareCode
     ? getApportionAccessUrl(activeAppointmentShareCode)
     : "";
+  const combinedApportionAppointments = [...ownerApportionAppointments, ...requesterApportionAppointments]
+    .reduce<Array<ApportionAppointment & { scope: "owner" | "requester"; serialLabel: string }>>((entries, appointment) => {
+      if (entries.some((entry) => entry.id === appointment.id)) {
+        return entries;
+      }
+
+      const sameDayAppointments = ownerApportionAppointments
+        .filter((entry) => entry.ownerIdentifier === appointment.ownerIdentifier)
+        .filter((entry) => entry.serviceDateKey === appointment.serviceDateKey)
+        .filter((entry) => isActiveApportionStatus(entry.currentStatus))
+        .sort((left, right) => left.queueOrder - right.queueOrder);
+      const inPersonAppointments = sameDayAppointments.filter((entry) => entry.currentStatus === "present-in-person");
+      const y = sameDayAppointments.findIndex((entry) => entry.id === appointment.id);
+      const x = inPersonAppointments.findIndex((entry) => entry.id === appointment.id);
+      const scope = normalizeApportionIdentifier(appointment.ownerIdentifier) === normalizeApportionIdentifier(currentAdminIdentifier)
+        ? "owner"
+        : "requester";
+
+      entries.push({
+        ...appointment,
+        scope,
+        serialLabel: `${x >= 0 ? x + 1 : "-"}/${y >= 0 ? y + 1 : "-"}/${appointment.bookedQueuePosition}`,
+      });
+      return entries;
+    }, [])
+    .sort((left, right) => {
+      const leftActive = isActiveApportionStatus(left.currentStatus);
+      const rightActive = isActiveApportionStatus(right.currentStatus);
+
+      if (leftActive !== rightActive) {
+        return leftActive ? -1 : 1;
+      }
+
+      return new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime();
+    });
   const filteredManagedUsers = categoryManagement?.managedUsers.filter((user) => {
     const query = categorySearchQuery.trim().toLowerCase();
     const normalizedQueryCandidates = Array.from(getParticipantIdentifierCandidates(query));
@@ -3914,6 +4126,21 @@ export function AdminQuestionWorkspace({
                     <p className="eyebrow">Business</p>
                   </div>
                   <h2 className="section-title">Business details</h2>
+                  {businessAppointmentUrl ? (
+                    <div className="apportion-link-actions" aria-label="Business booking link actions">
+                      <button className="button-secondary small-button icon-button" title="Copy booking link" type="button" onClick={() => void handleCopyLink("business-panel", businessAppointmentUrl)}>
+                        {copiedLinkKey === "business-panel" ? "OK" : "⧉"}
+                      </button>
+                      <a className="button-secondary small-button icon-button" href={businessAppointmentUrl} rel="noreferrer" target="_blank" title="Open booking page">
+                        ↗
+                      </a>
+                      {businessAppointmentQrCode ? (
+                        <a className="button-secondary small-button icon-button" download="trapit-apportion-qr.png" href={businessAppointmentQrCode} title="Download QR code">
+                          ▦
+                        </a>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <div className="form-stack business-details-form">
                     <div className="field business-field-card">
                       <label htmlFor="branding-institute-name">Business name</label>
@@ -3924,6 +4151,17 @@ export function AdminQuestionWorkspace({
                         onChange={(event) => {
                           markBrandingDraftDirty();
                           setBrandingInstituteName(event.target.value);
+                        }}
+                      />
+                      <label htmlFor="branding-address">Address</label>
+                      <textarea
+                        id="branding-address"
+                        placeholder="Enter business address"
+                        rows={3}
+                        value={brandingAddress}
+                        onChange={(event) => {
+                          markBrandingDraftDirty();
+                          setBrandingAddress(event.target.value);
                         }}
                       />
                     </div>
@@ -4089,6 +4327,19 @@ export function AdminQuestionWorkspace({
                         />
                         <span>Show users remaining bookings per slot</span>
                       </label>
+                      <label className="checkbox-row" htmlFor="business-just-add-to-list">
+                        <input
+                          checked={businessJustAddToList}
+                          id="business-just-add-to-list"
+                          type="checkbox"
+                          onChange={(event) => {
+                            markBrandingDraftDirty();
+                            setBusinessJustAddToList(event.target.checked);
+                          }}
+                        />
+                        <span>Just add to the list</span>
+                      </label>
+                      <p className="muted-text">If opening and closing times are the same, the booking page treats the business as open for 24 hours starting from that time.</p>
                     </div>
                     <div className="field business-field-card">
                       <span className="field-label">Logo or business image</span>
@@ -4133,6 +4384,29 @@ export function AdminQuestionWorkspace({
                         </div>
                       </div>
                     </div>
+                    <div className="field business-field-card">
+                      <span className="field-label">Profile image</span>
+                      <div className="business-logo-row">
+                        <button className="button-secondary" type="button" onClick={() => brandingProfileFileInputRef.current?.click()}>
+                          Upload profile image
+                        </button>
+                        <input
+                          accept="image/*"
+                          className="sr-only"
+                          id="branding-profile-image"
+                          ref={brandingProfileFileInputRef}
+                          type="file"
+                          onChange={(event) => void handleBrandingProfileFileSelection(event.target.files?.[0] ?? null)}
+                        />
+                        <div className="business-logo-preview" aria-label="Profile preview">
+                          {brandingPreview?.profileImageDataUrl ? (
+                            <img alt="Profile preview" src={brandingPreview.profileImageDataUrl} />
+                          ) : (
+                            <span>Profile</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                     {brandingFeedback ? <p className="muted-text">{brandingFeedback}</p> : null}
                     <div className="inline-actions">
                       <button className="button" disabled={isMutating} type="button" onClick={() => void handleSaveBranding()}>
@@ -4140,7 +4414,7 @@ export function AdminQuestionWorkspace({
                       </button>
                       <button
                         className="button-secondary"
-                        disabled={isMutating || (!brandingInstituteName.trim() && !brandingImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && !businessAppointmentsPerSlot.trim() && !businessSlotDurationMinutes.trim() && businessAppointmentNotesPrompt.trim() === DEFAULT_APPOINTMENT_NOTES_PROMPT && !businessShowRemainingBookings)}
+                        disabled={isMutating || (!brandingInstituteName.trim() && !brandingAddress.trim() && !brandingImageDataUrl && !brandingProfileImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && !businessAppointmentsPerSlot.trim() && !businessSlotDurationMinutes.trim() && businessAppointmentNotesPrompt.trim() === DEFAULT_APPOINTMENT_NOTES_PROMPT && !businessShowRemainingBookings && !businessJustAddToList)}
                         type="button"
                         onClick={() => void handleClearBranding()}
                       >
@@ -4196,78 +4470,99 @@ export function AdminQuestionWorkspace({
                 </div>
               </div>
 
-              <div className="stack-grid two-column-grid">
-                <article className="question-card nested-card">
-                  <div className="question-head">
-                    <strong>My appointments</strong>
-                    <span className="status-chip">{requesterApportionAppointments.length}</span>
-                  </div>
-                  {requesterApportionAppointments.length ? (
-                    <div className="notification-panel-list">
-                      {requesterApportionAppointments.map((appointment) => (
-                        <div className="notification-panel-item" key={appointment.id}>
-                          <div className="apportion-appointment-summary">
-                            <p className="apportion-appointment-line">
-                              <strong>{appointment.ownerName ?? appointment.ownerIdentifier}</strong>
-                              <span>{formatPhoneNumberForDisplay(appointment.ownerIdentifier)}</span>
-                              <span>{formatShortDateTime(appointment.startsAt)}</span>
-                            </p>
-                            <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes ?? "None"}</p>
-                            <button className="button-secondary small-button" type="button" onClick={() => void handleCancelApportionAppointment(appointment.id)}>
-                              Cancel appointment
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="muted-text">No appointments booked yet.</p>
-                  )}
-                </article>
+              <article className="question-card nested-card">
+                <div className="question-head">
+                  <strong>Appointment log</strong>
+                  <span className="status-chip">{combinedApportionAppointments.length}</span>
+                </div>
+                {combinedApportionAppointments.length ? (
+                  <div className="notification-panel-list">
+                    {combinedApportionAppointments.map((appointment) => {
+                      const isOwnerScope = appointment.scope === "owner";
+                      const isFutureAppointment = new Date(appointment.startsAt).getTime() > Date.now();
+                      const isRescheduling = rescheduleAppointmentId === appointment.id;
 
-                <article className="question-card nested-card">
-                  <div className="question-head">
-                    <strong>My Business</strong>
-                    <span className="status-chip">{ownerApportionAppointments.length}</span>
-                  </div>
-                  {businessAppointmentUrl ? (
-                    <div className="apportion-link-actions" aria-label="Business booking link actions">
-                      <button className="button-secondary small-button" type="button" onClick={() => void handleCopyLink("apportion-section", businessAppointmentUrl)}>
-                        {copiedLinkKey === "apportion-section" ? "Copied" : "Copy link"}
-                      </button>
-                      <a className="button-secondary small-button" href={businessAppointmentUrl} target="_blank" rel="noreferrer">
-                        Open page
-                      </a>
-                      {businessAppointmentQrCode ? (
-                        <a className="button-secondary small-button" download="trapit-apportion-qr.png" href={businessAppointmentQrCode}>
-                          Download QR code
-                        </a>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {ownerApportionAppointments.length ? (
-                    <div className="notification-panel-list">
-                      {ownerApportionAppointments.map((appointment) => (
-                        <div className="notification-panel-item" key={appointment.id}>
+                      return (
+                        <div className={`notification-panel-item apportion-log-item ${isOwnerScope ? "is-owner-scope" : "is-requester-scope"}`} key={appointment.id}>
                           <div className="apportion-appointment-summary">
-                            <p className="apportion-appointment-line">
-                              <strong>{appointment.requesterName}</strong>
-                              <span>{formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier, { showFullPhoneNumber: true })}</span>
-                              <span>{formatShortDateTime(appointment.startsAt)}</span>
-                            </p>
-                            <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes ?? "None"}</p>
-                            <button className="button-secondary small-button" type="button" onClick={() => void handleCancelApportionAppointment(appointment.id)}>
-                              Cancel appointment
-                            </button>
+                            <div className="apportion-log-topline">
+                              <div>
+                                <p className="apportion-appointment-line">
+                                  <strong>{isOwnerScope ? appointment.requesterName : appointment.ownerName ?? appointment.ownerIdentifier}</strong>
+                                  <span>
+                                    {isOwnerScope
+                                      ? formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier, { showFullPhoneNumber: true })
+                                      : formatPhoneNumberForDisplay(appointment.ownerIdentifier, { showFullPhoneNumber: true })}
+                                  </span>
+                                  <span>{formatShortDateTime(appointment.startsAt)}</span>
+                                </p>
+                                <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes ?? "None"}</p>
+                              </div>
+                              <div className="apportion-log-badges">
+                                <span className={`status-chip apportion-status-chip is-${appointment.currentStatus}`}>{getApportionStatusLabel(appointment.currentStatus)}</span>
+                                <span className="status-chip apportion-serial-chip">{appointment.serialLabel}</span>
+                              </div>
+                            </div>
+                            {getLatestApportionActivitySummary(appointment) ? (
+                              <p className="muted-text apportion-appointment-notes">{getLatestApportionActivitySummary(appointment)}</p>
+                            ) : null}
+                            <div className="inline-actions apportion-log-actions">
+                              {isOwnerScope && isActiveApportionStatus(appointment.currentStatus) ? (
+                                <>
+                                  <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "present-in-person")}>
+                                    Present in person
+                                  </button>
+                                  <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "done")}>
+                                    Done
+                                  </button>
+                                  <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "push-back")}>
+                                    Push back
+                                  </button>
+                                  <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "reject", { requiresConfirmation: true })}>
+                                    Reject
+                                  </button>
+                                </>
+                              ) : null}
+                              {!isOwnerScope && isActiveApportionStatus(appointment.currentStatus) && isFutureAppointment ? (
+                                <>
+                                  <button className="button-secondary small-button" type="button" onClick={() => void handleCancelApportionAppointment(appointment.id)}>
+                                    Cancel
+                                  </button>
+                                  <button className="button-secondary small-button" type="button" onClick={() => beginRescheduleApportionAppointment(appointment)}>
+                                    Reschedule
+                                  </button>
+                                </>
+                              ) : null}
+                            </div>
+                            {!isOwnerScope && isRescheduling ? (
+                              <div className="apportion-inline-editor">
+                                <label className="sr-only" htmlFor={`reschedule-${appointment.id}`}>New appointment date and time</label>
+                                <input
+                                  className="date-time-input"
+                                  id={`reschedule-${appointment.id}`}
+                                  type="datetime-local"
+                                  value={rescheduleDateTimeInput}
+                                  onChange={(event) => setRescheduleDateTimeInput(event.target.value)}
+                                />
+                                <div className="inline-actions apportion-inline-editor-actions">
+                                  <button className="button small-button" type="button" onClick={() => void submitRescheduleApportionAppointment(appointment)}>
+                                    Save time
+                                  </button>
+                                  <button className="button-secondary small-button" type="button" onClick={() => cancelRescheduleApportionAppointment()}>
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="muted-text">No users have booked appointments with your business yet.</p>
-                  )}
-                </article>
-              </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="muted-text">No appointments in the log yet.</p>
+                )}
+              </article>
             </section>
           ) : (
             <>

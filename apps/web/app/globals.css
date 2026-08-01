@@ -868,6 +868,13 @@ main {
   align-items: stretch;
 }
 
+.icon-button {
+  min-width: 42px;
+  padding-inline: 0;
+  justify-content: center;
+  font-size: 1rem;
+}
+
 .business-logo-dropzone {
   display: grid;
   place-items: center;
@@ -957,9 +964,29 @@ main {
   line-height: 1;
 }
 
+.apportion-booking-hero-row {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr) 112px;
+  gap: 18px;
+  align-items: center;
+}
+
 .apportion-booking-title-block {
   width: 100%;
   text-align: center;
+}
+
+.apportion-booking-subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+  line-height: 1.4;
+}
+
+.apportion-business-image-slot {
+  display: flex;
+  justify-content: center;
 }
 
 .apportion-business-logo {
@@ -972,6 +999,12 @@ main {
   border: 1px solid rgba(81, 55, 133, 0.14);
   object-fit: contain;
   padding: 10px;
+}
+
+.apportion-business-logo.is-profile {
+  border-radius: 999px;
+  object-fit: cover;
+  padding: 0;
 }
 
 .apportion-booking-panel {
@@ -1077,6 +1110,18 @@ main {
   margin: -2px 0 8px;
 }
 
+.apportion-queue-estimate {
+  margin: 0;
+  color: var(--ink);
+  font-size: 1.15rem;
+  font-weight: 900;
+}
+
+.apportion-queue-warning {
+  color: #9b3d1c;
+  font-weight: 800;
+}
+
 .apportion-notes-label-row {
   display: flex;
   flex-wrap: wrap;
@@ -1138,8 +1183,22 @@ main {
 
 .apportion-appointment-summary {
   display: grid;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
+}
+
+.apportion-log-topline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.apportion-log-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .apportion-appointment-line {
@@ -1170,6 +1229,80 @@ main {
   margin: 0;
 }
 
+.apportion-log-item.is-owner-scope {
+  border-left: 4px solid rgba(81, 55, 133, 0.48);
+  background: linear-gradient(90deg, rgba(81, 55, 133, 0.06), rgba(255, 255, 255, 0));
+}
+
+.apportion-log-item.is-requester-scope {
+  border-left: 4px solid rgba(59, 130, 246, 0.48);
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.06), rgba(255, 255, 255, 0));
+}
+
+.apportion-log-actions {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.apportion-status-chip {
+  font-weight: 900;
+}
+
+.apportion-status-chip.is-pending {
+  background: rgba(245, 158, 11, 0.16);
+  color: #9a5d00;
+}
+
+.apportion-status-chip.is-present-in-person {
+  background: rgba(14, 165, 233, 0.16);
+  color: #0c658c;
+}
+
+.apportion-status-chip.is-done {
+  background: rgba(34, 197, 94, 0.16);
+  color: #18743b;
+}
+
+.apportion-status-chip.is-pushed-back {
+  background: rgba(249, 115, 22, 0.16);
+  color: #a1460d;
+}
+
+.apportion-status-chip.is-rejected,
+.apportion-status-chip.is-cancelled {
+  background: rgba(239, 68, 68, 0.14);
+  color: #9e2525;
+}
+
+.apportion-serial-chip {
+  background: rgba(28, 20, 15, 0.08);
+  color: var(--ink);
+}
+
+.apportion-inline-editor {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(28, 20, 15, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.apportion-inline-editor-actions {
+  gap: 8px;
+}
+
+.date-time-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid rgba(28, 20, 15, 0.14);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
 .apportion-link-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1177,9 +1310,43 @@ main {
   margin: 0 0 14px;
 }
 
+.apportion-identity-mark {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
 @media (max-width: 900px) {
   .apportion-booking-grid {
     grid-template-columns: 1fr;
+  }
+
+  .apportion-booking-hero-row {
+    grid-template-columns: 1fr;
+  }
+
+  .apportion-log-topline {
+    grid-template-columns: 1fr;
+  }
+
+  .apportion-log-badges {
+    justify-content: flex-start;
+  }
+
+  .apportion-business-image-slot.left-slot {
+    order: 1;
+  }
+
+  .apportion-booking-title-block {
+    order: 2;
+  }
+
+  .apportion-business-image-slot.right-slot {
+    order: 3;
   }
 }
 

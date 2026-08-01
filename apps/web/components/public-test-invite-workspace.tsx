@@ -198,6 +198,7 @@ export function PublicTestInviteWorkspace({ shareCode }: PublicTestInviteWorkspa
           </div>
         )}
       </section>
+      <p className="apportion-identity-mark">www.TRAPit.in</p>
     </div>
   );
 }

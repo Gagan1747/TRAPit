@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
 
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -9,18 +10,28 @@ const WEEKDAY_SHORT_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 type BookingPayload = {
   business: {
+    address: string;
     advanceBookingWeeks: number;
     appointmentNotesPrompt: string;
     appointmentsPerSlot: number;
     imageDataUrl: string | null;
+    justAddToList: boolean;
     name: string;
+    ownerIdentifier: string;
+    profileImageDataUrl: string | null;
     showRemainingBookings: boolean;
     slotDurationMinutes: number | null;
     workingDays: string;
     workingHours: string;
     workingHoursSecondWindow: string;
   };
+  queueCounts: Array<{ count: number; dateKey: string }>;
   slotCounts: Array<{ count: number; startsAt: string }>;
+};
+
+type BookingResponse = {
+  appointment: { id: string };
+  caution: string | null;
 };
 
 type CalendarCell =
@@ -92,13 +103,19 @@ function parseTimeRange(value: string) {
   const startMinutes = parseTimeToMinutes(startValue ?? "");
   const endMinutes = parseTimeToMinutes(endValue ?? "");
 
-  if (startMinutes === null || endMinutes === null || startMinutes > endMinutes) {
+  if (startMinutes === null || endMinutes === null) {
     return null;
   }
 
-  return startMinutes === endMinutes
-    ? { endMinutes: 24 * 60, startMinutes: 0 }
-    : { endMinutes, startMinutes };
+  if (startMinutes === endMinutes) {
+    return { durationMinutes: 24 * 60, startMinutes };
+  }
+
+  if (startMinutes < endMinutes) {
+    return { durationMinutes: endMinutes - startMinutes, startMinutes };
+  }
+
+  return { durationMinutes: (24 * 60) - startMinutes + endMinutes, startMinutes };
 }
 
 function parseWorkingDays(value: string) {
@@ -122,6 +139,88 @@ function createSlotIso(dateKey: string, minutes: number) {
   date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
 
   return date.toISOString();
+}
+
+function getSlotStepMinutes(slotDurationMinutes: number) {
+  return slotDurationMinutes <= 60 ? 15 : slotDurationMinutes;
+}
+
+function buildSlotStartsForDate(input: {
+  selectedDateKey: string;
+  slotDurationMinutes: number;
+  workingHours: string;
+  workingHoursSecondWindow: string;
+}) {
+  const workingRanges = [input.workingHours, input.workingHoursSecondWindow]
+    .map((range) => parseTimeRange(range))
+    .filter((range): range is { durationMinutes: number; startMinutes: number } => Boolean(range));
+  const effectiveWorkingRanges = workingRanges.length ? workingRanges : [{ durationMinutes: 8 * 60, startMinutes: 10 * 60 }];
+  const slotStepMinutes = getSlotStepMinutes(input.slotDurationMinutes);
+
+  return effectiveWorkingRanges.flatMap((range) => Array.from(
+    { length: Math.max(0, Math.floor((range.durationMinutes - input.slotDurationMinutes) / slotStepMinutes) + 1) },
+    (_, index) => {
+      const absoluteMinutes = range.startMinutes + (index * slotStepMinutes);
+      const dayOffset = Math.floor(absoluteMinutes / (24 * 60));
+      const minutesOfDay = ((absoluteMinutes % (24 * 60)) + (24 * 60)) % (24 * 60);
+      const slotDate = createDateFromKey(input.selectedDateKey);
+      slotDate.setDate(slotDate.getDate() + dayOffset);
+      slotDate.setHours(Math.floor(minutesOfDay / 60), minutesOfDay % 60, 0, 0);
+
+      return {
+        dayOffset,
+        label: `${formatTime(minutesOfDay)}${dayOffset > 0 ? ` (+${dayOffset} day${dayOffset === 1 ? "" : "s"})` : ""}`,
+        minutes: minutesOfDay,
+        startsAt: slotDate.toISOString(),
+      };
+    },
+  ));
+}
+
+function estimateQueueStart(input: {
+  activeCount: number;
+  appointmentsPerSlot: number;
+  selectedDateKey: string;
+  slotDurationMinutes: number;
+  workingHours: string;
+  workingHoursSecondWindow: string;
+}) {
+  const slotStarts = buildSlotStartsForDate({
+    selectedDateKey: input.selectedDateKey,
+    slotDurationMinutes: input.slotDurationMinutes,
+    workingHours: input.workingHours,
+    workingHoursSecondWindow: input.workingHoursSecondWindow,
+  });
+  const slotIndex = Math.floor(input.activeCount / Math.max(1, input.appointmentsPerSlot));
+
+  if (!slotStarts.length) {
+    const fallbackDate = createDateFromKey(input.selectedDateKey);
+    fallbackDate.setHours(10, 0, 0, 0);
+    fallbackDate.setMinutes(fallbackDate.getMinutes() + (slotIndex * input.slotDurationMinutes));
+
+    return {
+      exceedsWorkingHours: slotIndex > 0,
+      label: formatTime(fallbackDate.getHours() * 60 + fallbackDate.getMinutes()),
+      startsAt: fallbackDate.toISOString(),
+    };
+  }
+
+  if (slotIndex < slotStarts.length) {
+    return {
+      exceedsWorkingHours: false,
+      label: slotStarts[slotIndex].label,
+      startsAt: slotStarts[slotIndex].startsAt,
+    };
+  }
+
+  const overflowDate = new Date(slotStarts[slotStarts.length - 1].startsAt);
+  overflowDate.setMinutes(overflowDate.getMinutes() + ((slotIndex - (slotStarts.length - 1)) * input.slotDurationMinutes));
+
+  return {
+    exceedsWorkingHours: true,
+    label: `${formatTime(overflowDate.getHours() * 60 + overflowDate.getMinutes())}${createDateKey(overflowDate) !== input.selectedDateKey ? " (+1 day)" : ""}`,
+    startsAt: overflowDate.toISOString(),
+  };
 }
 
 function normalizeImageDataUrl(value: string) {
@@ -268,7 +367,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   async function handleBookAppointment() {
     const selectedSlot = availableSlots.find((slot) => slot.startsAt === selectedSlotIso) ?? null;
 
-    if (!selectedSlot) {
+    if (!payload.business.justAddToList && !selectedSlot) {
       setFeedback("Choose an appointment date and time.");
       return;
     }
@@ -276,19 +375,20 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     setIsBooking(true);
 
     try {
-      await readJson(
+      const bookingPayload = await readJson<BookingResponse>(
         await fetch(`/api/apportion/${encodeURIComponent(shareCode)}`, {
           body: JSON.stringify({
             slotDateKey: selectedDateKey,
-            slotMinutes: selectedSlot.minutes,
             notes,
-            startsAt: selectedSlot.startsAt,
+            startsAt: selectedSlot?.startsAt,
           }),
           headers: { "Content-Type": "application/json" },
           method: "POST",
         }),
       );
-      setFeedback("Appointment booked. You can see it in the Apportion tab on your dashboard.");
+      setFeedback(bookingPayload.caution
+        ? `Appointment booked. ${bookingPayload.caution}`
+        : "Appointment booked. You can see it in the Apportion tab on your dashboard.");
       markNotificationPromptOpportunity();
       setNotes("");
       setSelectedSlotIso(null);
@@ -311,22 +411,20 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const workingDays = parseWorkingDays(payload.business.workingDays);
-  const workingRanges = [payload.business.workingHours, payload.business.workingHoursSecondWindow]
-    .map((range) => parseTimeRange(range))
-    .filter((range): range is { endMinutes: number; startMinutes: number } => Boolean(range));
-  const effectiveWorkingRanges = workingRanges.length ? workingRanges : [{ endMinutes: 18 * 60, startMinutes: 10 * 60 }];
   const slotDurationMinutes = payload.business.slotDurationMinutes ?? 30;
-  const slotStepMinutes = slotDurationMinutes > 60 ? slotDurationMinutes : slotDurationMinutes >= 60 ? 30 : 15;
   const slotCountsByIso = Object.fromEntries(payload.slotCounts.map((slot) => [slot.startsAt, slot.count]));
+  const queueCountsByDateKey = Object.fromEntries(payload.queueCounts.map((slot) => [slot.dateKey, slot.count]));
   const maxBookableDate = new Date(today);
   maxBookableDate.setDate(today.getDate() + (payload.business.advanceBookingWeeks * 7) - 1);
   const calendarCells = createCalendarCells(today, maxBookableDate);
   const workingHoursText = [payload.business.workingHours, payload.business.workingHoursSecondWindow].filter(Boolean).join(" and ");
-  const availableSlots = effectiveWorkingRanges.flatMap((range) => Array.from(
-    { length: Math.max(0, Math.floor((range.endMinutes - range.startMinutes - slotDurationMinutes) / slotStepMinutes) + 1) },
-    (_, index) => range.startMinutes + (index * slotStepMinutes),
-  )).map((minutes) => {
-    const startsAt = createSlotIso(selectedDateKey, minutes);
+  const availableSlots = buildSlotStartsForDate({
+    selectedDateKey,
+    slotDurationMinutes,
+    workingHours: payload.business.workingHours,
+    workingHoursSecondWindow: payload.business.workingHoursSecondWindow,
+  }).map((slot) => {
+    const startsAt = slot.startsAt;
     const slotDate = new Date(startsAt);
     const isPast = slotDate.getTime() <= Date.now();
     const bookedCount = slotCountsByIso[startsAt] ?? 0;
@@ -334,31 +432,56 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     const isFull = bookedCount >= payload.business.appointmentsPerSlot;
 
     return {
+      dayOffset: slot.dayOffset,
       isAvailable: !isPast && !isFull,
-      label: formatTime(minutes),
-      minutes,
+      label: slot.label,
+      minutes: slot.minutes,
       remainingCount,
       startsAt,
     };
   });
   const selectedSlot = availableSlots.find((slot) => slot.startsAt === selectedSlotIso) ?? null;
   const logoDataUrl = payload.business.imageDataUrl ? normalizeImageDataUrl(payload.business.imageDataUrl) : null;
+  const profileImageDataUrl = payload.business.profileImageDataUrl ? normalizeImageDataUrl(payload.business.profileImageDataUrl) : null;
+  const queueEstimate = payload.business.justAddToList
+    ? estimateQueueStart({
+        activeCount: queueCountsByDateKey[selectedDateKey] ?? 0,
+        appointmentsPerSlot: payload.business.appointmentsPerSlot,
+        selectedDateKey,
+        slotDurationMinutes,
+        workingHours: payload.business.workingHours,
+        workingHoursSecondWindow: payload.business.workingHoursSecondWindow,
+      })
+    : null;
+  const businessContactText = [payload.business.address, payload.business.name, formatPhoneNumberForDisplay(payload.business.ownerIdentifier, { showFullPhoneNumber: true })]
+    .filter(Boolean)
+    .join(" • ");
 
   return (
     <div className="workspace-card-stack">
       <BrowserPushPrompt publicKey={process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY ?? null} />
       <section className="workspace-card apportion-booking-hero">
-        {logoDataUrl ? (
-          <img alt="Business logo" className="apportion-business-logo" src={logoDataUrl} />
-        ) : null}
-        <div className="apportion-booking-title-block">
-          <p className="eyebrow">Apportion booking</p>
-          <h1>{payload.business.name || "Business appointment"}</h1>
+        <div className="apportion-booking-hero-row">
+          <div className="apportion-business-image-slot left-slot">
+            {profileImageDataUrl ? (
+              <img alt="Business profile" className="apportion-business-logo is-profile" src={profileImageDataUrl} />
+            ) : null}
+          </div>
+          <div className="apportion-booking-title-block">
+            <p className="eyebrow">Apportion booking</p>
+            <h1>{payload.business.name || "Business appointment"}</h1>
+            {businessContactText ? <p className="apportion-booking-subtitle">{businessContactText}</p> : null}
+          </div>
+          <div className="apportion-business-image-slot right-slot">
+            {logoDataUrl ? (
+              <img alt="Business logo" className="apportion-business-logo" src={logoDataUrl} />
+            ) : null}
+          </div>
         </div>
       </section>
 
       <section className="workspace-card apportion-booking-panel">
-        <p className="eyebrow">Choose appointment</p>
+        <p className="eyebrow">{payload.business.justAddToList ? "Join the list" : "Choose appointment"}</p>
         <div className="apportion-booking-grid">
           <div className="apportion-calendar" aria-label="Appointment calendar">
             {WEEKDAY_SHORT_NAMES.map((dayName) => (
@@ -401,27 +524,43 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
             <p className="muted-text apportion-calendar-note">Available dates are highlighted for the next {payload.business.advanceBookingWeeks} week{payload.business.advanceBookingWeeks === 1 ? "" : "s"}.</p>
           </div>
           <div className="form-stack apportion-booking-form">
-            <div className="field">
-              <label htmlFor="apportion-appointment-time">Appointment time</label>
-              <p className="muted-text apportion-working-hours">Working hours: {workingHoursText || "Not specified"}</p>
-              <select
-                className="select-field"
-                id="apportion-appointment-time"
-                value={selectedSlotIso ?? ""}
-                onChange={(event) => {
-                  setSelectedSlotIso(event.target.value || null);
-                  setFeedback(null);
-                }}
-              >
-                <option value="">Select a time</option>
-                {availableSlots.map((slot) => (
-                  <option disabled={!slot.isAvailable} key={slot.startsAt} value={slot.startsAt}>
-                    {slot.label} - {slot.isAvailable ? `Available${payload.business.showRemainingBookings ? ` (${slot.remainingCount} left)` : ""}` : "Unavailable"}
-                  </option>
-                ))}
-              </select>
-              <p className="muted-text">{selectedSlot ? `${selectedSlot.label} selected${payload.business.showRemainingBookings ? `, ${selectedSlot.remainingCount} booking${selectedSlot.remainingCount === 1 ? "" : "s"} left` : ""}` : "Filled slots are greyed out in the list."}</p>
-            </div>
+            {payload.business.justAddToList ? (
+              <div className="field">
+                <label>Approximate latest appointment time</label>
+                <p className="muted-text apportion-working-hours">Working hours: {workingHoursText || "Not specified"}</p>
+                <p className="apportion-queue-estimate">{queueEstimate?.label ?? "Not available"}</p>
+                <p className="muted-text">
+                  You do not need to select a slot for this business. Joining the list places you in the live queue for the selected day.
+                </p>
+                {queueEstimate?.exceedsWorkingHours ? (
+                  <p className="muted-text apportion-queue-warning">
+                    Caution: the estimated latest availability is beyond the configured working hours for this day.
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <div className="field">
+                <label htmlFor="apportion-appointment-time">Appointment time</label>
+                <p className="muted-text apportion-working-hours">Working hours: {workingHoursText || "Not specified"}</p>
+                <select
+                  className="select-field"
+                  id="apportion-appointment-time"
+                  value={selectedSlotIso ?? ""}
+                  onChange={(event) => {
+                    setSelectedSlotIso(event.target.value || null);
+                    setFeedback(null);
+                  }}
+                >
+                  <option value="">Select a time</option>
+                  {availableSlots.map((slot) => (
+                    <option disabled={!slot.isAvailable} key={slot.startsAt} value={slot.startsAt}>
+                      {slot.label} - {slot.isAvailable ? `Available${payload.business.showRemainingBookings ? ` (${slot.remainingCount} left)` : ""}` : "Unavailable"}
+                    </option>
+                  ))}
+                </select>
+                <p className="muted-text">{selectedSlot ? `${selectedSlot.label} selected${payload.business.showRemainingBookings ? `, ${selectedSlot.remainingCount} booking${selectedSlot.remainingCount === 1 ? "" : "s"} left` : ""}` : "Filled slots are greyed out in the list."}</p>
+              </div>
+            )}
             <div className="field">
               <div className="apportion-notes-label-row">
                 <label htmlFor="apportion-notes">Notes</label>
@@ -437,13 +576,15 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
             {feedback ? <p className="muted-text">{feedback}</p> : null}
             <div className="inline-actions">
               <button className="button" disabled={isBooking} type="button" onClick={() => void handleBookAppointment()}>
-                {isBooking ? "Booking..." : "Book appointment"}
+                {isBooking ? "Booking..." : payload.business.justAddToList ? "Join appointment list" : "Book appointment"}
               </button>
               <a className="button-secondary" href="/user?tab=apportion">Open my dashboard</a>
             </div>
           </div>
         </div>
       </section>
+
+      <p className="apportion-identity-mark">www.TRAPit.in</p>
 
     </div>
   );

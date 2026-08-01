@@ -62,6 +62,7 @@ export type PersistentPollQuestion = PollQuestionDraft & {
 export type PollParticipantType = "open" | "registered";
 
 export type WorkspaceBranding = {
+  address: string;
   advanceBookingWeeks: number | null;
   appointmentShareCode: string | null;
   appointmentNotesPrompt: string;
@@ -69,6 +70,8 @@ export type WorkspaceBranding = {
   breakHours: string;
   imageDataUrl: string | null;
   instituteName: string;
+  justAddToList: boolean;
+  profileImageDataUrl: string | null;
   showRemainingBookings: boolean;
   slotDurationMinutes: number | null;
   workingHoursSecondWindow: string;
@@ -548,13 +551,16 @@ export function normalizeWorkspaceBranding(
   }
 
   const instituteName = branding.instituteName?.trim() ?? "";
+  const address = branding.address?.trim() ?? "";
   const imageDataUrl = branding.imageDataUrl?.trim() ?? null;
+  const profileImageDataUrl = branding.profileImageDataUrl?.trim() ?? null;
   const advanceBookingWeeks = [1, 2, 3, 4].includes(branding.advanceBookingWeeks ?? 0)
     ? branding.advanceBookingWeeks
     : null;
   const appointmentShareCode = branding.appointmentShareCode?.trim() || null;
   const appointmentNotesPrompt = branding.appointmentNotesPrompt?.trim() || "Share a brief about appointment purpose";
   const breakHours = branding.breakHours?.trim() ?? "";
+  const justAddToList = branding.justAddToList === true;
   const workingDays = branding.workingDays?.trim() ?? "";
   const workingHours = branding.workingHours?.trim() ?? "";
   const workingHoursSecondWindow = branding.workingHoursSecondWindow?.trim() ?? "";
@@ -566,11 +572,12 @@ export function normalizeWorkspaceBranding(
     ? branding.slotDurationMinutes
     : null;
 
-  if (!instituteName && !imageDataUrl && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null) {
+  if (!instituteName && !address && !imageDataUrl && !profileImageDataUrl && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null && !justAddToList) {
     return null;
   }
 
   return {
+    address,
     advanceBookingWeeks,
     appointmentShareCode,
     appointmentNotesPrompt,
@@ -578,6 +585,8 @@ export function normalizeWorkspaceBranding(
     breakHours,
     imageDataUrl,
     instituteName,
+    justAddToList,
+    profileImageDataUrl,
     showRemainingBookings,
     slotDurationMinutes,
     workingHoursSecondWindow,
