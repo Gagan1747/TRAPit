@@ -365,6 +365,11 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   }, [payload]);
 
   async function handleBookAppointment() {
+    if (!payload) {
+      setFeedback("Unable to load this booking page.");
+      return;
+    }
+
     const selectedSlot = availableSlots.find((slot) => slot.startsAt === selectedSlotIso) ?? null;
 
     if (!payload.business.justAddToList && !selectedSlot) {
