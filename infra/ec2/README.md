@@ -165,7 +165,7 @@ Run this once on the server:
 ```bash
 sudo mkdir -p /var/lib/trapit
 sudo chown -R $USER:$USER /var/lib/trapit
-chmod +x infra/ec2/prepare-persistent-data.sh infra/ec2/backup-data.sh infra/ec2/restore-data.sh infra/ec2/deploy-web.sh
+chmod +x infra/ec2/prepare-persistent-data.sh infra/ec2/validate-testing-data.sh infra/ec2/backup-data.sh infra/ec2/restore-data.sh infra/ec2/deploy-web.sh
 ./infra/ec2/prepare-persistent-data.sh
 ```
 
@@ -299,11 +299,12 @@ What the script does:
 
 1. Ensures the persistent data directory exists
 2. Migrates repo-scoped data to `/var/lib/trapit/testing-workspace.json` if needed
-3. Creates a timestamped backup in `/var/backups/trapit`
-4. Pulls the latest code with `git pull --ff-only`
-5. Installs dependencies and rebuilds the web app
-6. Restarts PM2
-7. Verifies the app responds on `http://127.0.0.1:3000`
+3. Validates that the live JSON file is readable and contains production data
+4. Creates a timestamped backup in `/var/backups/trapit`
+5. Pulls the latest code with `git pull --ff-only`
+6. Installs dependencies and rebuilds the web app
+7. Restarts PM2
+8. Verifies the app responds on `http://127.0.0.1:3000`
 
 After restart, verify the app still points at the external data file and confirm that the backup file was created:
 
@@ -313,6 +314,17 @@ ls -l /var/lib/trapit/testing-workspace.json
 ls -lt /var/backups/trapit | head
 ```
 
+The backup script refuses to create a normal backup if the live file is invalid JSON or contains no recoverable workspace data. Suspect files are copied to `/var/backups/trapit/quarantine` so a bad 0-count file does not become the newest trusted backup.
+
+For market launch, configure off-server backups as well. If the EC2 instance has an IAM role with S3 write access, set this before deployment or in the shell that runs backup jobs:
+
+```bash
+export TRAPIT_BACKUP_S3_URI=s3://YOUR_BUCKET/trapit/testing-workspace
+./infra/ec2/backup-data.sh
+```
+
+When `TRAPIT_BACKUP_S3_URI` is set, each validated local backup is also uploaded to S3.
+
 Do not keep production data in `/var/www/trapit/apps/web/data/testing-workspace.json` after migration. That file lives inside the repo checkout and can be replaced during future updates.
 
 ## Restoring data from a backup
@@ -320,11 +332,36 @@ Do not keep production data in `/var/www/trapit/apps/web/data/testing-workspace.
 If you ever need to restore the live JSON store, use:
 
 ```bash
+./infra/ec2/validate-testing-data.sh /var/backups/trapit/testing-workspace-YYYYMMDD-HHMMSS.json /var/lib/trapit/testing-workspace.json
 ./infra/ec2/restore-data.sh /var/backups/trapit/testing-workspace-YYYYMMDD-HHMMSS.json
 pm2 restart trapit-web --update-env
 ```
 
-The restore script first creates one more backup of the current live file before copying the selected backup into place.
+The restore script validates the selected backup before replacing production data. It refuses invalid JSON, empty backups, and backups that would destructively reduce an existing non-empty live file. It first creates one more backup of the current live file, then performs an atomic restore.
+
+Only bypass the guard for a deliberate fresh reset:
+
+```bash
+TRAPIT_ALLOW_DANGEROUS_RESTORE=1 TRAPIT_ALLOW_EMPTY_DATA_FILE=1 ./infra/ec2/restore-data.sh /path/to/confirmed-empty-file.json
+```
+
+Do not use the bypass during normal production recovery.
+
+## Recurring production backups
+
+Add a cron job so backups happen even when no deployment is running:
+
+```bash
+crontab -e
+```
+
+Example, every 15 minutes:
+
+```cron
+*/15 * * * * cd /var/www/trapit && TRAPIT_BACKUP_S3_URI=s3://YOUR_BUCKET/trapit/testing-workspace ./infra/ec2/backup-data.sh >/tmp/trapit-backup.log 2>&1
+```
+
+If you do not use S3 yet, remove `TRAPIT_BACKUP_S3_URI=...`, but keep the cron job so local backups are frequent.
 
 ## Safe next deployment checklist
 

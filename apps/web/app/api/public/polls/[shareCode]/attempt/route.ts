@@ -68,6 +68,17 @@ export async function POST(
   }
 
   try {
+    const pollAccess = await getPollByShareCode(context.params.shareCode, {
+      identifier: actor?.identifier ?? null,
+      isRegistered: Boolean(actor?.isRegistered),
+      responseUserId: actor?.identifier ?? userId,
+      sub: actor?.sub ?? null,
+    });
+
+    if (pollAccess.poll.participantType === "open" && pollAccess.poll.openPollRequiresRegistration && !actor?.isRegistered) {
+      return NextResponse.json({ error: "Sign in before responding to this poll." }, { status: 403 });
+    }
+
     const attempt = await recordPollAttempt({
       answers: body.answers,
       completedAt: body.completedAt,

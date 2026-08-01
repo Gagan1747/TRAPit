@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { addUserToDefaultGroup, getCognitoErrorMessage, signUpWithCognito } from "../../../../lib/cognito";
+import { recordTermsConsentForPhone } from "../../../../lib/terms-consent-store";
 
 export async function POST(request: Request) {
   try {
@@ -8,6 +9,7 @@ export async function POST(request: Request) {
       fullName?: string;
       phoneNumber?: string;
       password?: string;
+      acceptedTerms?: boolean;
     };
     const fullName = body.fullName?.trim();
     const phoneNumber = body.phoneNumber?.trim();
@@ -20,8 +22,17 @@ export async function POST(request: Request) {
       );
     }
 
+    if (!body.acceptedTerms) {
+      return NextResponse.json(
+        { error: "Accept the TRAPit.in Terms of Service to create an account." },
+        { status: 400 },
+      );
+    }
+
     const result = await signUpWithCognito(phoneNumber, password, fullName);
     let warning: string | undefined;
+
+    await recordTermsConsentForPhone(phoneNumber);
 
     try {
       await addUserToDefaultGroup(phoneNumber);

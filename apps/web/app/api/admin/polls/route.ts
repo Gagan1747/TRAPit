@@ -34,6 +34,7 @@ type PollBody =
       endsAt?: string;
       generateQrCode?: boolean;
       mode?: "schedule-poll";
+      openPollRequiresRegistration?: boolean;
       participantGroupIds?: string[];
       participantType?: PollParticipantType;
       questionIds?: string[];
@@ -47,6 +48,7 @@ type PollBody =
       endsAt?: string;
       generateQrCode?: boolean;
       mode?: "update-poll";
+      openPollRequiresRegistration?: boolean;
       participantGroupIds?: string[];
       participantType?: PollParticipantType;
       pollId?: string;
@@ -173,6 +175,7 @@ export async function POST(request: Request) {
         creatorIdentifier: actor.identifier,
         endsAt: body.endsAt,
         generateQrCode: Boolean(body.generateQrCode),
+        openPollRequiresRegistration: Boolean(body.openPollRequiresRegistration),
         participantGroupIds: body.participantGroupIds ?? [],
         participantType: body.participantType ?? "registered",
         questionIds: [...selectedQuestionIds, ...resolvedCreatedQuestionIds],
@@ -230,6 +233,7 @@ export async function POST(request: Request) {
         creatorIdentifier: actor.identifier,
         endsAt: body.endsAt,
         generateQrCode: Boolean(body.generateQrCode),
+        openPollRequiresRegistration: Boolean(body.openPollRequiresRegistration),
         participantGroupIds: body.participantGroupIds ?? [],
         participantType: body.participantType ?? "registered",
         pollId: body.pollId,

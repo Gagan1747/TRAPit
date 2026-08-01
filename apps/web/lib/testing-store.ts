@@ -45,7 +45,7 @@ import {
   validatePollQuestionDraft,
   validateQuestionDraft,
 } from "@trapit/testing";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -87,6 +87,65 @@ function resolveStorePath() {
 }
 
 const STORE_PATH = resolveStorePath();
+
+type CriticalDataSummary = {
+  attempts: number;
+  groups: number;
+  participants: number;
+  pollAttempts: number;
+  pollQuestions: number;
+  polls: number;
+  pools: number;
+  questions: number;
+  tests: number;
+};
+
+function isMissingStoreFileError(error: unknown) {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && (error as { code?: unknown }).code === "ENOENT";
+}
+
+function summarizeCriticalData(state: TestingWorkspaceState): CriticalDataSummary {
+  return {
+    attempts: state.attempts.length,
+    groups: state.participantGroups.length,
+    participants: state.participants.length,
+    pollAttempts: state.pollAttempts.length,
+    pollQuestions: state.pollQuestions.length,
+    polls: state.scheduledPolls.length,
+    pools: state.pools.length,
+    questions: state.questions.length,
+    tests: state.scheduledTests.length,
+  };
+}
+
+function getCriticalDataTotal(summary: CriticalDataSummary) {
+  return Object.values(summary).reduce((total, count) => total + count, 0);
+}
+
+function isDangerousDataReduction(currentSummary: CriticalDataSummary, nextSummary: CriticalDataSummary) {
+  const currentTotal = getCriticalDataTotal(currentSummary);
+  const nextTotal = getCriticalDataTotal(nextSummary);
+
+  if (currentTotal < 10) {
+    return false;
+  }
+
+  const importantCollections = ["groups", "pools", "tests", "attempts", "questions"] as const;
+  const wipedImportantCollectionCount = importantCollections.filter((collection) =>
+    currentSummary[collection] > 0 && nextSummary[collection] === 0,
+  ).length;
+
+  return nextTotal === 0 || wipedImportantCollectionCount >= 2 || nextTotal < currentTotal * 0.1;
+}
+
+function formatCriticalDataSummary(summary: CriticalDataSummary) {
+  return Object.entries(summary)
+    .map(([key, value]) => `${key}=${value}`)
+    .join(", ");
+}
 
 function isMissingPollStoreResourceError(error: unknown) {
   if (!(error instanceof Error)) {
@@ -288,6 +347,7 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
         creatorDisplayName: poll.creatorDisplayName?.trim() || null,
         creatorIdentifier: poll.creatorIdentifier?.trim() || null,
         endsAt,
+        openPollRequiresRegistration: Boolean(poll.openPollRequiresRegistration),
         participantGroupIds: dedupe(poll.participantGroupIds ?? []),
         title: poll.title?.trim() || `${(poll.questionIds ?? []).length} question poll`,
       };
@@ -890,7 +950,11 @@ async function readStore(): Promise<TestingWorkspaceState> {
     const parsed = JSON.parse(content) as Partial<TestingWorkspaceState>;
 
     return normalizeState(parsed);
-  } catch {
+  } catch (error) {
+    if (!isMissingStoreFileError(error)) {
+      throw error;
+    }
+
     const emptyState = createEmptyTestingWorkspaceState();
     await writeStore(emptyState);
     return emptyState;
@@ -899,7 +963,30 @@ async function readStore(): Promise<TestingWorkspaceState> {
 
 async function writeStore(state: TestingWorkspaceState) {
   await ensureStoreDirectory();
-  await writeFile(STORE_PATH, JSON.stringify(state, null, 2), "utf8");
+  const nextSummary = summarizeCriticalData(state);
+
+  if (process.env.TRAPIT_ALLOW_DESTRUCTIVE_DATA_WRITE !== "1") {
+    try {
+      const currentContent = await readFile(STORE_PATH, "utf8");
+      const currentState = normalizeState(JSON.parse(currentContent) as Partial<TestingWorkspaceState>);
+      const currentSummary = summarizeCriticalData(currentState);
+
+      if (isDangerousDataReduction(currentSummary, nextSummary)) {
+        throw new Error(
+          `Refusing to overwrite TRAPit data with a destructive reduction. Current: ${formatCriticalDataSummary(currentSummary)}. Next: ${formatCriticalDataSummary(nextSummary)}. Set TRAPIT_ALLOW_DESTRUCTIVE_DATA_WRITE=1 only for an intentional reset.`,
+        );
+      }
+    } catch (error) {
+      if (!isMissingStoreFileError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  const temporaryStorePath = `${STORE_PATH}.${process.pid}.${Date.now()}.tmp`;
+
+  await writeFile(temporaryStorePath, JSON.stringify(state, null, 2), "utf8");
+  await rename(temporaryStorePath, STORE_PATH);
 }
 
 async function assignUnownedGroupsToOwner(ownerIdentifier: string) {
@@ -1300,6 +1387,7 @@ export async function createScheduledPoll(input: {
   creatorIdentifier?: string | null;
   endsAt: string;
   generateQrCode: boolean;
+  openPollRequiresRegistration?: boolean;
   participantGroupIds: string[];
   participantType: PollParticipantType;
   questionIds: string[];
@@ -1325,10 +1413,6 @@ export async function createScheduledPoll(input: {
 
         if (!participantGroupIds.length) {
           throw new Error("Select at least one group for this poll.");
-        }
-
-        if (input.generateQrCode && input.participantType === "registered" && participantGroupIds.length !== 1) {
-          throw new Error("Group-member poll links require exactly one selected group.");
         }
 
         const startsAtMs = new Date(input.startsAt).getTime();
@@ -1366,6 +1450,7 @@ export async function createScheduledPoll(input: {
           creatorIdentifier: input.creatorIdentifier?.trim() || null,
           endsAt: input.endsAt,
           id: createEntityId("poll"),
+          openPollRequiresRegistration: input.participantType === "open" ? Boolean(input.openPollRequiresRegistration) : false,
           participantGroupIds,
           participantType: input.participantType,
           questionIds,
@@ -1399,10 +1484,6 @@ export async function createScheduledPoll(input: {
 
   if (!participantGroupIds.length) {
     throw new Error("Select at least one group for this poll.");
-  }
-
-  if (input.generateQrCode && input.participantType === "registered" && participantGroupIds.length !== 1) {
-    throw new Error("Group-member poll links require exactly one selected group.");
   }
 
   const startsAtMs = new Date(input.startsAt).getTime();
@@ -1440,6 +1521,7 @@ export async function createScheduledPoll(input: {
     creatorIdentifier: input.creatorIdentifier?.trim() || null,
     endsAt: input.endsAt,
     id: createEntityId("poll"),
+    openPollRequiresRegistration: input.participantType === "open" ? Boolean(input.openPollRequiresRegistration) : false,
     participantGroupIds,
     participantType: input.participantType,
     questionIds,
@@ -1464,6 +1546,7 @@ export async function updateScheduledPoll(input: {
   creatorIdentifier?: string | null;
   endsAt: string;
   generateQrCode: boolean;
+  openPollRequiresRegistration?: boolean;
   participantGroupIds: string[];
   participantType: PollParticipantType;
   pollId: string;
@@ -1498,10 +1581,6 @@ export async function updateScheduledPoll(input: {
           throw new Error("Select at least one group for this poll.");
         }
 
-        if (input.generateQrCode && input.participantType === "registered" && participantGroupIds.length !== 1) {
-          throw new Error("Group-member poll links require exactly one selected group.");
-        }
-
         const startsAtMs = new Date(input.startsAt).getTime();
         const endsAtMs = new Date(input.endsAt).getTime();
 
@@ -1529,6 +1608,7 @@ export async function updateScheduledPoll(input: {
                 creatorDisplayName: input.creatorDisplayName?.trim() || poll.creatorDisplayName || null,
                 creatorIdentifier: input.creatorIdentifier?.trim() || poll.creatorIdentifier || null,
                 endsAt: input.endsAt,
+                openPollRequiresRegistration: input.participantType === "open" ? Boolean(input.openPollRequiresRegistration) : false,
                 participantGroupIds,
                 participantType: input.participantType,
                 questionIds,
@@ -1572,10 +1652,6 @@ export async function updateScheduledPoll(input: {
     throw new Error("Select at least one group for this poll.");
   }
 
-  if (input.generateQrCode && input.participantType === "registered" && participantGroupIds.length !== 1) {
-    throw new Error("Group-member poll links require exactly one selected group.");
-  }
-
   const startsAtMs = new Date(input.startsAt).getTime();
   const endsAtMs = new Date(input.endsAt).getTime();
 
@@ -1603,6 +1679,7 @@ export async function updateScheduledPoll(input: {
           creatorDisplayName: input.creatorDisplayName?.trim() || poll.creatorDisplayName || null,
           creatorIdentifier: input.creatorIdentifier?.trim() || poll.creatorIdentifier || null,
           endsAt: input.endsAt,
+          openPollRequiresRegistration: input.participantType === "open" ? Boolean(input.openPollRequiresRegistration) : false,
           participantGroupIds,
           participantType: input.participantType,
           questionIds,
@@ -2811,7 +2888,7 @@ function getPublicPollAccess(
   if (poll.participantType === "open") {
     return {
       canRequestAccess: false,
-      canRespond: true,
+      canRespond: !poll.openPollRequiresRegistration || Boolean(viewer?.identifier),
       group: null,
       isGroupMember: false,
       requestStatus: null,

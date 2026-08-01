@@ -35,7 +35,7 @@ import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
-import { BrowserPushPrompt } from "./browser-push-prompt";
+import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 
 const AI_OCR_EXAMPLE = `Question: 5+3?
@@ -172,7 +172,11 @@ function parseBusinessTimeRange(value: string) {
   const startMinutes = parseBusinessTime(startValue ?? "") ?? DEFAULT_BUSINESS_START_MINUTES;
   const endMinutes = parseBusinessTime(endValue ?? "") ?? DEFAULT_BUSINESS_END_MINUTES;
 
-  if (startMinutes >= endMinutes) {
+  if (startMinutes === endMinutes) {
+    return { endMinutes, startMinutes };
+  }
+
+  if (startMinutes > endMinutes) {
     return {
       endMinutes: Math.min(BUSINESS_DAY_END_MINUTES, startMinutes + BUSINESS_TIME_STEP_MINUTES),
       startMinutes,
@@ -1166,6 +1170,7 @@ export function AdminQuestionWorkspace({
   const [pollScheduleAnonymous, setPollScheduleAnonymous] = useState(false);
   const [pollScheduleGenerateQrCode, setPollScheduleGenerateQrCode] = useState(false);
   const [pollScheduleGroupIds, setPollScheduleGroupIds] = useState<string[]>([]);
+  const [pollScheduleOpenRequiresRegistration, setPollScheduleOpenRequiresRegistration] = useState(false);
   const [pollScheduleParticipantType, setPollScheduleParticipantType] = useState<PollParticipantType>("registered");
   const [pollScheduleTypedDrafts, setPollScheduleTypedDrafts] = useState<EditablePollScheduleDraft[]>([]);
   const [pollScheduleQuestionIds, setPollScheduleQuestionIds] = useState<string[]>([]);
@@ -1196,6 +1201,7 @@ export function AdminQuestionWorkspace({
   const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
   const [scheduleGenerateInviteLink, setScheduleGenerateInviteLink] = useState(false);
   const [scheduleParticipantGroupIds, setScheduleParticipantGroupIds] = useState<string[]>([]);
+  const [scheduleParticipantIds, setScheduleParticipantIds] = useState<string[]>([]);
   const [schedulePoolId, setSchedulePoolId] = useState("");
   const [scheduleQuestionCount, setScheduleQuestionCount] = useState("1");
   const [scheduleRepeatMode, setScheduleRepeatMode] = useState<TestRepeatMode>("none");
@@ -1562,6 +1568,7 @@ export function AdminQuestionWorkspace({
     setPollScheduleAnonymous(false);
     setPollScheduleGenerateQrCode(false);
     setPollScheduleGroupIds([]);
+    setPollScheduleOpenRequiresRegistration(false);
     setPollScheduleParticipantType("registered");
     setPollScheduleTypedDrafts([]);
     setPollScheduleQuestionIds([]);
@@ -1576,6 +1583,7 @@ export function AdminQuestionWorkspace({
     setScheduleDurationMinutes("30");
     setScheduleGenerateInviteLink(false);
     setScheduleParticipantGroupIds([]);
+    setScheduleParticipantIds([]);
     setScheduleQuestionCount("1");
     setScheduleRepeatMode("none");
     setScheduleStartsAtInput(createDefaultScheduleTime());
@@ -1588,6 +1596,7 @@ export function AdminQuestionWorkspace({
     setPollScheduleAnonymous(poll.participantType === "open" ? true : poll.anonymous);
     setPollScheduleGenerateQrCode(Boolean(poll.shareCode));
     setPollScheduleGroupIds([...poll.participantGroupIds]);
+    setPollScheduleOpenRequiresRegistration(Boolean(poll.openPollRequiresRegistration));
     setPollScheduleTypedDrafts([]);
     setPollScheduleQuestionIds([...poll.questionIds]);
     setPollScheduleStartsAtInput(toDateTimeInputValue(poll.startsAt));
@@ -1606,6 +1615,7 @@ export function AdminQuestionWorkspace({
     setScheduleDurationMinutes(String(test.durationMinutes));
     setScheduleGenerateInviteLink(Boolean(test.shareCode));
     setScheduleParticipantGroupIds([...test.participantGroupIds]);
+    setScheduleParticipantIds([...test.participantIds]);
     setScheduleRepeatMode("none");
     setScheduleStartsAtInput(toDateTimeInputValue(test.startsAt));
     setScheduleTitle(test.title);
@@ -1620,6 +1630,7 @@ export function AdminQuestionWorkspace({
     setScheduleDurationMinutes(String(test.durationMinutes));
     setScheduleGenerateInviteLink(false);
     setScheduleParticipantGroupIds([SELF_TEST_GROUP_OPTION_ID]);
+    setScheduleParticipantIds([]);
     setScheduleRepeatMode("none");
     setScheduleStartsAtInput(toDateTimeInputValue(test.startsAt));
     setScheduleTitle(test.title);
@@ -2951,11 +2962,11 @@ export function AdminQuestionWorkspace({
 
     const nextRange = boundary === "start"
       ? {
-          endMinutes: Math.max(currentRange.endMinutes, nextMinutes + BUSINESS_TIME_STEP_MINUTES),
-          startMinutes: Math.min(nextMinutes, currentRange.endMinutes - BUSINESS_TIME_STEP_MINUTES),
+          endMinutes: currentRange.endMinutes,
+          startMinutes: nextMinutes,
         }
       : {
-          endMinutes: Math.max(nextMinutes, currentRange.startMinutes + BUSINESS_TIME_STEP_MINUTES),
+          endMinutes: nextMinutes,
           startMinutes: currentRange.startMinutes,
         };
 
@@ -3049,11 +3060,6 @@ export function AdminQuestionWorkspace({
       return;
     }
 
-    if (pollScheduleGenerateQrCode && pollScheduleParticipantType === "registered" && pollScheduleGroupIds.length !== 1) {
-      setPollFeedback("Group-member poll links require exactly one selected group.");
-      return;
-    }
-
     const startsAt = new Date(pollScheduleStartsAtInput).toISOString();
     const endsAt = new Date(new Date(startsAt).getTime() + durationMinutes * 60 * 1000).toISOString();
 
@@ -3079,8 +3085,8 @@ export function AdminQuestionWorkspace({
             generateQrCode: pollScheduleParticipantType === "open",
             mode: editingScheduledPollId ? "update-poll" : "schedule-poll",
             drafts: typedDrafts,
-            participantGroupIds:
-              pollScheduleParticipantType === "registered" ? pollScheduleGroupIds : [],
+            openPollRequiresRegistration: pollScheduleOpenRequiresRegistration,
+            participantGroupIds: pollScheduleGroupIds,
             participantType: pollScheduleParticipantType,
             pollId: editingScheduledPollId,
             questionIds: pollScheduleQuestionIds,
@@ -3094,6 +3100,7 @@ export function AdminQuestionWorkspace({
         }),
       );
 
+      markNotificationPromptOpportunity();
       setPollFeedback(editingScheduledPollId ? "Poll updated." : "Poll scheduled.");
       resetPollScheduleForm();
     }).catch((error) => {
@@ -3260,9 +3267,9 @@ export function AdminQuestionWorkspace({
           body: JSON.stringify({
             branding: normalizeBrandingInput(workspaceBranding),
             durationMinutes,
-            generateInviteLink: isScheduleSelfTestSelected ? false : scheduleGenerateInviteLink,
+            generateInviteLink: false,
             participantGroupIds: isScheduleSelfTestSelected ? [] : selectedScheduleGroupIds,
-            participantIds: isScheduleSelfTestSelected && currentAdminIdentifier ? [currentAdminIdentifier] : [],
+            participantIds: isScheduleSelfTestSelected && currentAdminIdentifier ? [currentAdminIdentifier] : scheduleParticipantIds,
             poolId: schedulePoolId,
             questionCount,
             recurrenceStartsAt: editingScheduledTestId ? undefined : recurrenceStartsAt,
@@ -3278,6 +3285,7 @@ export function AdminQuestionWorkspace({
         }),
       );
 
+      markNotificationPromptOpportunity();
       setScheduleFeedback(
         editingScheduledTestId
           ? "Test updated."
@@ -5613,24 +5621,20 @@ export function AdminQuestionWorkspace({
             ) : null}
           </div>
 
-          <div className="field">
-            <label className="role-option">
-              <input
-                checked={!isScheduleSelfTestSelected && scheduleGenerateInviteLink}
-                disabled={isScheduleSelfTestSelected}
-                type="checkbox"
-                onChange={(event) => setScheduleGenerateInviteLink(event.target.checked)}
-              />
-              <span>Create invite link and QR code for this test</span>
-            </label>
-            <p className="muted-text">
-              {isScheduleSelfTestSelected
-                ? "Invite links are not created for self tests."
-                : "Invite links work only when exactly one group is selected."}
-            </p>
-          </div>
+          {!isScheduleSelfTestSelected ? (
+            <ParticipantSearchPicker
+              emptyMessage="No individual participants selected for this test yet."
+              inputId="schedule-participant-search"
+              participants={participants}
+              searchPlaceholder="Search individual participants by phone number"
+              selectedIds={scheduleParticipantIds}
+              selectionLabel="Select individual participants"
+              showFullPhoneNumbers={isSuperAdmin}
+              onChange={setScheduleParticipantIds}
+            />
+          ) : null}
 
-          {!isScheduleSelfTestSelected && scheduleGenerateInviteLink ? <p className="muted-text">Group access from this invite follows the selected group&apos;s own join setting.</p> : null}
+          <p className="muted-text">To share tests with new people, share the group link. Users can request or receive group access from that link, then respond to upcoming scheduled tests.</p>
 
           {scheduleFeedback ? <p className="muted-text">{scheduleFeedback}</p> : null}
           <div className="inline-actions">
@@ -6122,67 +6126,64 @@ export function AdminQuestionWorkspace({
             <div className="field form-stack">
               <label className="role-option">
                 <input
-                  checked={pollScheduleGenerateQrCode}
+                  checked={pollScheduleParticipantType === "open"}
                   type="checkbox"
                   onChange={(event) => {
                     const isChecked = event.target.checked;
-                    setPollScheduleGenerateQrCode(isChecked);
 
-                    if (!isChecked) {
+                    if (isChecked) {
+                      if (currentActorRole === "user" && currentUserCategory && !normalUserCategoryDefinitions[currentUserCategory].poll.shareOpenToAll) {
+                        openUpgradePanel({
+                          featureLabel: "Poll - Open to all",
+                          message: "Open-to-all poll links are available only for TRAPit Pro Max users.",
+                          targetCategory: findNextNormalUserCategory(
+                            currentUserCategory,
+                            (candidate) => normalUserCategoryDefinitions[candidate].poll.shareOpenToAll,
+                          ),
+                        });
+                        return;
+                      }
+
+                      setPollScheduleParticipantType("open");
+                      setPollScheduleGenerateQrCode(true);
+                      setPollScheduleAnonymous(true);
+                    } else {
                       setPollScheduleParticipantType("registered");
+                      setPollScheduleGenerateQrCode(false);
+                      setPollScheduleOpenRequiresRegistration(false);
                     }
                   }}
                 />
-                <span>Create poll link and QR code</span>
+                <span>Poll link open for all</span>
               </label>
 
-              {pollScheduleGenerateQrCode ? (
+              {pollScheduleParticipantType === "open" ? (
                 <div className="form-stack">
-                  <label>Link access</label>
                   <div className="selection-grid">
                     <label className="role-option">
                       <input
-                        checked={pollScheduleParticipantType === "registered"}
-                        name="poll-link-access"
+                        checked={!pollScheduleOpenRequiresRegistration}
+                        name="open-poll-registration"
                         type="radio"
-                        onChange={() => setPollScheduleParticipantType("registered")}
+                        onChange={() => setPollScheduleOpenRequiresRegistration(false)}
                       />
-                      <span>Poll link only for group members</span>
+                      <span>Allow response without registration</span>
                     </label>
                     <label className="role-option">
                       <input
-                        checked={pollScheduleParticipantType === "open"}
-                        name="poll-link-access"
+                        checked={pollScheduleOpenRequiresRegistration}
+                        name="open-poll-registration"
                         type="radio"
-                        onChange={() => {
-                          if (currentActorRole === "user" && currentUserCategory && !normalUserCategoryDefinitions[currentUserCategory].poll.shareOpenToAll) {
-                            openUpgradePanel({
-                              featureLabel: "Poll - Open to all",
-                              message: "Open-to-all poll links are available only for TRAPit Pro Max users.",
-                              targetCategory: findNextNormalUserCategory(
-                                currentUserCategory,
-                                (candidate) => normalUserCategoryDefinitions[candidate].poll.shareOpenToAll,
-                              ),
-                            });
-                            return;
-                          }
-
-                          setPollScheduleParticipantType("open");
-                          setPollScheduleAnonymous(true);
-                        }}
+                        onChange={() => setPollScheduleOpenRequiresRegistration(true)}
                       />
-                      <span>Poll link open for all</span>
+                      <span>Allow response only after registration</span>
                     </label>
                   </div>
                 </div>
               ) : null}
             </div>
 
-            {pollScheduleGenerateQrCode && pollScheduleParticipantType === "registered" ? (
-              <p className="muted-text">
-                Users who open this poll link must sign in, then join the selected group according to that group&apos;s setting before they can respond.
-              </p>
-            ) : null}
+            <p className="muted-text">For group-only polls, share the group link. Users can request or receive group access from that link, then respond to upcoming scheduled polls.</p>
 
             <div className="selection-grid">
               <label className="role-option">
@@ -6236,7 +6237,7 @@ export function AdminQuestionWorkspace({
                         .join(", ")
                     : "None"}</p>
                   <p className="muted-text">Anonymity: {poll.anonymous ? "Anonymous" : "Named"}</p>
-                  <p className="muted-text">Poll link: {poll.shareCode ? (poll.participantType === "open" ? "Open for all" : "Group members only") : "Not created"}</p>
+                  <p className="muted-text">Poll link: {poll.shareCode ? (poll.openPollRequiresRegistration ? "Open, registration required" : "Open, guest responses allowed") : "Use group link"}</p>
                   {poll.shareCode ? (
                     <div className="form-stack">
                       <div className="inline-actions">
@@ -7080,7 +7081,7 @@ export function AdminQuestionWorkspace({
                       <p className="muted-text">Starts: {formatShortDateTime(resolvedPoll.startsAt)}</p>
                       <p className="muted-text">Ends: {formatShortDateTime(resolvedPoll.endsAt)}</p>
                       <p className="muted-text">Questions: {resolvedPoll.questionIds.length}</p>
-                      <p className="muted-text">Poll link: {resolvedPoll.shareCode ? (resolvedPoll.participantType === "open" ? "Open for all" : "Group members only") : "Not created"}</p>
+                      <p className="muted-text">Poll link: {resolvedPoll.shareCode ? (resolvedPoll.openPollRequiresRegistration ? "Open, registration required" : "Open, guest responses allowed") : "Use group link"}</p>
                       <p className="muted-text">Anonymity: {resolvedPoll.anonymous ? "Anonymous" : "Named"}</p>
                       {resolvedPoll.participantType === "registered" ? (
                         <p className="muted-text">

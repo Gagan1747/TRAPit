@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
-const siteTitle = "Tests and Poll made easier";
-const siteDescription = "Tests and Polls Simplified, Smart, and Precise. Create, schedule, evaluate, and publish results effortlessly with TRAPit.in.";
+const siteTitle = "TRAPit.in";
+const siteDescription = "Tests, Apportions, and Polls Simplified, Smart, and Precise";
 
 export const metadata: Metadata = {
   title: siteTitle,

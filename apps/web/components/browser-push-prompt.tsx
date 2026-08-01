@@ -3,11 +3,22 @@
 import { useEffect, useState } from "react";
 
 const DISMISS_UNTIL_KEY = "trapit.browserPushPrompt.dismissUntil";
+const PROMPT_TRIGGER_COUNT_KEY = "trapit.browserPushPrompt.triggerCount";
+const PROMPT_TRIGGER_EVENT = "trapit:notification-prompt-opportunity";
 const DISMISS_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 
 type BrowserPushPromptProps = {
+  mode?: "automatic" | "triggered";
   publicKey?: string | null;
 };
+
+export function markNotificationPromptOpportunity() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.dispatchEvent(new Event(PROMPT_TRIGGER_EVENT));
+}
 
 function urlBase64ToUint8Array(value: string) {
   const padding = "=".repeat((4 - value.length % 4) % 4);
@@ -55,7 +66,7 @@ async function registerBrowserPush(publicKey: string) {
   }
 }
 
-export function BrowserPushPrompt({ publicKey }: BrowserPushPromptProps) {
+export function BrowserPushPrompt({ mode = "triggered", publicKey }: BrowserPushPromptProps) {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
@@ -72,14 +83,38 @@ export function BrowserPushPrompt({ publicKey }: BrowserPushPromptProps) {
       return;
     }
 
-    if (Notification.permission === "default" && !isPromptDismissed()) {
+    if (mode === "automatic" && Notification.permission === "default" && !isPromptDismissed()) {
       const showPromptTimer = window.setTimeout(() => {
         setIsVisible(true);
       }, 5000);
 
       return () => window.clearTimeout(showPromptTimer);
     }
-  }, [publicKey]);
+  }, [mode, publicKey]);
+
+  useEffect(() => {
+    if (!publicKey || mode !== "triggered" || !isBrowserPushSupported() || Notification.permission !== "default") {
+      return;
+    }
+
+    function handlePromptOpportunity() {
+      if (isPromptDismissed()) {
+        return;
+      }
+
+      const currentCount = Number(window.localStorage.getItem(PROMPT_TRIGGER_COUNT_KEY) ?? "0");
+      const nextCount = Number.isFinite(currentCount) ? currentCount + 1 : 1;
+      window.localStorage.setItem(PROMPT_TRIGGER_COUNT_KEY, String(nextCount));
+
+      if (nextCount % 3 === 1) {
+        setIsVisible(true);
+      }
+    }
+
+    window.addEventListener(PROMPT_TRIGGER_EVENT, handlePromptOpportunity);
+
+    return () => window.removeEventListener(PROMPT_TRIGGER_EVENT, handlePromptOpportunity);
+  }, [mode, publicKey]);
 
   async function handleEnable() {
     if (!publicKey || !isBrowserPushSupported()) {
@@ -120,7 +155,7 @@ export function BrowserPushPrompt({ publicKey }: BrowserPushPromptProps) {
     <div className="browser-push-prompt panel">
       <div>
         <p className="browser-push-prompt-title">Enable Notifications</p>
-        <p className="browser-push-prompt-copy">Receive timely alerts for upcoming tests and polls</p>
+        <p className="browser-push-prompt-copy">Receive alerts for new tests, polls, appointments, group requests, and reminders</p>
         {feedback ? <p className="form-feedback">{feedback}</p> : null}
       </div>
       {isVisible ? (

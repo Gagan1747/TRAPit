@@ -39,8 +39,12 @@ function parseTimeRange(value: string) {
   const startMinutes = parseTimeToMinutes(startValue ?? "");
   const endMinutes = parseTimeToMinutes(endValue ?? "");
 
-  return startMinutes === null || endMinutes === null || startMinutes >= endMinutes
-    ? null
+  if (startMinutes === null || endMinutes === null || startMinutes > endMinutes) {
+    return null;
+  }
+
+  return startMinutes === endMinutes
+    ? { endMinutes: 24 * 60, startMinutes: 0 }
     : { endMinutes, startMinutes };
 }
 
@@ -76,7 +80,7 @@ function validateRequestedSlot(branding: WorkspaceBranding, startsAt: Date, slot
     ? slotMinutes
     : startsAt.getHours() * 60 + startsAt.getMinutes();
   const slotDurationMinutes = branding.slotDurationMinutes ?? 30;
-  const slotStepMinutes = slotDurationMinutes >= 60 ? 30 : 15;
+  const slotStepMinutes = slotDurationMinutes > 60 ? slotDurationMinutes : slotDurationMinutes >= 60 ? 30 : 15;
   const advanceBookingWeeks = branding.advanceBookingWeeks ?? 4;
   const today = new Date();
   today.setHours(0, 0, 0, 0);

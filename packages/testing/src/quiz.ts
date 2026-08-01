@@ -85,6 +85,7 @@ export type ScheduledPoll = {
   creatorIdentifier?: string | null;
   endsAt: string;
   id: string;
+  openPollRequiresRegistration?: boolean;
   participantGroupIds: string[];
   participantType: PollParticipantType;
   questionIds: string[];

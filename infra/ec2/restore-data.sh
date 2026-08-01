@@ -17,7 +17,15 @@ if [ ! -f "${SOURCE_FILE}" ]; then
 fi
 
 mkdir -p "${DATA_DIR}"
+if [ -f "${DATA_FILE}" ]; then
+  "${SCRIPT_DIR}/validate-testing-data.sh" "${SOURCE_FILE}" "${DATA_FILE}"
+else
+  "${SCRIPT_DIR}/validate-testing-data.sh" "${SOURCE_FILE}"
+fi
+
 "${SCRIPT_DIR}/backup-data.sh"
-cp "${SOURCE_FILE}" "${DATA_FILE}"
+TEMP_RESTORE_FILE="${DATA_FILE}.$(date +%Y%m%d-%H%M%S).restore.tmp"
+cp "${SOURCE_FILE}" "${TEMP_RESTORE_FILE}"
+mv "${TEMP_RESTORE_FILE}" "${DATA_FILE}"
 
 echo "Restored ${SOURCE_FILE} to ${DATA_FILE}."

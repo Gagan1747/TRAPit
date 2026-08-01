@@ -114,6 +114,11 @@ function PollWorkspace({ accessRequestPath, invitePath = "/poll", loadPath, stor
     ).join(", ")
     : "";
   const requiresGroupAccess = Boolean(payload?.access?.group && !payload.access.canRespond);
+  const requiresOpenPollRegistration = Boolean(
+    payload?.poll.participantType === "open"
+    && payload.poll.openPollRequiresRegistration
+    && !payload.actor.isRegistered,
+  );
   const signInPath = `/sign-in?redirect=${encodeURIComponent(invitePath)}`;
   const signUpPath = `/sign-up?redirect=${encodeURIComponent(invitePath)}`;
 
@@ -331,7 +336,16 @@ function PollWorkspace({ accessRequestPath, invitePath = "/poll", loadPath, stor
               </div>
             ) : null}
 
-            {payload.poll.status === "live" && !payload.hasSubmitted && !requiresGroupAccess ? (
+            {payload.poll.status === "live" && requiresOpenPollRegistration ? (
+              <div className="workspace-card form-stack">
+                <p className="eyebrow">Registration required</p>
+                <p className="muted-text">Sign up or sign in to respond to this poll.</p>
+                <div className="inline-actions">
+                  <a className="button" href={signUpPath}>Sign up</a>
+                  <a className="button-secondary" href={signInPath}>Already registered? Sign in</a>
+                </div>
+              </div>
+            ) : payload.poll.status === "live" && !payload.hasSubmitted && !requiresGroupAccess ? (
               <div className="form-stack">
                 {payload.actor.isRegistered ? (
                   <div className="field">

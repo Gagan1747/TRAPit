@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 
+import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
+
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const WEEKDAY_SHORT_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -90,8 +92,12 @@ function parseTimeRange(value: string) {
   const startMinutes = parseTimeToMinutes(startValue ?? "");
   const endMinutes = parseTimeToMinutes(endValue ?? "");
 
-  return startMinutes === null || endMinutes === null || startMinutes >= endMinutes
-    ? null
+  if (startMinutes === null || endMinutes === null || startMinutes > endMinutes) {
+    return null;
+  }
+
+  return startMinutes === endMinutes
+    ? { endMinutes: 24 * 60, startMinutes: 0 }
     : { endMinutes, startMinutes };
 }
 
@@ -283,6 +289,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
         }),
       );
       setFeedback("Appointment booked. You can see it in the Apportion tab on your dashboard.");
+      markNotificationPromptOpportunity();
       setNotes("");
       setSelectedSlotIso(null);
       await loadBookingPage();
@@ -309,7 +316,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     .filter((range): range is { endMinutes: number; startMinutes: number } => Boolean(range));
   const effectiveWorkingRanges = workingRanges.length ? workingRanges : [{ endMinutes: 18 * 60, startMinutes: 10 * 60 }];
   const slotDurationMinutes = payload.business.slotDurationMinutes ?? 30;
-  const slotStepMinutes = slotDurationMinutes >= 60 ? 30 : 15;
+  const slotStepMinutes = slotDurationMinutes > 60 ? slotDurationMinutes : slotDurationMinutes >= 60 ? 30 : 15;
   const slotCountsByIso = Object.fromEntries(payload.slotCounts.map((slot) => [slot.startsAt, slot.count]));
   const maxBookableDate = new Date(today);
   maxBookableDate.setDate(today.getDate() + (payload.business.advanceBookingWeeks * 7) - 1);
@@ -339,6 +346,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
 
   return (
     <div className="workspace-card-stack">
+      <BrowserPushPrompt publicKey={process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY ?? null} />
       <section className="workspace-card apportion-booking-hero">
         {logoDataUrl ? (
           <img alt="Business logo" className="apportion-business-logo" src={logoDataUrl} />

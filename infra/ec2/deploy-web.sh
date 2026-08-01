@@ -8,6 +8,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ECOSYSTEM_FILE="${TRAPIT_ECOSYSTEM_FILE:-${REPO_DIR}/infra/ec2/ecosystem.config.cjs}"
 
 "${SCRIPT_DIR}/prepare-persistent-data.sh"
+DATA_DIR="${TRAPIT_DATA_DIR:-/var/lib/trapit}"
+DATA_FILE="${TRAPIT_DATA_FILE:-${DATA_DIR}/testing-workspace.json}"
+
+if [ -f "${DATA_FILE}" ]; then
+  "${SCRIPT_DIR}/validate-testing-data.sh" "${DATA_FILE}"
+fi
+
 "${SCRIPT_DIR}/backup-data.sh"
 
 cd "${REPO_DIR}"

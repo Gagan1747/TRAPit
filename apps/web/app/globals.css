@@ -1672,6 +1672,43 @@ main {
   width: 100%;
 }
 
+.terms-consent-box {
+  display: grid;
+  gap: 10px;
+}
+
+.terms-consent-checkbox {
+  align-items: flex-start;
+}
+
+.terms-details {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.55);
+  padding: 12px 14px;
+}
+
+.terms-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.terms-scroll-panel {
+  display: grid;
+  gap: 10px;
+  max-height: 240px;
+  margin-top: 12px;
+  overflow: auto;
+  padding-right: 8px;
+}
+
+.terms-scroll-panel p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
 .grow-field {
   min-width: 0;
 }

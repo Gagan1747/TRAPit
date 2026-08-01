@@ -32,6 +32,7 @@ type CreateScheduledPollInput = {
   creatorIdentifier?: string | null;
   endsAt: string;
   generateQrCode: boolean;
+  openPollRequiresRegistration?: boolean;
   participantGroupIds: string[];
   participantType: PollParticipantType;
   questionIds: string[];
@@ -435,10 +436,6 @@ export async function createScheduledPollInBackend(input: CreateScheduledPollInp
     throw new Error("Select at least one group for this poll.");
   }
 
-  if (input.generateQrCode && input.participantType === "registered" && participantGroupIds.length !== 1) {
-    throw new Error("Group-member poll links require exactly one selected group.");
-  }
-
   const startsAtMs = new Date(input.startsAt).getTime();
   const endsAtMs = new Date(input.endsAt).getTime();
 
@@ -471,6 +468,7 @@ export async function createScheduledPollInBackend(input: CreateScheduledPollInp
     creatorIdentifier: input.creatorIdentifier?.trim() || null,
     endsAt: input.endsAt,
     id: createEntityId("poll"),
+    openPollRequiresRegistration: input.participantType === "open" ? Boolean(input.openPollRequiresRegistration) : false,
     participantGroupIds,
     participantType: input.participantType,
     questionIds,
@@ -531,10 +529,6 @@ export async function updateScheduledPollInBackend(input: UpdateScheduledPollInp
     throw new Error("Select at least one group for this poll.");
   }
 
-  if (input.generateQrCode && input.participantType === "registered" && participantGroupIds.length !== 1) {
-    throw new Error("Group-member poll links require exactly one selected group.");
-  }
-
   const startsAtMs = new Date(input.startsAt).getTime();
   const endsAtMs = new Date(input.endsAt).getTime();
 
@@ -564,6 +558,7 @@ export async function updateScheduledPollInBackend(input: UpdateScheduledPollInp
     creatorDisplayName: input.creatorDisplayName?.trim() || existingPoll.creatorDisplayName || null,
     creatorIdentifier: input.creatorIdentifier?.trim() || existingPoll.creatorIdentifier || null,
     endsAt: input.endsAt,
+    openPollRequiresRegistration: input.participantType === "open" ? Boolean(input.openPollRequiresRegistration) : false,
     participantGroupIds,
     participantType: input.participantType,
     questionIds,

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { getCognitoErrorMessage, signInWithCognito, verifyWebTokens } from "../../../../lib/cognito";
 import { createWebSession, getWebSession, recordWebSignIn } from "../../../../lib/session";
+import { hasAcceptedCurrentTerms, recordTermsConsentForSession } from "../../../../lib/terms-consent-store";
 import { resolveAssignedCategoryForSession } from "../../../../lib/user-category-store";
 
 export async function POST(request: Request) {
@@ -10,6 +11,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as {
       phoneNumber?: string;
       password?: string;
+      acceptedTerms?: boolean;
     };
     const phoneNumber = body.phoneNumber?.trim();
     const password = body.password?.trim();
@@ -23,6 +25,23 @@ export async function POST(request: Request) {
 
     const tokens = await signInWithCognito(phoneNumber, password);
     const session = await verifyWebTokens(tokens);
+    const resolvedSession = {
+      ...session,
+      userCategory: session.role === "user"
+        ? await resolveAssignedCategoryForSession(session)
+        : null,
+    };
+
+    if (!body.acceptedTerms && !await hasAcceptedCurrentTerms(resolvedSession)) {
+      return NextResponse.json(
+        {
+          error: "Review and accept the TRAPit.in Terms of Service to continue.",
+          requiresTermsConsent: true,
+        },
+        { status: 428 },
+      );
+    }
+
     const existingSession = await getWebSession();
 
     if (
@@ -40,12 +59,7 @@ export async function POST(request: Request) {
     }
 
     await createWebSession(tokens);
-    const resolvedSession = {
-      ...session,
-      userCategory: session.role === "user"
-        ? await resolveAssignedCategoryForSession(session)
-        : null,
-    };
+    await recordTermsConsentForSession(resolvedSession);
     const signInActivity = await recordWebSignIn(resolvedSession);
 
     return NextResponse.json({

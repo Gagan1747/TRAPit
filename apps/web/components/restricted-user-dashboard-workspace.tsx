@@ -682,7 +682,7 @@ export function RestrictedUserDashboardWorkspace({
                           <p className="muted-text">Starts: {formatShortDateTime(poll.startsAt)}</p>
                           <p className="muted-text">Ends: {formatShortDateTime(poll.endsAt)}</p>
                           <p className="muted-text">Questions: {poll.questionIds.length}</p>
-                          <p className="muted-text">Poll link: {poll.shareCode ? (poll.participantType === "open" ? "Open for all" : "Group members only") : "Not created"}</p>
+                          <p className="muted-text">Poll link: {poll.shareCode ? (poll.openPollRequiresRegistration ? "Open, registration required" : "Open, guest responses allowed") : "Use group link"}</p>
                           <p className="muted-text">Anonymity: {poll.anonymous ? "Anonymous" : "Named"}</p>
                           {showPollAccessDetails ? <p className="muted-text">Access code: {pollShareCode}</p> : null}
                           {showPollOpenAction ? (
