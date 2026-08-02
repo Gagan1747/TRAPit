@@ -5,6 +5,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
+const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
 export type ApportionAppointment = {
   canceledAt: string | null;
@@ -128,9 +129,10 @@ function getAppointmentDayKey(startsAt: string) {
     return "";
   }
 
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const shifted = new Date(date.getTime() + (IST_OFFSET_MINUTES * 60 * 1000));
+  const year = shifted.getUTCFullYear();
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(shifted.getUTCDate()).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
 }
@@ -395,7 +397,7 @@ export async function createApportionAppointment(input: {
     throw new Error("This appointment slot is already full.");
   }
 
-  const serviceDateKey = input.serviceDateKey?.trim() || getAppointmentDayKey(startsAt.toISOString());
+  const serviceDateKey = getAppointmentDayKey(startsAt.toISOString());
   const ownerDayKey = `${normalizeIdentifier(ownerIdentifier)}::${serviceDateKey}`;
   const ownerDayAppointments = state.appointments.filter((appointment) => getOwnerDayKey(appointment) === ownerDayKey);
   const activeOwnerDayAppointments = ownerDayAppointments.filter((appointment) => isActiveStatus(appointment.currentStatus));
@@ -444,7 +446,7 @@ function getLatestInPersonAppointment(state: ApportionState, ownerIdentifier: st
   return state.appointments
     .filter((appointment) => getOwnerDayKey(appointment) === ownerDayKey)
     .filter((appointment) => appointment.id !== excludedAppointmentId)
-    .filter((appointment) => appointment.currentStatus === "present-in-person")
+    .filter((appointment) => isActiveStatus(appointment.currentStatus))
     .sort(compareQueueOrder)[0] ?? null;
 }
 
@@ -626,6 +628,7 @@ export async function updateApportionAppointment(input: {
 
     const previousStartsAt = appointment.startsAt;
     appointment.startsAt = nextStartsAt.toISOString();
+    appointment.serviceDateKey = getAppointmentDayKey(appointment.startsAt);
     appointment.currentStatus = "pending";
     appointment.presentInPersonAt = null;
     appointment.statusUpdatedAt = timestamp;

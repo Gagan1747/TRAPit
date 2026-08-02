@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { cancelApportionAppointment, listApportionAppointmentsForOwner, listApportionAppointmentsForRequester, updateApportionAppointment } from "../../../../lib/apportion-store";
+import { publishWorkspaceEvent } from "../../../../lib/realtime-events";
 import { getOrCreateWorkspaceAppointmentShareCode } from "../../../../lib/testing-store";
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 
@@ -49,6 +50,7 @@ export async function DELETE(request: Request) {
       actorIdentifier: actor.identifier,
       appointmentId: body.appointmentId ?? "",
     });
+    publishWorkspaceEvent("apportion");
     const [appointmentShareCode, ownerAppointments, requesterAppointments] = await Promise.all([
       getOrCreateWorkspaceAppointmentShareCode(actor.identifier),
       listApportionAppointmentsForOwner(actor.identifier),
@@ -87,6 +89,7 @@ export async function PATCH(request: Request) {
       nextStartsAt: body.nextStartsAt,
       notes: body.notes,
     });
+    publishWorkspaceEvent("apportion");
     const payload = await buildApportionDashboardPayload(actor.identifier);
 
     return NextResponse.json({

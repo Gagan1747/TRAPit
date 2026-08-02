@@ -1,4 +1,5 @@
 import { AuthShell } from "../components/auth-shell";
+import { HeroFeatureAssets } from "../components/hero-feature-assets";
 import { isWebAuthConfigured } from "../lib/auth-config";
 
 export default function HomePage() {
@@ -7,19 +8,20 @@ export default function HomePage() {
   return (
     <AuthShell
       eyebrow="Welcome to TRAPit"
-      title="Tests made easier"
+      title="Welcome to TRAPit"
       description={
         authConfigured
-          ? "Tests and Polls made easier"
+          ? "Tests, Apportions and Polls Simplified, Smart, and Precise"
           : "Authentication is paused for now, so you can work directly on the user and admin experiences."
       }
+      heroVisual={authConfigured ? <HeroFeatureAssets /> : null}
       showHeroLinks={false}
     >
       <div className="form-stack">
         <div>
           <h2>Welcome to TRAPit</h2>
           <p className="muted-text">
-            Tests and Poll made easier.
+            Tests, Apportions and Polls Simplified, Smart, and Precise.
           </p>
         </div>
         {authConfigured ? (

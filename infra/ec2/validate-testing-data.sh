@@ -51,6 +51,19 @@ function total(summary) {
   return Object.values(summary).reduce((sum, count) => sum + count, 0);
 }
 
+function coreTotal(summary) {
+  return (
+    summary.groups
+    + summary.pools
+    + summary.tests
+    + summary.attempts
+    + summary.questions
+    + summary.polls
+    + summary.pollQuestions
+    + summary.pollAttempts
+  );
+}
+
 function format(summary) {
   return Object.entries(summary).map(([key, value]) => `${key}=${value}`).join(', ');
 }
@@ -58,20 +71,23 @@ function format(summary) {
 function isDangerousReduction(currentSummary, candidateSummary) {
   const currentTotal = total(currentSummary);
   const candidateTotal = total(candidateSummary);
+  const currentCoreTotal = coreTotal(currentSummary);
+  const candidateCoreTotal = coreTotal(candidateSummary);
 
-  if (currentTotal < 10) {
+  if (currentTotal < 10 && currentCoreTotal < 5) {
     return false;
   }
 
   const importantCollections = ['groups', 'pools', 'tests', 'attempts', 'questions'];
   const wipedImportantCollections = importantCollections.filter((key) => currentSummary[key] > 0 && candidateSummary[key] === 0).length;
 
-  return candidateTotal === 0 || wipedImportantCollections >= 2 || candidateTotal < currentTotal * 0.1;
+  return candidateCoreTotal === 0 || candidateTotal === 0 || wipedImportantCollections >= 2 || candidateCoreTotal < currentCoreTotal * 0.1;
 }
 
 try {
   const candidate = readState(candidateFile, 'Candidate');
   const candidateTotal = total(candidate.summary);
+  const candidateCoreCount = coreTotal(candidate.summary);
 
   console.log(`Candidate: ${candidate.filePath}`);
   console.log(`Size: ${candidate.size} bytes`);
@@ -79,6 +95,10 @@ try {
 
   if (!allowEmpty && candidateTotal === 0) {
     throw new Error('Candidate contains no recoverable TRAPit workspace data. Refusing to treat it as valid production data. Set TRAPIT_ALLOW_EMPTY_DATA_FILE=1 only for a brand-new empty deployment.');
+  }
+
+  if (!allowEmpty && candidateCoreCount === 0) {
+    throw new Error('Candidate has no core workspace data (groups, pools, tests, attempts, questions, polls). Refusing to treat it as valid production data. Set TRAPIT_ALLOW_EMPTY_DATA_FILE=1 only for a brand-new empty deployment.');
   }
 
   if (baselineFile) {

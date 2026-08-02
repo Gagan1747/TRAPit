@@ -3,10 +3,12 @@ import { type WorkspaceBranding } from "@trapit/testing";
 import { NextResponse } from "next/server";
 
 import { createApportionAppointment, listApportionAppointmentsForOwner, listApportionSlotCounts } from "../../../../lib/apportion-store";
+import { publishWorkspaceEvent } from "../../../../lib/realtime-events";
 import { getWebSession } from "../../../../lib/session";
 import { getWorkspaceBrandingByAppointmentShareCode } from "../../../../lib/testing-store";
 
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
 function parseTimeToMinutes(value: string) {
   const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
@@ -74,12 +76,35 @@ function createDateFromKey(value: string) {
   return new Date(year, month - 1, day);
 }
 
+function createDateFromKeyUtc(value: string) {
+  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
 function createDateKey(value: Date) {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, "0");
   const day = String(value.getDate()).padStart(2, "0");
 
   return `${year}-${month}-${day}`;
+}
+
+function createDateKeyUtc(value: Date) {
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(value.getUTCDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function getIstDateKey(value: Date) {
+  const shifted = new Date(value.getTime() + (IST_OFFSET_MINUTES * 60 * 1000));
+  return createDateKeyUtc(shifted);
 }
 
 function createUtcSlotIso(slotDateKey: string, dayOffset: number, minutesOfDay: number) {
@@ -97,7 +122,7 @@ function createUtcSlotIso(slotDateKey: string, dayOffset: number, minutesOfDay: 
     minutesOfDay % 60,
     0,
     0,
-  ));
+  ) - (IST_OFFSET_MINUTES * 60 * 1000));
 
   return slotDate.toISOString();
 }
@@ -139,14 +164,12 @@ function buildSlotStartsForDate(branding: WorkspaceBranding, slotDateKey: string
 function validateBookingDate(branding: WorkspaceBranding, slotDateKey: string) {
   const workingDays = parseWorkingDays(branding.workingDays);
   const requestedLocalDate = createDateFromKey(slotDateKey);
+  const requestedDateUtc = createDateFromKeyUtc(slotDateKey);
   const advanceBookingWeeks = branding.advanceBookingWeeks ?? 4;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const maxDate = new Date(today);
-  maxDate.setDate(today.getDate() + (advanceBookingWeeks * 7) - 1);
-  maxDate.setHours(23, 59, 59, 999);
+  const todayIstDateKey = getIstDateKey(new Date());
+  const todayUtcDate = createDateFromKeyUtc(todayIstDateKey);
 
-  if (!requestedLocalDate) {
+  if (!requestedLocalDate || !requestedDateUtc || !todayUtcDate) {
     throw new Error("Choose a valid appointment date.");
   }
 
@@ -156,11 +179,15 @@ function validateBookingDate(branding: WorkspaceBranding, slotDateKey: string) {
     throw new Error("Choose a working day for this business.");
   }
 
-  if (requestedLocalDate.getTime() < today.getTime()) {
+  if (slotDateKey < todayIstDateKey) {
     throw new Error("Choose a future appointment date.");
   }
 
-  if (requestedLocalDate.getTime() > maxDate.getTime()) {
+  const maxDate = new Date(todayUtcDate);
+  maxDate.setUTCDate(todayUtcDate.getUTCDate() + (advanceBookingWeeks * 7) - 1);
+  const maxDateKey = createDateKeyUtc(maxDate);
+
+  if (slotDateKey > maxDateKey) {
     throw new Error("Choose a date within the allowed advance booking period.");
   }
 }
@@ -252,6 +279,7 @@ export async function GET(
       workingHours: business.branding.workingHours,
       workingHoursSecondWindow: business.branding.workingHoursSecondWindow,
     },
+    viewerName: getSessionDisplayName(session) ?? session.phoneNumber ?? session.email ?? "Registered user",
     queueCounts,
     slotCounts,
   });
@@ -284,7 +312,7 @@ export async function POST(
   let caution: string | null = null;
 
   try {
-    const slotDateKey = body.slotDateKey?.trim() || createDateKey(new Date());
+    const slotDateKey = body.slotDateKey?.trim() || getIstDateKey(new Date());
     validateBookingDate(business.branding, slotDateKey);
 
     if (business.branding.justAddToList) {
@@ -340,5 +368,6 @@ export async function POST(
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to book appointment." }, { status: 400 });
   }
 
+  publishWorkspaceEvent("apportion");
   return NextResponse.json({ appointment, caution });
 }

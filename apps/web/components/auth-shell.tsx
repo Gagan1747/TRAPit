@@ -2,6 +2,7 @@ type AuthShellProps = {
   title: string;
   eyebrow?: string;
   description?: string;
+  heroVisual?: React.ReactNode;
   showHeroLinks?: boolean;
   children: React.ReactNode;
 };
@@ -10,6 +11,7 @@ export function AuthShell({
   title,
   eyebrow,
   description,
+  heroVisual,
   showHeroLinks = true,
   children,
 }: AuthShellProps) {
@@ -20,6 +22,7 @@ export function AuthShell({
           {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
           <h1 className="hero-title">{title}</h1>
           {description ? <p className="hero-text">{description}</p> : null}
+          {heroVisual ? <div className="hero-visual-wrap">{heroVisual}</div> : null}
           {showHeroLinks ? (
             <div className="hero-links">
               <a className="button" href="/sign-in">

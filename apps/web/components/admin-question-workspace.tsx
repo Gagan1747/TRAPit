@@ -33,7 +33,7 @@ import {
 import { type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
-import { formatShortDate, formatShortDateTime } from "../lib/date-format";
+import { formatShortDate, formatShortDateTime, formatShortDateTimeIst } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
@@ -86,6 +86,7 @@ const BUSINESS_DAY_END_MINUTES = 22 * 60;
 const DEFAULT_BUSINESS_START_MINUTES = 10 * 60;
 const DEFAULT_BUSINESS_END_MINUTES = 18 * 60;
 const DEFAULT_APPOINTMENT_NOTES_PROMPT = "Share a brief about appointment purpose";
+const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
 type TestRepeatMode = "none" | "daily" | "weekly" | "monthly";
 
@@ -107,6 +108,46 @@ function toDateTimeInputValue(value: string) {
   const timezoneOffsetMs = date.getTimezoneOffset() * 60 * 1000;
 
   return new Date(date.getTime() - timezoneOffsetMs).toISOString().slice(0, 16);
+}
+
+function toIstDateTimeInputValue(value: string) {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const shifted = new Date(date.getTime() + (IST_OFFSET_MINUTES * 60 * 1000));
+  const year = shifted.getUTCFullYear();
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(shifted.getUTCDate()).padStart(2, "0");
+  const hours = String(shifted.getUTCHours()).padStart(2, "0");
+  const minutes = String(shifted.getUTCMinutes()).padStart(2, "0");
+
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function parseIstDateTimeInputToIso(value: string) {
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  const hour = Number.parseInt(match[4], 10);
+  const minute = Number.parseInt(match[5], 10);
+
+  if ([year, month, day, hour, minute].some((part) => Number.isNaN(part))) {
+    return null;
+  }
+
+  const utcMs = Date.UTC(year, month - 1, day, hour, minute, 0, 0) - (IST_OFFSET_MINUTES * 60 * 1000);
+  const date = new Date(utcMs);
+
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function formatBusinessDays(selectedDayKeys: string[]) {
@@ -633,11 +674,11 @@ function isActiveApportionStatus(status: ApportionAppointment["currentStatus"]) 
 function getApportionStatusLabel(status: ApportionAppointment["currentStatus"]) {
   switch (status) {
     case "present-in-person":
-      return "Present in person";
+      return "Move in";
     case "done":
       return "Done";
     case "pushed-back":
-      return "You are late";
+      return "Pending";
     case "rejected":
       return "Rejected";
     case "cancelled":
@@ -647,18 +688,42 @@ function getApportionStatusLabel(status: ApportionAppointment["currentStatus"]) 
   }
 }
 
-function getLatestApportionActivitySummary(appointment: ApportionAppointment) {
-  const latestEntry = appointment.history[appointment.history.length - 1] ?? null;
-
-  if (!latestEntry) {
-    return null;
+function getRequesterQueueStatusLabel(input: {
+  currentStatus: ApportionAppointment["currentStatus"];
+  queuePosition: number | null;
+}) {
+  if (!isActiveApportionStatus(input.currentStatus)) {
+    return {
+      helperText: null,
+      label: getApportionStatusLabel(input.currentStatus),
+    };
   }
 
-  if (latestEntry.action === "rescheduled" && latestEntry.fromStartsAt && latestEntry.toStartsAt) {
-    return `Rescheduled from ${formatShortDateTime(latestEntry.fromStartsAt)} to ${formatShortDateTime(latestEntry.toStartsAt)}`;
+  if (input.queuePosition === 1) {
+    return {
+      helperText: null,
+      label: "Move in",
+    };
   }
 
-  return `${getApportionStatusLabel(appointment.currentStatus)} on ${formatShortDateTime(latestEntry.at)}`;
+  if (input.queuePosition === 2) {
+    return {
+      helperText: "Your appointment will start as soon as the appointment before you finishes.",
+      label: "You are the next",
+    };
+  }
+
+  if (input.queuePosition !== null && input.queuePosition >= 3 && input.queuePosition <= 5) {
+    return {
+      helperText: null,
+      label: "Be present in person",
+    };
+  }
+
+  return {
+    helperText: null,
+    label: "Upcoming",
+  };
 }
 
 async function fileToDataUrl(file: File) {
@@ -1328,17 +1393,14 @@ export function AdminQuestionWorkspace({
     }
 
     try {
-      const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, userDashboardPayload, pollsPayload, brandingPayload, apportionPayload, categorySnapshotPayload, categoryManagementPayload] =
+      const [userDashboardPayload, brandingPayload, apportionPayload, userParticipantsPayload, categorySnapshotPayload, categoryManagementPayload] =
         await Promise.all([
-          readJson<QuestionApiResponse>(await fetch("/api/admin/questions")),
-          readJson<PoolsResponse>(await fetch("/api/admin/pools")),
-          readJson<ParticipantsResponse>(await fetch("/api/admin/participants")),
-          readJson<ScheduledTestsResponse>(await fetch("/api/admin/tests")),
-          readJson<HistoryResponse>(await fetch("/api/admin/history")),
           readJson<UserDashboardResponse>(await fetch("/api/user/dashboard")),
-          readJson<PollsResponse>(await fetch("/api/admin/polls")),
           readJson<BrandingResponse>(await fetch("/api/admin/branding")),
           readJson<ApportionDashboardResponse>(await fetch("/api/user/apportion")),
+          currentActorRole === "user"
+            ? readJson<ParticipantsResponse>(await fetch("/api/admin/participants"))
+            : Promise.resolve<ParticipantsResponse | null>(null),
           currentActorRole === "user"
             ? readJson<UserCategorySnapshotResponse>(await fetch("/api/user/category"))
             : Promise.resolve<UserCategorySnapshotResponse | null>(null),
@@ -1347,18 +1409,10 @@ export function AdminQuestionWorkspace({
             : Promise.resolve<SuperAdminCategoryManagementResponse | null>(null),
         ]);
 
-      setQuestions(questionsPayload.questions);
-      setPools(poolsPayload.pools);
-      setParticipants(participantsPayload.participants);
-      setParticipantGroups(participantsPayload.participantGroups);
-      setGroupJoinRequests(participantsPayload.groupJoinRequests);
       setOutgoingGroupJoinRequests(userDashboardPayload.groupJoinRequests);
       setParticipantPolls(userDashboardPayload.availablePolls);
       setParticipantTests(userDashboardPayload.availableTests);
       setParticipantTestHistory(userDashboardPayload.history);
-      setPollQuestions(pollsPayload.pollQuestions);
-      setScheduledPolls(pollsPayload.scheduledPolls);
-      setScheduledTests(testsPayload.scheduledTests);
       setWorkspaceBranding(brandingPayload.branding);
       setBusinessAppointmentShareCode(apportionPayload.appointmentShareCode ?? brandingPayload.branding?.appointmentShareCode ?? null);
       if (!isBrandingDraftDirtyRef.current) {
@@ -1366,11 +1420,37 @@ export function AdminQuestionWorkspace({
       }
       setOwnerApportionAppointments(apportionPayload.ownerAppointments);
       setRequesterApportionAppointments(apportionPayload.requesterAppointments);
+      setCategorySnapshot(categorySnapshotPayload);
+      setCategoryManagement(categoryManagementPayload);
+
+      if (currentActorRole === "user") {
+        setParticipants(userParticipantsPayload?.participants ?? []);
+        setParticipantGroups(userParticipantsPayload?.participantGroups ?? []);
+        setGroupJoinRequests(userParticipantsPayload?.groupJoinRequests ?? []);
+        return;
+      }
+
+      const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, pollsPayload] =
+        await Promise.all([
+          readJson<QuestionApiResponse>(await fetch("/api/admin/questions")),
+          readJson<PoolsResponse>(await fetch("/api/admin/pools")),
+          readJson<ParticipantsResponse>(await fetch("/api/admin/participants")),
+          readJson<ScheduledTestsResponse>(await fetch("/api/admin/tests")),
+          readJson<HistoryResponse>(await fetch("/api/admin/history")),
+          readJson<PollsResponse>(await fetch("/api/admin/polls")),
+        ]);
+
+      setQuestions(questionsPayload.questions);
+      setPools(poolsPayload.pools);
+      setParticipants(participantsPayload.participants);
+      setParticipantGroups(participantsPayload.participantGroups);
+      setGroupJoinRequests(participantsPayload.groupJoinRequests);
+      setPollQuestions(pollsPayload.pollQuestions);
+      setScheduledPolls(pollsPayload.scheduledPolls);
+      setScheduledTests(testsPayload.scheduledTests);
       setHistory(historyPayload.history);
       setLeaderboards(historyPayload.leaderboards);
       setSummary(historyPayload.summary);
-      setCategorySnapshot(categorySnapshotPayload);
-      setCategoryManagement(categoryManagementPayload);
 
       setSelectedQuestionBankPoolId((currentPoolId) =>
         currentPoolId && poolsPayload.pools.some((pool) => pool.id === currentPoolId)
@@ -1392,18 +1472,35 @@ export function AdminQuestionWorkspace({
   }, []);
 
   useEffect(() => {
-    if (currentActorRole !== "user" || activeParticipantTestId) {
+    if (activeParticipantTestId) {
       return;
     }
 
-    const intervalId = window.setInterval(() => {
+    let intervalId: number | null = null;
+    const source = new EventSource("/api/internal/events");
+
+    source.onmessage = () => {
       void loadWorkspace({ silent: true });
-    }, 30000);
+    };
+
+    source.onerror = () => {
+      source.close();
+
+      if (intervalId === null) {
+        intervalId = window.setInterval(() => {
+          void loadWorkspace({ silent: true });
+        }, 15000);
+      }
+    };
 
     return () => {
-      window.clearInterval(intervalId);
+      source.close();
+
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
     };
-  }, [activeParticipantTestId, currentActorRole]);
+  }, [activeParticipantTestId]);
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -1680,7 +1777,7 @@ export function AdminQuestionWorkspace({
         setRescheduleDateTimeInput("");
       }
       setFeedback(payload.nextInPersonAppointment
-        ? `${action === "done" ? "Appointment completed." : "Appointment updated."} Next present user: ${payload.nextInPersonAppointment.requesterName}.`
+        ? `${action === "done" ? "Appointment completed." : "Appointment updated."} Next user in queue: ${payload.nextInPersonAppointment.requesterName}.`
         : action === "reschedule"
           ? "Appointment rescheduled."
           : "Appointment updated.");
@@ -1691,7 +1788,7 @@ export function AdminQuestionWorkspace({
 
   function beginRescheduleApportionAppointment(appointment: ApportionAppointment) {
     setRescheduleAppointmentId(appointment.id);
-    setRescheduleDateTimeInput(toDateTimeInputValue(appointment.startsAt));
+    setRescheduleDateTimeInput(toIstDateTimeInputValue(appointment.startsAt));
     setFeedback(null);
   }
 
@@ -1706,14 +1803,14 @@ export function AdminQuestionWorkspace({
       return;
     }
 
-    const nextDate = new Date(rescheduleDateTimeInput);
+    const nextIsoValue = parseIstDateTimeInputToIso(rescheduleDateTimeInput);
 
-    if (Number.isNaN(nextDate.getTime()) || nextDate.getTime() <= Date.now()) {
+    if (!nextIsoValue || new Date(nextIsoValue).getTime() <= Date.now()) {
       setFeedback("Enter a valid future appointment date and time.");
       return;
     }
 
-    await handleApportionAction(appointment.id, "reschedule", { nextStartsAt: nextDate.toISOString() });
+    await handleApportionAction(appointment.id, "reschedule", { nextStartsAt: nextIsoValue });
   }
 
   function resetPollScheduleForm() {
@@ -3752,27 +3849,23 @@ export function AdminQuestionWorkspace({
     ? getApportionAccessUrl(activeAppointmentShareCode)
     : "";
   const combinedApportionAppointments = [...ownerApportionAppointments, ...requesterApportionAppointments]
-    .reduce<Array<ApportionAppointment & { scope: "owner" | "requester"; serialLabel: string }>>((entries, appointment) => {
+    .reduce<Array<ApportionAppointment & { queuePosition: number | null; scope: "owner" | "requester"; serialLabel: string }>>((entries, appointment) => {
       if (entries.some((entry) => entry.id === appointment.id)) {
         return entries;
       }
 
-      const sameDayAppointments = ownerApportionAppointments
-        .filter((entry) => entry.ownerIdentifier === appointment.ownerIdentifier)
-        .filter((entry) => entry.serviceDateKey === appointment.serviceDateKey)
-        .filter((entry) => isActiveApportionStatus(entry.currentStatus))
-        .sort((left, right) => left.queueOrder - right.queueOrder);
-      const inPersonAppointments = sameDayAppointments.filter((entry) => entry.currentStatus === "present-in-person");
-      const y = sameDayAppointments.findIndex((entry) => entry.id === appointment.id);
-      const x = inPersonAppointments.findIndex((entry) => entry.id === appointment.id);
       const scope = normalizeApportionIdentifier(appointment.ownerIdentifier) === normalizeApportionIdentifier(currentAdminIdentifier)
         ? "owner"
         : "requester";
+      const queuePosition = isActiveApportionStatus(appointment.currentStatus)
+        ? appointment.queueOrder
+        : null;
 
       entries.push({
         ...appointment,
+        queuePosition,
         scope,
-        serialLabel: `${x >= 0 ? x + 1 : "-"}/${y >= 0 ? y + 1 : "-"}/${appointment.bookedQueuePosition}`,
+        serialLabel: queuePosition ? String(queuePosition) : "-",
       });
       return entries;
     }, [])
@@ -4337,7 +4430,7 @@ export function AdminQuestionWorkspace({
                             setBusinessJustAddToList(event.target.checked);
                           }}
                         />
-                        <span>Just add to the list</span>
+                        <span>Just add to the queue</span>
                       </label>
                       <p className="muted-text">If opening and closing times are the same, the booking page treats the business as open for 24 hours starting from that time.</p>
                     </div>
@@ -4481,6 +4574,15 @@ export function AdminQuestionWorkspace({
                       const isOwnerScope = appointment.scope === "owner";
                       const isFutureAppointment = new Date(appointment.startsAt).getTime() > Date.now();
                       const isRescheduling = rescheduleAppointmentId === appointment.id;
+                      const requesterQueueStatus = getRequesterQueueStatusLabel({
+                        currentStatus: appointment.currentStatus,
+                        queuePosition: appointment.queuePosition,
+                      });
+                      const ownerStatusLabel = isActiveApportionStatus(appointment.currentStatus)
+                        ? appointment.queuePosition === 1
+                          ? "Move in"
+                          : "Pending"
+                        : getApportionStatusLabel(appointment.currentStatus);
 
                       return (
                         <div className={`notification-panel-item apportion-log-item ${isOwnerScope ? "is-owner-scope" : "is-requester-scope"}`} key={appointment.id}>
@@ -4488,35 +4590,41 @@ export function AdminQuestionWorkspace({
                             <div className="apportion-log-topline">
                               <div>
                                 <p className="apportion-appointment-line">
-                                  <strong>{isOwnerScope ? appointment.requesterName : appointment.ownerName ?? appointment.ownerIdentifier}</strong>
+                                  <span className="status-chip apportion-serial-chip">#{appointment.serialLabel}</span>
+                                  {isOwnerScope ? (
+                                    <strong>{appointment.requesterName}</strong>
+                                  ) : (
+                                    <>
+                                      <strong>{appointment.ownerName ?? "Business"}</strong>
+                                      <span>{`Owner: ${appointment.ownerName ?? "Business owner"}`}</span>
+                                    </>
+                                  )}
                                   <span>
                                     {isOwnerScope
                                       ? formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier, { showFullPhoneNumber: true })
                                       : formatPhoneNumberForDisplay(appointment.ownerIdentifier, { showFullPhoneNumber: true })}
                                   </span>
-                                  <span>{formatShortDateTime(appointment.startsAt)}</span>
                                 </p>
-                                <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes ?? "None"}</p>
-                              </div>
-                              <div className="apportion-log-badges">
-                                <span className={`status-chip apportion-status-chip is-${appointment.currentStatus}`}>{getApportionStatusLabel(appointment.currentStatus)}</span>
-                                <span className="status-chip apportion-serial-chip">{appointment.serialLabel}</span>
+                                <p className="apportion-appointment-line">
+                                  <span>{formatShortDateTimeIst(appointment.startsAt)}</span>
+                                  <span className={`status-chip apportion-status-chip is-${appointment.currentStatus}`}>
+                                    {isOwnerScope ? ownerStatusLabel : requesterQueueStatus.label}
+                                  </span>
+                                </p>
+                                {!isOwnerScope && requesterQueueStatus.helperText ? (
+                                  <p className="muted-text apportion-appointment-notes">{requesterQueueStatus.helperText}</p>
+                                ) : null}
+                                {appointment.notes ? <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes}</p> : null}
                               </div>
                             </div>
-                            {getLatestApportionActivitySummary(appointment) ? (
-                              <p className="muted-text apportion-appointment-notes">{getLatestApportionActivitySummary(appointment)}</p>
-                            ) : null}
                             <div className="inline-actions apportion-log-actions">
                               {isOwnerScope && isActiveApportionStatus(appointment.currentStatus) ? (
                                 <>
-                                  <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "present-in-person")}>
-                                    Present in person
+                                  <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "push-back")}>
+                                    Next
                                   </button>
                                   <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "done")}>
                                     Done
-                                  </button>
-                                  <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "push-back")}>
-                                    Push back
                                   </button>
                                   <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "reject", { requiresConfirmation: true })}>
                                     Reject

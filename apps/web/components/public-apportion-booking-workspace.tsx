@@ -7,6 +7,7 @@ import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-
 
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const WEEKDAY_SHORT_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
 type BookingPayload = {
   business: {
@@ -25,6 +26,7 @@ type BookingPayload = {
     workingHours: string;
     workingHoursSecondWindow: string;
   };
+  viewerName: string;
   queueCounts: Array<{ count: number; dateKey: string }>;
   slotCounts: Array<{ count: number; startsAt: string }>;
 };
@@ -57,6 +59,19 @@ function createDateKey(value: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function createDateKeyUtc(value: Date) {
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(value.getUTCDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function getIstDateKey(value: Date) {
+  const shifted = new Date(value.getTime() + (IST_OFFSET_MINUTES * 60 * 1000));
+  return createDateKeyUtc(shifted);
+}
+
 function createDateFromKey(value: string) {
   const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
 
@@ -78,7 +93,7 @@ function createUtcSlotIso(slotDateKey: string, dayOffset: number, minutesOfDay: 
     minutesOfDay % 60,
     0,
     0,
-  ));
+  ) - (IST_OFFSET_MINUTES * 60 * 1000));
 
   return slotDate.toISOString();
 }
@@ -332,7 +347,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   const [isLoading, setIsLoading] = useState(true);
   const [notes, setNotes] = useState("");
   const [payload, setPayload] = useState<BookingPayload | null>(null);
-  const [selectedDateKey, setSelectedDateKey] = useState(createDateKey(new Date()));
+  const [selectedDateKey, setSelectedDateKey] = useState(getIstDateKey(new Date()));
   const [selectedSlotIso, setSelectedSlotIso] = useState<string | null>(null);
 
   async function loadBookingPage() {
@@ -362,7 +377,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     }
 
     const workingDays = parseWorkingDays(payload.business.workingDays);
-    const today = new Date();
+    const today = createDateFromKey(getIstDateKey(new Date()));
     const nextWorkingDate = Array.from({ length: 28 }, (_, offset) => {
       const date = new Date(today);
       date.setDate(today.getDate() + offset);
@@ -428,7 +443,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     return <div className="empty-state"><p className="muted-text">{feedback ?? "Unable to load this appointment page."}</p></div>;
   }
 
-  const today = new Date();
+  const today = createDateFromKey(getIstDateKey(new Date()));
   today.setHours(0, 0, 0, 0);
   const workingDays = parseWorkingDays(payload.business.workingDays);
   const slotDurationMinutes = payload.business.slotDurationMinutes ?? 30;
@@ -445,10 +460,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     workingHoursSecondWindow: payload.business.workingHoursSecondWindow,
   }).map((slot) => {
     const startsAt = slot.startsAt;
-    const slotLocalDate = createDateFromKey(selectedDateKey);
-    slotLocalDate.setDate(slotLocalDate.getDate() + slot.dayOffset);
-    slotLocalDate.setHours(Math.floor(slot.minutes / 60), slot.minutes % 60, 0, 0);
-    const isPast = slotLocalDate.getTime() <= Date.now();
+    const isPast = new Date(startsAt).getTime() <= Date.now();
     const bookedCount = slotCountsByIso[startsAt] ?? 0;
     const remainingCount = Math.max(0, payload.business.appointmentsPerSlot - bookedCount);
     const isFull = bookedCount >= payload.business.appointmentsPerSlot;
@@ -552,7 +564,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                 <p className="muted-text apportion-working-hours">Working hours: {workingHoursText || "Not specified"}</p>
                 <p className="apportion-queue-estimate">{queueEstimate?.label ?? "Not available"}</p>
                 <p className="muted-text">
-                  You do not need to select a slot for this business. Joining the list places you in the live queue for the selected day.
+                  You do not need to select a slot for this business. Joining the queue places you in the live queue for the selected day.
                 </p>
                 {queueEstimate?.exceedsWorkingHours ? (
                   <p className="muted-text apportion-queue-warning">
@@ -598,10 +610,11 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
             {feedback ? <p className="muted-text">{feedback}</p> : null}
             <div className="inline-actions">
               <button className="button" disabled={isBooking} type="button" onClick={() => void handleBookAppointment()}>
-                {isBooking ? "Booking..." : payload.business.justAddToList ? "Join appointment list" : "Book appointment"}
+                {isBooking ? "Booking..." : payload.business.justAddToList ? "Join appointment queue" : "Book appointment"}
               </button>
               <a className="button-secondary" href="/user?tab=apportion">Open my dashboard</a>
             </div>
+            <p className="muted-text">Booking user: {payload.viewerName}</p>
           </div>
         </div>
       </section>
