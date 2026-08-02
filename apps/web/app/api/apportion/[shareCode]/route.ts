@@ -82,6 +82,26 @@ function createDateKey(value: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function createUtcSlotIso(slotDateKey: string, dayOffset: number, minutesOfDay: number) {
+  const [year, month, day] = slotDateKey.split("-").map((part) => Number.parseInt(part, 10));
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+
+  const slotDate = new Date(Date.UTC(
+    year,
+    month - 1,
+    day + dayOffset,
+    Math.floor(minutesOfDay / 60),
+    minutesOfDay % 60,
+    0,
+    0,
+  ));
+
+  return slotDate.toISOString();
+}
+
 function getSlotStepMinutes(slotDurationMinutes: number) {
   return slotDurationMinutes <= 60 ? 15 : slotDurationMinutes;
 }
@@ -101,16 +121,18 @@ function buildSlotStartsForDate(branding: WorkspaceBranding, slotDateKey: string
       const absoluteMinutes = range.startMinutes + (index * slotStepMinutes);
       const dayOffset = Math.floor(absoluteMinutes / (24 * 60));
       const minutesOfDay = ((absoluteMinutes % (24 * 60)) + (24 * 60)) % (24 * 60);
-      const slotDate = createDateFromKey(slotDateKey) ?? new Date();
-      slotDate.setDate(slotDate.getDate() + dayOffset);
-      slotDate.setHours(Math.floor(minutesOfDay / 60), minutesOfDay % 60, 0, 0);
+      const startsAt = createUtcSlotIso(slotDateKey, dayOffset, minutesOfDay);
+
+      if (!startsAt) {
+        return null;
+      }
 
       return {
         dayOffset,
         minutesOfDay,
-        startsAt: slotDate.toISOString(),
+        startsAt,
       };
-    });
+    }).filter((slot): slot is { dayOffset: number; minutesOfDay: number; startsAt: string } => Boolean(slot));
   });
 }
 

@@ -63,6 +63,26 @@ function createDateFromKey(value: string) {
   return new Date(year, month - 1, day);
 }
 
+function createUtcSlotIso(slotDateKey: string, dayOffset: number, minutesOfDay: number) {
+  const [year, month, day] = slotDateKey.split("-").map((part) => Number.parseInt(part, 10));
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+
+  const slotDate = new Date(Date.UTC(
+    year,
+    month - 1,
+    day + dayOffset,
+    Math.floor(minutesOfDay / 60),
+    minutesOfDay % 60,
+    0,
+    0,
+  ));
+
+  return slotDate.toISOString();
+}
+
 function formatTime(minutes: number) {
   const hours24 = Math.floor(minutes / 60);
   const displayHour = hours24 % 12 || 12;
@@ -134,13 +154,6 @@ function isSameDay(left: Date, right: Date) {
     && left.getDate() === right.getDate();
 }
 
-function createSlotIso(dateKey: string, minutes: number) {
-  const date = createDateFromKey(dateKey);
-  date.setHours(Math.floor(minutes / 60), minutes % 60, 0, 0);
-
-  return date.toISOString();
-}
-
 function getSlotStepMinutes(slotDurationMinutes: number) {
   return slotDurationMinutes <= 60 ? 15 : slotDurationMinutes;
 }
@@ -163,18 +176,20 @@ function buildSlotStartsForDate(input: {
       const absoluteMinutes = range.startMinutes + (index * slotStepMinutes);
       const dayOffset = Math.floor(absoluteMinutes / (24 * 60));
       const minutesOfDay = ((absoluteMinutes % (24 * 60)) + (24 * 60)) % (24 * 60);
-      const slotDate = createDateFromKey(input.selectedDateKey);
-      slotDate.setDate(slotDate.getDate() + dayOffset);
-      slotDate.setHours(Math.floor(minutesOfDay / 60), minutesOfDay % 60, 0, 0);
+      const startsAt = createUtcSlotIso(input.selectedDateKey, dayOffset, minutesOfDay);
+
+      if (!startsAt) {
+        return null;
+      }
 
       return {
         dayOffset,
         label: `${formatTime(minutesOfDay)}${dayOffset > 0 ? ` (+${dayOffset} day${dayOffset === 1 ? "" : "s"})` : ""}`,
         minutes: minutesOfDay,
-        startsAt: slotDate.toISOString(),
+        startsAt,
       };
     },
-  ));
+  )).filter((slot): slot is { dayOffset: number; label: string; minutes: number; startsAt: string } => Boolean(slot));
 }
 
 function estimateQueueStart(input: {
@@ -430,8 +445,10 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     workingHoursSecondWindow: payload.business.workingHoursSecondWindow,
   }).map((slot) => {
     const startsAt = slot.startsAt;
-    const slotDate = new Date(startsAt);
-    const isPast = slotDate.getTime() <= Date.now();
+    const slotLocalDate = createDateFromKey(selectedDateKey);
+    slotLocalDate.setDate(slotLocalDate.getDate() + slot.dayOffset);
+    slotLocalDate.setHours(Math.floor(slot.minutes / 60), slot.minutes % 60, 0, 0);
+    const isPast = slotLocalDate.getTime() <= Date.now();
     const bookedCount = slotCountsByIso[startsAt] ?? 0;
     const remainingCount = Math.max(0, payload.business.appointmentsPerSlot - bookedCount);
     const isFull = bookedCount >= payload.business.appointmentsPerSlot;
