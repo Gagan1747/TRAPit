@@ -24,7 +24,9 @@ type CognitoRequestError = Error & {
 
 type SignUpResponse = {
   CodeDeliveryDetails?: {
+    AttributeName?: string;
     Destination?: string;
+    DeliveryMedium?: string;
   };
   UserConfirmed?: boolean;
 };
@@ -35,13 +37,17 @@ type ConfirmSignUpResponse = {
 
 type ResendConfirmationCodeResponse = {
   CodeDeliveryDetails?: {
+    AttributeName?: string;
     Destination?: string;
+    DeliveryMedium?: string;
   };
 };
 
 type ForgotPasswordResponse = {
   CodeDeliveryDetails?: {
+    AttributeName?: string;
     Destination?: string;
+    DeliveryMedium?: string;
   };
 };
 

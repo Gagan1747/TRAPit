@@ -14,7 +14,11 @@ export function sanitizeNationalPhoneInput(value: string) {
 
 export function combinePhoneNumber(countryCode: string, nationalNumber: string) {
   const normalizedCountryCode = sanitizeCountryCodeInput(countryCode);
-  const normalizedNationalNumber = sanitizeNationalPhoneInput(nationalNumber);
+  const countryDigits = getDigitsOnly(normalizedCountryCode);
+  const nationalDigits = sanitizeNationalPhoneInput(nationalNumber);
+  const normalizedNationalNumber = nationalDigits.startsWith(countryDigits)
+    ? nationalDigits.slice(countryDigits.length)
+    : nationalDigits;
 
   return `${normalizedCountryCode}${normalizedNationalNumber}`;
 }

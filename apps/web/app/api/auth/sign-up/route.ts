@@ -61,12 +61,15 @@ export async function POST(request: Request) {
         deliveryDestination = resend.CodeDeliveryDetails?.Destination ?? deliveryDestination;
 
         console.info("[auth/sign-up] Requested confirmation resend after user creation", {
+          attributeName: resend.CodeDeliveryDetails?.AttributeName ?? null,
+          deliveryMedium: resend.CodeDeliveryDetails?.DeliveryMedium ?? null,
           phoneSuffix: maskPhoneForLogs(phoneNumber),
           hasDeliveryDestination: Boolean(resend.CodeDeliveryDetails?.Destination),
         });
       } catch (resendError) {
         console.error("[auth/sign-up] Failed confirmation resend after user creation", {
           code: getCognitoErrorCode(resendError),
+          message: getCognitoErrorMessage(resendError),
           phoneSuffix: maskPhoneForLogs(phoneNumber),
         });
       }
@@ -87,6 +90,8 @@ export async function POST(request: Request) {
     }
 
     console.info("[auth/sign-up] Sign-up completed", {
+      attributeName: result.CodeDeliveryDetails?.AttributeName ?? null,
+      deliveryMedium: result.CodeDeliveryDetails?.DeliveryMedium ?? null,
       phoneSuffix: maskPhoneForLogs(phoneNumber),
       requiresConfirmation: !result.UserConfirmed,
       hasDeliveryDestination: Boolean(deliveryDestination),
