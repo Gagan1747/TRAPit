@@ -118,9 +118,15 @@ export async function mobileSignIn(phoneNumber: string, password: string) {
   } satisfies MobileTokens;
 }
 
-export async function mobileSignUp(fullName: string, phoneNumber: string, password: string) {
+export async function mobileSignUp(
+  fullName: string,
+  phoneNumber: string,
+  password: string,
+  acceptedTerms: boolean,
+) {
   const response = await fetch(`${getApiBaseUrl()}/api/auth/sign-up`, {
     body: JSON.stringify({
+      acceptedTerms,
       fullName,
       phoneNumber: normalizePhoneNumber(phoneNumber),
       password,

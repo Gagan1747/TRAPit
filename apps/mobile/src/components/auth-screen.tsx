@@ -32,6 +32,7 @@ export function AuthScreen({ mode }: AuthScreenProps) {
   const [confirmationCode, setConfirmationCode] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [fullName, setFullName] = useState("");
+  const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
   const [isPending, setIsPending] = useState(false);
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [password, setPassword] = useState("");
@@ -101,11 +102,16 @@ export function AuthScreen({ mode }: AuthScreenProps) {
       return;
     }
 
+    if (mode === "sign-up" && !hasAcceptedTerms) {
+      setErrorMessage("Accept the TRAPit.in Terms of Service to create an account.");
+      return;
+    }
+
     setIsPending(true);
 
     try {
       if (mode === "sign-up") {
-        const result = await signUp(fullName, combinedPhoneNumber, password);
+        const result = await signUp(fullName, combinedPhoneNumber, password, hasAcceptedTerms);
         setSignUpState({
           destination: result.deliveryDestination,
           requiresConfirmation: result.requiresConfirmation,
@@ -281,6 +287,21 @@ export function AuthScreen({ mode }: AuthScreenProps) {
 
           {signUpState?.warning ? <Text style={styles.metaText}>{signUpState.warning}</Text> : null}
 
+          {mode === "sign-up" ? (
+            <Pressable
+              style={styles.termsConsentRow}
+              disabled={!authConfigured || Boolean(signUpState?.requiresConfirmation)}
+              onPress={() => setHasAcceptedTerms((currentValue) => !currentValue)}
+            >
+              <View style={[styles.checkbox, hasAcceptedTerms && styles.checkboxChecked]}>
+                {hasAcceptedTerms ? <Text style={styles.checkboxMark}>X</Text> : null}
+              </View>
+              <Text style={styles.termsConsentText}>
+                I agree to the TRAPit.in Terms of Service and consent to essential service communications.
+              </Text>
+            </Pressable>
+          ) : null}
+
           {errorMessage ? <Text style={styles.metaText}>{errorMessage}</Text> : null}
 
           <Pressable style={styles.primaryButton} disabled={!authConfigured || isPending} onPress={handleSubmit}>
@@ -440,6 +461,36 @@ const styles = StyleSheet.create({
   passwordToggleText: {
     color: "#6d5a4e",
     fontWeight: "600",
+  },
+  termsConsentRow: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-start",
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: "#b44c2f",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#fffaf5",
+  },
+  checkboxChecked: {
+    backgroundColor: "#b44c2f",
+  },
+  checkboxMark: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
+  termsConsentText: {
+    flex: 1,
+    color: "#6d5a4e",
+    fontSize: 13,
+    lineHeight: 18,
   },
   roleRow: {
     flexDirection: "row",

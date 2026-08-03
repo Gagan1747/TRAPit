@@ -21,7 +21,12 @@ type AuthContextValue = {
   confirmSignUp: (phoneNumber: string, code: string) => Promise<void>;
   signIn: (phoneNumber: string, password: string) => Promise<MobileAuthSession>;
   signOut: () => Promise<void>;
-  signUp: (fullName: string, phoneNumber: string, password: string) => Promise<SignUpResult>;
+  signUp: (
+    fullName: string,
+    phoneNumber: string,
+    password: string,
+    acceptedTerms: boolean,
+  ) => Promise<SignUpResult>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -72,12 +77,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return nextSession;
   }
 
-  async function signUp(fullName: string, phoneNumber: string, password: string) {
+  async function signUp(
+    fullName: string,
+    phoneNumber: string,
+    password: string,
+    acceptedTerms: boolean,
+  ) {
     if (!authConfigured) {
       throw new Error(getMobileAuthSetupMessage());
     }
 
-    return mobileSignUp(fullName, phoneNumber, password);
+    return mobileSignUp(fullName, phoneNumber, password, acceptedTerms);
   }
 
   async function confirmSignUp(phoneNumber: string, code: string) {

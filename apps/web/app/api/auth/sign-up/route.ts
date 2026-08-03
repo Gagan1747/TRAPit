@@ -52,7 +52,25 @@ export async function POST(request: Request) {
     }
 
     const result = await signUpWithCognito(phoneNumber, password, fullName);
+    let deliveryDestination = result.CodeDeliveryDetails?.Destination ?? null;
     let warning: string | undefined;
+
+    if (!result.UserConfirmed) {
+      try {
+        const resend = await resendCognitoConfirmationCode(phoneNumber);
+        deliveryDestination = resend.CodeDeliveryDetails?.Destination ?? deliveryDestination;
+
+        console.info("[auth/sign-up] Requested confirmation resend after user creation", {
+          phoneSuffix: maskPhoneForLogs(phoneNumber),
+          hasDeliveryDestination: Boolean(resend.CodeDeliveryDetails?.Destination),
+        });
+      } catch (resendError) {
+        console.error("[auth/sign-up] Failed confirmation resend after user creation", {
+          code: getCognitoErrorCode(resendError),
+          phoneSuffix: maskPhoneForLogs(phoneNumber),
+        });
+      }
+    }
 
     await recordTermsConsentForPhone(phoneNumber);
 
@@ -62,7 +80,7 @@ export async function POST(request: Request) {
       warning = "User created, but automatic assignment to the users group failed. Configure AWS credentials for the web server or add the user to the Cognito users group manually.";
     }
 
-    if (!result.UserConfirmed && !result.CodeDeliveryDetails?.Destination) {
+    if (!result.UserConfirmed && !deliveryDestination) {
       console.warn("[auth/sign-up] Cognito returned unconfirmed user without delivery destination", {
         phoneSuffix: maskPhoneForLogs(phoneNumber),
       });
@@ -71,11 +89,11 @@ export async function POST(request: Request) {
     console.info("[auth/sign-up] Sign-up completed", {
       phoneSuffix: maskPhoneForLogs(phoneNumber),
       requiresConfirmation: !result.UserConfirmed,
-      hasDeliveryDestination: Boolean(result.CodeDeliveryDetails?.Destination),
+      hasDeliveryDestination: Boolean(deliveryDestination),
     });
 
     return NextResponse.json({
-      deliveryDestination: result.CodeDeliveryDetails?.Destination ?? null,
+      deliveryDestination,
       requiresConfirmation: !result.UserConfirmed,
       warning,
     });
