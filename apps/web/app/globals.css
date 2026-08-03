@@ -923,6 +923,14 @@ main {
   font-size: 1rem;
 }
 
+.apportion-action-icon {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: block;
+  color: currentColor;
+  flex-shrink: 0;
+}
+
 .business-logo-dropzone {
   display: grid;
   place-items: center;
@@ -1323,8 +1331,12 @@ main {
 }
 
 .apportion-serial-chip {
-  background: rgba(28, 20, 15, 0.08);
-  color: var(--ink);
+  min-width: 2.4rem;
+  justify-content: center;
+  background: rgba(127, 99, 201, 0.2);
+  border: 1px solid rgba(81, 55, 133, 0.28);
+  color: #2d1f54;
+  font-weight: 800;
 }
 
 .apportion-inline-editor {

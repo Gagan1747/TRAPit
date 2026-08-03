@@ -49,7 +49,26 @@ Required AWS resources:
 4. Lambda execution role with `secretsmanager:GetSecretValue` and `kms:Decrypt`.
 5. Cognito Custom SMS Sender trigger pointing to the Lambda and KMS key.
 
+Required environment variables:
+
+1. `RENFLAIR_SECRET_ID` - Secrets Manager secret id for Renflair credentials JSON (must include `apiKey`).
+2. `COGNITO_CUSTOM_SENDER_KMS_KEY_ARN` - KMS key ARN used by Cognito custom sender encryption.
+3. `RENFLAIR_COUNTRY_CODE` - Optional country code override (defaults to `91`).
+
 The web and mobile sign-up confirmation screens can stay on the existing Cognito confirmation-code flow.
+
+## OTP troubleshooting for unconfirmed users
+
+If users are created in Cognito but do not receive OTP:
+
+1. Confirm the user status in Cognito is `UNCONFIRMED` and capture the masked phone suffix for log lookup.
+2. Check CloudWatch logs for the Renflair custom sender Lambda and verify entries with `delivery: renflair-whatsapp`.
+3. If `status: failed`, inspect `stage`:
+   - `decrypt-and-load-secret`: verify `RENFLAIR_SECRET_ID`, `COGNITO_CUSTOM_SENDER_KMS_KEY_ARN`, and IAM permissions.
+   - `send-whatsapp`: verify Renflair API key validity, country code, and Indian mobile number format.
+4. Ensure Lambda execution role includes `secretsmanager:GetSecretValue`, `kms:Decrypt`, and CloudWatch log write permissions.
+5. Ensure Cognito user pool messaging configuration points to this Lambda as Custom SMS Sender with the same KMS key.
+6. For users blocked by pre-existing unconfirmed accounts, use the sign-up flow again to trigger OTP resend.
 
 ## What to wire next
 

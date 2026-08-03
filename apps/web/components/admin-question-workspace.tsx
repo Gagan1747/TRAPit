@@ -88,6 +88,47 @@ const DEFAULT_BUSINESS_END_MINUTES = 18 * 60;
 const DEFAULT_APPOINTMENT_NOTES_PROMPT = "Share a brief about appointment purpose";
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
+function ApportionCopyIcon() {
+  return (
+    <svg aria-hidden="true" className="apportion-action-icon" viewBox="0 0 24 24">
+      <rect fill="none" height="12" rx="2" stroke="currentColor" strokeWidth="2" width="12" x="8" y="8" />
+      <path d="M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+      <path d="M13 12h8M17 8l4 4-4 4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function ApportionOpenIcon() {
+  return (
+    <svg aria-hidden="true" className="apportion-action-icon" viewBox="0 0 24 24">
+      <path d="M14 4h6v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+      <path d="M10 14 20 4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+      <rect fill="none" height="15" rx="3" stroke="currentColor" strokeWidth="2" width="15" x="3" y="6" />
+    </svg>
+  );
+}
+
+function ApportionQrDownloadIcon() {
+  return (
+    <svg aria-hidden="true" className="apportion-action-icon" viewBox="0 0 24 24">
+      <rect fill="none" height="6" rx="1" stroke="currentColor" strokeWidth="2" width="6" x="3" y="3" />
+      <rect fill="none" height="6" rx="1" stroke="currentColor" strokeWidth="2" width="6" x="15" y="3" />
+      <rect fill="none" height="6" rx="1" stroke="currentColor" strokeWidth="2" width="6" x="3" y="15" />
+      <path d="M15 15h2v2h-2zM19 15h2v4h-2zM15 19h4v2h-4z" fill="currentColor" />
+      <path d="M20 10v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
+      <path d="m17.5 13.5 2.5 2.5 2.5-2.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
+    </svg>
+  );
+}
+
+function ApportionCopiedIcon() {
+  return (
+    <svg aria-hidden="true" className="apportion-action-icon" viewBox="0 0 24 24">
+      <path d="M5 13.5 9.5 18 19 7" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.4" />
+    </svg>
+  );
+}
+
 type TestRepeatMode = "none" | "daily" | "weekly" | "monthly";
 
 const RECURRING_TEST_INSTANCE_COUNT = 6;
@@ -4221,15 +4262,34 @@ export function AdminQuestionWorkspace({
                   <h2 className="section-title">Business details</h2>
                   {businessAppointmentUrl ? (
                     <div className="apportion-link-actions" aria-label="Business booking link actions">
-                      <button className="button-secondary small-button icon-button" title="Copy booking link" type="button" onClick={() => void handleCopyLink("business-panel", businessAppointmentUrl)}>
-                        {copiedLinkKey === "business-panel" ? "OK" : "⧉"}
+                      <button
+                        aria-label={copiedLinkKey === "business-panel" ? "Booking link copied" : "Copy booking link"}
+                        className="button-secondary small-button icon-button"
+                        title="Copy booking link"
+                        type="button"
+                        onClick={() => void handleCopyLink("business-panel", businessAppointmentUrl)}
+                      >
+                        {copiedLinkKey === "business-panel" ? <ApportionCopiedIcon /> : <ApportionCopyIcon />}
                       </button>
-                      <a className="button-secondary small-button icon-button" href={businessAppointmentUrl} rel="noreferrer" target="_blank" title="Open booking page">
-                        ↗
+                      <a
+                        aria-label="Open booking page"
+                        className="button-secondary small-button icon-button"
+                        href={businessAppointmentUrl}
+                        rel="noreferrer"
+                        target="_blank"
+                        title="Open booking page"
+                      >
+                        <ApportionOpenIcon />
                       </a>
                       {businessAppointmentQrCode ? (
-                        <a className="button-secondary small-button icon-button" download="trapit-apportion-qr.png" href={businessAppointmentQrCode} title="Download QR code">
-                          ▦
+                        <a
+                          aria-label="Download QR code"
+                          className="button-secondary small-button icon-button"
+                          download="trapit-apportion-qr.png"
+                          href={businessAppointmentQrCode}
+                          title="Download QR code"
+                        >
+                          <ApportionQrDownloadIcon />
                         </a>
                       ) : null}
                     </div>
@@ -4590,7 +4650,9 @@ export function AdminQuestionWorkspace({
                             <div className="apportion-log-topline">
                               <div>
                                 <p className="apportion-appointment-line">
-                                  <span className="status-chip apportion-serial-chip">#{appointment.serialLabel}</span>
+                                  <span className="status-chip apportion-serial-chip" aria-label={appointment.queuePosition ? `Serial number ${appointment.queuePosition}` : "No active serial number"}>
+                                    {appointment.queuePosition ? `#${appointment.serialLabel}` : "--"}
+                                  </span>
                                   {isOwnerScope ? (
                                     <strong>{appointment.requesterName}</strong>
                                   ) : (
@@ -4621,7 +4683,7 @@ export function AdminQuestionWorkspace({
                               {isOwnerScope && isActiveApportionStatus(appointment.currentStatus) ? (
                                 <>
                                   <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "push-back")}>
-                                    Next
+                                    Absent
                                   </button>
                                   <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "done")}>
                                     Done

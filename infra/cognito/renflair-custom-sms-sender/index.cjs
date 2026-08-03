@@ -71,6 +71,21 @@ function normalizeIndianPhoneNumber(phoneNumber) {
   throw new Error("Renflair WhatsApp OTP expects a 10 digit Indian mobile number.");
 }
 
+function validateRenflairResponse(responseText) {
+  const trimmed = String(responseText || "").trim();
+
+  if (!trimmed) {
+    throw new Error("Renflair response was empty.");
+  }
+
+  const normalized = trimmed.toLowerCase();
+  const hasKnownFailureSignal = /(error|failed|invalid|unauthor|denied|blocked)/i.test(normalized);
+
+  if (hasKnownFailureSignal) {
+    throw new Error(`Renflair returned a failure response: ${trimmed.slice(0, 160)}`);
+  }
+}
+
 async function sendRenflairOtp({ apiKey, countryCode, otp, phoneNumber }) {
   const url = new URL(RENFLAIR_ENDPOINT);
   url.searchParams.set("API", apiKey);
@@ -85,6 +100,8 @@ async function sendRenflairOtp({ apiKey, countryCode, otp, phoneNumber }) {
     throw new Error(`Renflair request failed with HTTP ${response.status}.`);
   }
 
+  validateRenflairResponse(responseText);
+
   return responseText;
 }
 
@@ -92,6 +109,7 @@ exports.handler = async (event) => {
   const triggerSource = event.triggerSource || "unknown";
   const encryptedCode = event.request && event.request.code;
   const phoneNumber = event.request && event.request.userAttributes && event.request.userAttributes.phone_number;
+  let stage = "validate-event";
 
   if (!encryptedCode) {
     throw new Error("Cognito custom sender event did not include an encrypted code.");
@@ -101,20 +119,36 @@ exports.handler = async (event) => {
     throw new Error("Cognito custom sender event did not include phone_number.");
   }
 
-  const [otp, secret] = await Promise.all([decryptCognitoCode(encryptedCode), getRenflairSecret()]);
-  await sendRenflairOtp({
-    apiKey: secret.apiKey,
-    countryCode: secret.countryCode,
-    otp,
-    phoneNumber,
-  });
+  try {
+    stage = "decrypt-and-load-secret";
+    const [otp, secret] = await Promise.all([decryptCognitoCode(encryptedCode), getRenflairSecret()]);
 
-  console.log(JSON.stringify({
-    delivery: "renflair-whatsapp",
-    phoneSuffix: phoneNumber.slice(-4),
-    status: "sent",
-    triggerSource,
-  }));
+    stage = "send-whatsapp";
+    await sendRenflairOtp({
+      apiKey: secret.apiKey,
+      countryCode: secret.countryCode,
+      otp,
+      phoneNumber,
+    });
+
+    console.log(JSON.stringify({
+      delivery: "renflair-whatsapp",
+      phoneSuffix: phoneNumber.slice(-4),
+      stage,
+      status: "sent",
+      triggerSource,
+    }));
+  } catch (error) {
+    console.error(JSON.stringify({
+      delivery: "renflair-whatsapp",
+      message: error instanceof Error ? error.message : "Unexpected custom sender error.",
+      phoneSuffix: phoneNumber.slice(-4),
+      stage,
+      status: "failed",
+      triggerSource,
+    }));
+    throw error;
+  }
 
   return event;
 };

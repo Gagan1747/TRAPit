@@ -421,11 +421,22 @@ export async function listRegisteredDirectoryUsers(): Promise<RegisteredDirector
   return users;
 }
 
+export function getCognitoErrorCode(error: unknown): string | null {
+  if (!(error instanceof Error)) {
+    return null;
+  }
+
+  const cognitoError = error as CognitoRequestError;
+  const code = cognitoError.code?.trim();
+
+  return code ? code : null;
+}
+
 export function getCognitoErrorMessage(error: unknown): string {
   if (error instanceof Error) {
-    const cognitoError = error as CognitoRequestError;
+    const cognitoCode = getCognitoErrorCode(error);
 
-    switch (cognitoError.code ?? "") {
+    switch (cognitoCode ?? "") {
       case "CodeMismatchException":
         return "The confirmation code is invalid.";
       case "ExpiredCodeException":
