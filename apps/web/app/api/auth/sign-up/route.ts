@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 
 import {
   addUserToDefaultGroup,
+  deleteCognitoUser,
   getCognitoErrorCode,
   getCognitoErrorMessage,
-  resendCognitoConfirmationCode,
+  getCognitoRawErrorMessage,
   signUpWithCognito,
 } from "../../../../lib/cognito";
 import { recordTermsConsentForPhone } from "../../../../lib/terms-consent-store";
@@ -55,24 +56,27 @@ export async function POST(request: Request) {
     let deliveryDestination = result.CodeDeliveryDetails?.Destination ?? null;
     let warning: string | undefined;
 
-    if (!result.UserConfirmed) {
+    if (!result.UserConfirmed && !deliveryDestination) {
       try {
-        const resend = await resendCognitoConfirmationCode(phoneNumber);
-        deliveryDestination = resend.CodeDeliveryDetails?.Destination ?? deliveryDestination;
+        await deleteCognitoUser(phoneNumber);
 
-        console.info("[auth/sign-up] Requested confirmation resend after user creation", {
-          attributeName: resend.CodeDeliveryDetails?.AttributeName ?? null,
-          deliveryMedium: resend.CodeDeliveryDetails?.DeliveryMedium ?? null,
+        console.error("[auth/sign-up] Deleted unconfirmed user after missing OTP delivery", {
           phoneSuffix: maskPhoneForLogs(phoneNumber),
-          hasDeliveryDestination: Boolean(resend.CodeDeliveryDetails?.Destination),
         });
-      } catch (resendError) {
-        console.error("[auth/sign-up] Failed confirmation resend after user creation", {
-          code: getCognitoErrorCode(resendError),
-          message: getCognitoErrorMessage(resendError),
+      } catch (deleteError) {
+        console.error("[auth/sign-up] Failed to delete unconfirmed user after missing OTP delivery", {
+          code: getCognitoErrorCode(deleteError),
+          message: getCognitoRawErrorMessage(deleteError) ?? getCognitoErrorMessage(deleteError),
           phoneSuffix: maskPhoneForLogs(phoneNumber),
         });
       }
+
+      return NextResponse.json(
+        {
+          error: "Cognito created the account but did not generate a signup OTP. Check Cognito phone-number signup verification and Custom SMS Sender settings, then try again.",
+        },
+        { status: 502 },
+      );
     }
 
     await recordTermsConsentForPhone(phoneNumber);

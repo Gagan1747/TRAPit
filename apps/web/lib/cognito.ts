@@ -2,6 +2,7 @@ import "server-only";
 
 import {
   AdminAddUserToGroupCommand,
+  AdminDeleteUserCommand,
   CognitoIdentityProviderClient,
   ListUsersCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
@@ -390,6 +391,18 @@ export async function addUserToDefaultGroup(phoneNumber: string) {
   );
 }
 
+export async function deleteCognitoUser(phoneNumber: string) {
+  const config = getConfig();
+  const normalizedPhoneNumber = normalizePhoneNumber(phoneNumber);
+
+  await getAdminClient().send(
+    new AdminDeleteUserCommand({
+      Username: normalizedPhoneNumber,
+      UserPoolId: config.userPoolId,
+    }),
+  );
+}
+
 export async function listRegisteredDirectoryUsers(): Promise<RegisteredDirectoryUser[]> {
   const config = getConfig();
   const users: RegisteredDirectoryUser[] = [];
@@ -436,6 +449,10 @@ export function getCognitoErrorCode(error: unknown): string | null {
   const code = cognitoError.code?.trim();
 
   return code ? code : null;
+}
+
+export function getCognitoRawErrorMessage(error: unknown): string | null {
+  return error instanceof Error && error.message.trim() ? error.message : null;
 }
 
 export function getCognitoErrorMessage(error: unknown): string {
