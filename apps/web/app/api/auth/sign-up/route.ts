@@ -6,6 +6,7 @@ import {
   getCognitoErrorCode,
   getCognitoErrorMessage,
   getCognitoRawErrorMessage,
+  resendCognitoConfirmationCode,
   signUpWithCognito,
 } from "../../../../lib/cognito";
 import { recordTermsConsentForPhone } from "../../../../lib/terms-consent-store";
