@@ -140,10 +140,8 @@ export function AuthForm({ mode }: AuthFormProps) {
 
   function openConfirmAccount(options?: {
     destination?: string | null;
-    hint?: string | null;
     warning?: string;
   }) {
-    setSignUpHint(options?.hint ?? null);
     setResendMessage(null);
 
     if (options?.destination || options?.warning) {
@@ -219,7 +217,7 @@ export function AuthForm({ mode }: AuthFormProps) {
 
           if (nextError === EXISTING_ACCOUNT_ERROR) {
             openConfirmAccount({
-              hint: "This phone number already has a pending account. Confirm it with the OTP, or resend the OTP if you no longer have it.",
+              warning: "This phone number already has a pending account. Confirm it with the OTP, or resend the OTP if you no longer have it.",
             });
           }
 
@@ -235,10 +233,6 @@ export function AuthForm({ mode }: AuthFormProps) {
         if (payload.shouldSignIn) {
           router.push(`/sign-in?existing=1${redirectPath ? `&redirect=${encodeURIComponent(redirectPath)}` : ""}`);
           return;
-        }
-
-        if (payload.requiresConfirmation ?? true) {
-          setSignUpHint("Enter OTP here, check WhatsApp for OTP.");
         }
 
         if (!(payload.requiresConfirmation ?? true)) {
@@ -323,7 +317,6 @@ export function AuthForm({ mode }: AuthFormProps) {
         warning: currentState?.warning,
       }));
       setResendMessage(`A new OTP was sent${payload.deliveryDestination ? ` to ${payload.deliveryDestination}` : ""}.`);
-      setSignUpHint("Enter OTP here, check WhatsApp for OTP.");
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Unable to resend the confirmation code.",
@@ -470,13 +463,7 @@ export function AuthForm({ mode }: AuthFormProps) {
         </div>
       ) : null}
 
-      {mode === "sign-up" && signUpState?.requiresConfirmation ? (
-        <p className="muted-text">
-          Enter the same phone number you used during sign-up, then submit the latest OTP to finish creating the account.
-        </p>
-      ) : null}
-
-      {mode === "sign-up" && signUpHint ? <p className="muted-text">{signUpHint}</p> : null}
+      {mode === "sign-up" && signUpHint && !signUpState?.requiresConfirmation ? <p className="muted-text">{signUpHint}</p> : null}
 
       {mode === "sign-up" && signUpState?.requiresConfirmation ? (
         <div className="field">

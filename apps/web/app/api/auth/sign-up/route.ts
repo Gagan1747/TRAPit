@@ -6,6 +6,7 @@ import {
   getCognitoErrorCode,
   getCognitoErrorMessage,
   getCognitoRawErrorMessage,
+  getCognitoUserStatus,
   resendCognitoConfirmationCode,
   signUpWithCognito,
 } from "../../../../lib/cognito";
@@ -111,6 +112,23 @@ export async function POST(request: Request) {
     const code = getCognitoErrorCode(error);
 
     if (code === "UsernameExistsException" && phoneNumber) {
+      try {
+        const userStatus = await getCognitoUserStatus(phoneNumber);
+
+        if (userStatus === "CONFIRMED") {
+          return NextResponse.json({
+            requiresConfirmation: false,
+            shouldSignIn: true,
+            warning: "This phone number is already confirmed. Sign in with your password.",
+          });
+        }
+      } catch (statusError) {
+        console.warn("[auth/sign-up] Failed to check existing user status", {
+          code: getCognitoErrorCode(statusError),
+          phoneSuffix: maskPhoneForLogs(phoneNumber),
+        });
+      }
+
       try {
         const resend = await resendCognitoConfirmationCode(phoneNumber);
 

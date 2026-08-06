@@ -3,6 +3,7 @@ import "server-only";
 import {
   AdminAddUserToGroupCommand,
   AdminDeleteUserCommand,
+  AdminGetUserCommand,
   CognitoIdentityProviderClient,
   ListUsersCommand,
 } from "@aws-sdk/client-cognito-identity-provider";
@@ -401,6 +402,19 @@ export async function deleteCognitoUser(phoneNumber: string) {
       UserPoolId: config.userPoolId,
     }),
   );
+}
+
+export async function getCognitoUserStatus(phoneNumber: string): Promise<string | null> {
+  const config = getConfig();
+  const normalizedPhoneNumber = normalizePhoneNumber(phoneNumber);
+  const response = await getAdminClient().send(
+    new AdminGetUserCommand({
+      Username: normalizedPhoneNumber,
+      UserPoolId: config.userPoolId,
+    }),
+  );
+
+  return response.UserStatus ?? null;
 }
 
 export async function listRegisteredDirectoryUsers(): Promise<RegisteredDirectoryUser[]> {
