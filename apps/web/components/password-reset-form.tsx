@@ -17,6 +17,7 @@ export function PasswordResetForm() {
   const [isCodeSent, setIsCodeSent] = useState(false);
   const [isPending, setIsPending] = useState(false);
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [countryCode, setCountryCode] = useState("+91");
   const [phoneNumber, setPhoneNumber] = useState("");
   const authConfigured = isPublicWebAuthConfigured();
@@ -32,6 +33,7 @@ export function PasswordResetForm() {
     setPhoneNumber(sanitizedPhoneNumber);
     setConfirmationCode("");
     setPassword("");
+    setConfirmPassword("");
     setDeliveryDestination(null);
     setIsCodeSent(false);
     setErrorMessage(null);
@@ -47,6 +49,7 @@ export function PasswordResetForm() {
     setCountryCode(sanitizedCountryCode);
     setConfirmationCode("");
     setPassword("");
+    setConfirmPassword("");
     setDeliveryDestination(null);
     setIsCodeSent(false);
     setErrorMessage(null);
@@ -104,8 +107,13 @@ export function PasswordResetForm() {
       return;
     }
 
-    if (!phoneNumber || !confirmationCode || !password) {
+    if (!phoneNumber || !confirmationCode || !password || !confirmPassword) {
       setErrorMessage("Phone number, SMS code, and new password are required.");
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setErrorMessage("Passwords do not match.");
       return;
     }
 
@@ -189,6 +197,18 @@ export function PasswordResetForm() {
               disabled={!authConfigured}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
+            />
+          </div>
+
+          <div className="field">
+            <label htmlFor="reset-confirm-password">Confirm password</label>
+            <input
+              id="reset-confirm-password"
+              type="password"
+              placeholder="Re-enter your new password"
+              disabled={!authConfigured}
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
             />
           </div>
         </>

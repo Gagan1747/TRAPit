@@ -21,8 +21,6 @@ type AuthFormProps = {
   mode: "sign-in" | "sign-up";
 };
 
-type SignUpSubMode = "confirm" | "create";
-
 const EXISTING_ACCOUNT_ERROR = "An account with this phone number already exists.";
 const TERMS_OF_SERVICE = [
   "Effective Date: 2026-08-01",
@@ -68,8 +66,6 @@ export function AuthForm({ mode }: AuthFormProps) {
     return redirectValue.startsWith("/") ? redirectValue : "";
   })();
   const redirectQuery = redirectPath ? `?redirect=${encodeURIComponent(redirectPath)}` : "";
-  const initialSignUpSubMode = searchParams.get("step") === "confirm" ? "confirm" : "create";
-  const initialConfirmAvailable = searchParams.get("step") === "confirm";
   const initialSignUpHint = searchParams.get("signup") === "retry"
     ? "If your earlier SMS code expired or got lost, enter your phone number below, resend the OTP, and confirm the account."
     : null;
@@ -82,10 +78,8 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [selectedCountryCode, setSelectedCountryCode] = useState(DEFAULT_PHONE_COUNTRY_CODE);
   const [phoneNumber, setPhoneNumber] = useState("");
-  const [signUpSubMode, setSignUpSubMode] = useState<SignUpSubMode>(initialSignUpSubMode);
   const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
   const [isTermsAgreementVisible, setIsTermsAgreementVisible] = useState(mode === "sign-up");
-  const [isConfirmOptionAvailable, setIsConfirmOptionAvailable] = useState(initialConfirmAvailable);
   const [resendMessage, setResendMessage] = useState<string | null>(null);
   const [signUpHint, setSignUpHint] = useState<string | null>(initialSignUpHint);
   const [signUpState, setSignUpState] = useState<{
@@ -103,6 +97,8 @@ export function AuthForm({ mode }: AuthFormProps) {
         ? "Password updated. Sign in with the new password."
         : searchParams.get("confirmed")
           ? "Account confirmed. You can sign in now."
+          : searchParams.get("existing")
+            ? "Account already exists and is confirmed. Sign in with your password."
           : searchParams.get("created")
             ? "Account created. Sign in after confirmation completes."
             : null;
@@ -147,8 +143,6 @@ export function AuthForm({ mode }: AuthFormProps) {
     hint?: string | null;
     warning?: string;
   }) {
-    setIsConfirmOptionAvailable(true);
-    setSignUpSubMode("confirm");
     setSignUpHint(options?.hint ?? null);
     setResendMessage(null);
 
@@ -171,11 +165,6 @@ export function AuthForm({ mode }: AuthFormProps) {
       return;
     }
 
-    if (mode === "sign-up" && signUpSubMode === "confirm") {
-      await handleConfirmSignUp();
-      return;
-    }
-
     if (mode === "sign-up" && !fullName.trim()) {
       setErrorMessage("Full name, phone number, and password are required.");
       return;
@@ -190,17 +179,17 @@ export function AuthForm({ mode }: AuthFormProps) {
       return;
     }
 
-    if (mode === "sign-up" && signUpSubMode === "create" && !confirmPassword) {
+    if (mode === "sign-up" && !confirmPassword) {
       setErrorMessage("Confirm password is required.");
       return;
     }
 
-    if (mode === "sign-up" && signUpSubMode === "create" && password !== confirmPassword) {
+    if (mode === "sign-up" && password !== confirmPassword) {
       setErrorMessage("Passwords do not match.");
       return;
     }
 
-    if (mode === "sign-up" && signUpSubMode === "create" && !hasAcceptedTerms) {
+    if (mode === "sign-up" && !signUpState?.requiresConfirmation && !hasAcceptedTerms) {
       setIsTermsAgreementVisible(true);
       setErrorMessage("Accept the TRAPit.in Terms of Service to create an account.");
       return;
@@ -221,6 +210,7 @@ export function AuthForm({ mode }: AuthFormProps) {
           deliveryDestination?: string | null;
           error?: string;
           requiresConfirmation?: boolean;
+          shouldSignIn?: boolean;
           warning?: string;
         }>(response, "Sign-up failed.");
 
@@ -241,9 +231,15 @@ export function AuthForm({ mode }: AuthFormProps) {
           requiresConfirmation: payload.requiresConfirmation ?? true,
           warning: payload.warning,
         });
-        setIsConfirmOptionAvailable(true);
-        setSignUpSubMode("confirm");
-        setSignUpHint("Use the OTP sent for this account creation to confirm your number before signing in.");
+
+        if (payload.shouldSignIn) {
+          router.push(`/sign-in?existing=1${redirectPath ? `&redirect=${encodeURIComponent(redirectPath)}` : ""}`);
+          return;
+        }
+
+        if (payload.requiresConfirmation ?? true) {
+          setSignUpHint("Enter OTP here, check WhatsApp for OTP.");
+        }
 
         if (!(payload.requiresConfirmation ?? true)) {
           markNotificationPromptOpportunity();
@@ -327,9 +323,7 @@ export function AuthForm({ mode }: AuthFormProps) {
         warning: currentState?.warning,
       }));
       setResendMessage(`A new OTP was sent${payload.deliveryDestination ? ` to ${payload.deliveryDestination}` : ""}.`);
-      setIsConfirmOptionAvailable(true);
-      setSignUpSubMode("confirm");
-      setSignUpHint("Use the latest OTP you receive by SMS. Older OTPs may no longer work.");
+      setSignUpHint("Enter OTP here, check WhatsApp for OTP.");
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : "Unable to resend the confirmation code.",
@@ -393,11 +387,11 @@ export function AuthForm({ mode }: AuthFormProps) {
             Sign up
           </a>
         </div>
-        <h2>{mode === "sign-up" ? signUpSubMode === "confirm" ? "Confirm account" : "Create account" : "Welcome back"}</h2>
+        <h2>{mode === "sign-up" ? "Create account" : "Welcome back"}</h2>
         {!authConfigured ? <p className="muted-text">{getPublicWebAuthSetupMessage()}</p> : null}
       </div>
 
-      {mode === "sign-up" && signUpSubMode === "create" ? (
+      {mode === "sign-up" ? (
         <div className="field">
           <label htmlFor="full-name">Full name</label>
           <input
@@ -438,7 +432,7 @@ export function AuthForm({ mode }: AuthFormProps) {
         </div>
       </div>
 
-      {mode === "sign-in" || signUpSubMode === "create" ? (
+      {mode === "sign-in" || mode === "sign-up" ? (
         <div className="field">
           <label htmlFor="password">Password</label>
           <div className="field-row auth-password-row">
@@ -462,7 +456,7 @@ export function AuthForm({ mode }: AuthFormProps) {
         </div>
       ) : null}
 
-      {mode === "sign-up" && signUpSubMode === "create" ? (
+      {mode === "sign-up" ? (
         <div className="field">
           <label htmlFor="confirm-password">Confirm password</label>
           <input
@@ -476,17 +470,17 @@ export function AuthForm({ mode }: AuthFormProps) {
         </div>
       ) : null}
 
-      {mode === "sign-up" && signUpSubMode === "confirm" ? (
+      {mode === "sign-up" && signUpState?.requiresConfirmation ? (
         <p className="muted-text">
-          Enter the same phone number you used during sign-up, then submit the latest OTP to finish creating the account. Check WhatsApp for OTP.
+          Enter the same phone number you used during sign-up, then submit the latest OTP to finish creating the account.
         </p>
       ) : null}
 
       {mode === "sign-up" && signUpHint ? <p className="muted-text">{signUpHint}</p> : null}
 
-      {mode === "sign-up" && signUpSubMode === "confirm" ? (
+      {mode === "sign-up" && signUpState?.requiresConfirmation ? (
         <div className="field">
-          <label htmlFor="confirmation-code">Confirmation code</label>
+          <label htmlFor="confirmation-code">Enter OTP here, check WhatsApp for OTP</label>
           <input
             id="confirmation-code"
             placeholder="Enter the code from WhatsApp"
@@ -494,17 +488,16 @@ export function AuthForm({ mode }: AuthFormProps) {
             value={confirmationCode}
             onChange={(event) => setConfirmationCode(event.target.value)}
           />
-          <p className="muted-text">Check WhatsApp for OTP.</p>
         </div>
       ) : null}
 
-      {mode === "sign-up" && signUpSubMode === "confirm" ? (
+      {mode === "sign-up" && signUpState?.requiresConfirmation ? (
         <p className="muted-text">
           OTP sent{signUpState?.destination ? ` to ${signUpState.destination}` : ""}. Confirm the account before signing in.
         </p>
       ) : null}
 
-      {(mode === "sign-in" || signUpSubMode === "create") && isTermsAgreementVisible ? (
+      {(mode === "sign-in" || (mode === "sign-up" && !signUpState?.requiresConfirmation)) && isTermsAgreementVisible ? (
         <div className="terms-consent-box">
           <label className="role-option terms-consent-checkbox">
             <input
@@ -530,7 +523,13 @@ export function AuthForm({ mode }: AuthFormProps) {
         </button>
       ) : null}
 
-      {mode === "sign-up" && signUpSubMode === "confirm" ? (
+      {mode === "sign-up" && signUpState?.requiresConfirmation ? (
+        <button className="button" disabled={isPending || !authConfigured} type="button" onClick={() => void handleConfirmSignUp()}>
+          {isPending ? "Working..." : "Confirm account"}
+        </button>
+      ) : null}
+
+      {mode === "sign-up" && signUpState?.requiresConfirmation ? (
         <button
           className="button-secondary"
           disabled={isPending || !authConfigured}
@@ -551,17 +550,17 @@ export function AuthForm({ mode }: AuthFormProps) {
 
       {errorMessage ? <p className="muted-text">{errorMessage}</p> : null}
 
-      <button className="button" disabled={isPending || !authConfigured} type="submit">
-        {isPending
-          ? "Working..."
-          : !authConfigured
-            ? "Auth setup pending"
-          : mode === "sign-up"
-            ? signUpSubMode === "confirm"
-              ? "Confirm account"
-              : "Create user account"
-            : "Sign in"}
-      </button>
+      {!(mode === "sign-up" && signUpState?.requiresConfirmation) ? (
+        <button className="button" disabled={isPending || !authConfigured} type="submit">
+          {isPending
+            ? "Working..."
+            : !authConfigured
+              ? "Auth setup pending"
+            : mode === "sign-up"
+              ? "Create user account"
+              : "Sign in"}
+        </button>
+      ) : null}
 
       {mode === "sign-in" ? (
         <a className="button-secondary" href="/reset-password">
@@ -569,11 +568,7 @@ export function AuthForm({ mode }: AuthFormProps) {
         </a>
       ) : null}
 
-      {mode === "sign-up" && signUpSubMode === "confirm" ? (
-        <a className="button-secondary" href={`/sign-in${redirectQuery}`}>
-          Already confirmed? Sign in
-        </a>
-      ) : null}
+      {mode === "sign-up" ? <a className="button-secondary" href={`/sign-in${redirectQuery}`}>Already have an account? Sign in</a> : null}
     </form>
   );
 }

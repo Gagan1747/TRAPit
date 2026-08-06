@@ -33,7 +33,7 @@ import {
 import { type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
-import { formatShortDate, formatShortDateTime, formatShortDateTimeIst } from "../lib/date-format";
+import { formatShortDate, formatShortDateTime } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
@@ -507,8 +507,21 @@ type ApportionDashboardResponse = {
   appointments: ApportionAppointment[];
   nextInPersonAppointment?: ApportionAppointment | null;
   ownerAppointments: ApportionAppointment[];
+  ownerOperatingHoursByIdentifier?: Record<string, {
+    justAddToList: boolean;
+    slotDurationMinutes: number | null;
+    workingHours: string;
+    workingHoursSecondWindow: string;
+  }>;
   requesterAppointments: ApportionAppointment[];
   updatedAppointment?: ApportionAppointment;
+};
+
+type ApportionOwnerOperatingHours = {
+  justAddToList: boolean;
+  slotDurationMinutes: number | null;
+  workingHours: string;
+  workingHoursSecondWindow: string;
 };
 
 type TestQuestionReportSummary = {
@@ -706,6 +719,102 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
 
 function normalizeApportionIdentifier(value: string | null | undefined) {
   return value?.trim().toLowerCase().replace(/[\s()-]/g, "") ?? "";
+}
+
+function normalizeOwnerOperatingHoursByIdentifier(
+  value: Record<string, ApportionOwnerOperatingHours> | undefined,
+) {
+  if (!value) {
+    return {} as Record<string, ApportionOwnerOperatingHours>;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([ownerIdentifier, ownerHours]) => {
+        const normalizedOwnerIdentifier = normalizeApportionIdentifier(ownerIdentifier);
+
+        if (!normalizedOwnerIdentifier) {
+          return null;
+        }
+
+        return [normalizedOwnerIdentifier, ownerHours] as const;
+      })
+      .filter((entry): entry is readonly [string, ApportionOwnerOperatingHours] => Boolean(entry)),
+  );
+}
+
+function formatOwnerOperatingHours(ownerHours: ApportionOwnerOperatingHours | null) {
+  if (!ownerHours) {
+    return "Not specified";
+  }
+
+  const workingHours = [ownerHours.workingHours.trim(), ownerHours.workingHoursSecondWindow.trim()]
+    .filter(Boolean)
+    .join(" and ");
+
+  return workingHours || "Not specified";
+}
+
+function toIstDateInputValue(value: string) {
+  const istDateTime = toIstDateTimeInputValue(value);
+  return istDateTime ? istDateTime.slice(0, 10) : "";
+}
+
+function createUtcIsoFromIstDateAndMinutes(dateInput: string, minutesOfDay: number) {
+  const [year, month, day] = dateInput.split("-").map((part) => Number.parseInt(part, 10));
+
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return null;
+  }
+
+  const utcMs = Date.UTC(
+    year,
+    month - 1,
+    day,
+    Math.floor(minutesOfDay / 60),
+    minutesOfDay % 60,
+    0,
+    0,
+  ) - (IST_OFFSET_MINUTES * 60 * 1000);
+  const date = new Date(utcMs);
+
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function getRescheduleSlotStepMinutes(slotDurationMinutes: number) {
+  return slotDurationMinutes <= 60 ? 15 : slotDurationMinutes;
+}
+
+function buildRescheduleSlotOptions(input: {
+  dateInput: string;
+  ownerHours: ApportionOwnerOperatingHours;
+}) {
+  const slotDurationMinutes = input.ownerHours.slotDurationMinutes ?? 30;
+  const slotStepMinutes = getRescheduleSlotStepMinutes(slotDurationMinutes);
+  const ranges = [input.ownerHours.workingHours, input.ownerHours.workingHoursSecondWindow]
+    .map((value) => parseBusinessTimeRange(value))
+    .filter((range): range is { endMinutes: number; startMinutes: number } => Boolean(range));
+  const effectiveRanges = ranges.length
+    ? ranges
+    : [parseBusinessTimeRange("10:00 AM - 6:00 PM")];
+
+  return effectiveRanges.flatMap((range) => {
+    const totalSlots = Math.max(0, Math.floor((range.endMinutes - range.startMinutes - slotDurationMinutes) / slotStepMinutes) + 1);
+
+    return Array.from({ length: totalSlots }, (_, index) => {
+      const slotMinutes = range.startMinutes + (index * slotStepMinutes);
+      const startsAtIso = createUtcIsoFromIstDateAndMinutes(input.dateInput, slotMinutes);
+
+      if (!startsAtIso || new Date(startsAtIso).getTime() <= Date.now()) {
+        return null;
+      }
+
+      return {
+        label: formatBusinessTime(slotMinutes),
+        value: toIstDateTimeInputValue(startsAtIso),
+      };
+    }).filter((slot): slot is { label: string; value: string } => Boolean(slot));
+  });
 }
 
 function isActiveApportionStatus(status: ApportionAppointment["currentStatus"]) {
@@ -1284,6 +1393,7 @@ export function AdminQuestionWorkspace({
   const [groupName, setGroupName] = useState("");
   const [history, setHistory] = useState<TestHistoryEntry[]>([]);
   const [ownerApportionAppointments, setOwnerApportionAppointments] = useState<ApportionAppointment[]>([]);
+  const [ownerOperatingHoursByIdentifier, setOwnerOperatingHoursByIdentifier] = useState<Record<string, ApportionOwnerOperatingHours>>({});
   const [brandingFeedback, setBrandingFeedback] = useState<string | null>(null);
   const [brandingAddress, setBrandingAddress] = useState("");
   const [brandingImageDataUrl, setBrandingImageDataUrl] = useState<string | null>(null);
@@ -1333,6 +1443,7 @@ export function AdminQuestionWorkspace({
   const [participantGroups, setParticipantGroups] = useState<ParticipantGroup[]>([]);
   const [participants, setParticipants] = useState<ParticipantProfile[]>([]);
   const [rescheduleAppointmentId, setRescheduleAppointmentId] = useState<string | null>(null);
+  const [rescheduleDateInput, setRescheduleDateInput] = useState("");
   const [rescheduleDateTimeInput, setRescheduleDateTimeInput] = useState("");
   const [pollFeedback, setPollFeedback] = useState<string | null>(null);
   const [pollImportFeedback, setPollImportFeedback] = useState<string | null>(null);
@@ -1460,6 +1571,9 @@ export function AdminQuestionWorkspace({
         syncBrandingDraft(brandingPayload.branding);
       }
       setOwnerApportionAppointments(apportionPayload.ownerAppointments);
+      setOwnerOperatingHoursByIdentifier(
+        normalizeOwnerOperatingHoursByIdentifier(apportionPayload.ownerOperatingHoursByIdentifier),
+      );
       setRequesterApportionAppointments(apportionPayload.requesterAppointments);
       setCategorySnapshot(categorySnapshotPayload);
       setCategoryManagement(categoryManagementPayload);
@@ -1773,9 +1887,13 @@ export function AdminQuestionWorkspace({
 
       setBusinessAppointmentShareCode(payload.appointmentShareCode ?? businessAppointmentShareCode);
       setOwnerApportionAppointments(payload.ownerAppointments);
+      setOwnerOperatingHoursByIdentifier(
+        normalizeOwnerOperatingHoursByIdentifier(payload.ownerOperatingHoursByIdentifier),
+      );
       setRequesterApportionAppointments(payload.requesterAppointments);
       if (rescheduleAppointmentId === appointmentId) {
         setRescheduleAppointmentId(null);
+        setRescheduleDateInput("");
         setRescheduleDateTimeInput("");
       }
       setFeedback("Appointment cancelled.");
@@ -1812,9 +1930,13 @@ export function AdminQuestionWorkspace({
 
       setBusinessAppointmentShareCode(payload.appointmentShareCode ?? businessAppointmentShareCode);
       setOwnerApportionAppointments(payload.ownerAppointments);
+      setOwnerOperatingHoursByIdentifier(
+        normalizeOwnerOperatingHoursByIdentifier(payload.ownerOperatingHoursByIdentifier),
+      );
       setRequesterApportionAppointments(payload.requesterAppointments);
       if (action === "reschedule") {
         setRescheduleAppointmentId(null);
+        setRescheduleDateInput("");
         setRescheduleDateTimeInput("");
       }
       setFeedback(payload.nextInPersonAppointment
@@ -1829,12 +1951,14 @@ export function AdminQuestionWorkspace({
 
   function beginRescheduleApportionAppointment(appointment: ApportionAppointment) {
     setRescheduleAppointmentId(appointment.id);
+    setRescheduleDateInput(toIstDateInputValue(appointment.startsAt));
     setRescheduleDateTimeInput(toIstDateTimeInputValue(appointment.startsAt));
     setFeedback(null);
   }
 
   function cancelRescheduleApportionAppointment() {
     setRescheduleAppointmentId(null);
+    setRescheduleDateInput("");
     setRescheduleDateTimeInput("");
   }
 
@@ -4634,6 +4758,15 @@ export function AdminQuestionWorkspace({
                       const isOwnerScope = appointment.scope === "owner";
                       const isFutureAppointment = new Date(appointment.startsAt).getTime() > Date.now();
                       const isRescheduling = rescheduleAppointmentId === appointment.id;
+                      const normalizedOwnerIdentifier = normalizeApportionIdentifier(appointment.ownerIdentifier);
+                      const ownerHours = ownerOperatingHoursByIdentifier[normalizedOwnerIdentifier] ?? null;
+                      const ownerHoursText = formatOwnerOperatingHours(ownerHours);
+                      const rescheduleSlotOptions = isRescheduling && ownerHours && rescheduleDateInput
+                        ? buildRescheduleSlotOptions({
+                            dateInput: rescheduleDateInput,
+                            ownerHours,
+                          })
+                        : [];
                       const requesterQueueStatus = getRequesterQueueStatusLabel({
                         currentStatus: appointment.currentStatus,
                         queuePosition: appointment.queuePosition,
@@ -4668,7 +4801,10 @@ export function AdminQuestionWorkspace({
                                   </span>
                                 </p>
                                 <p className="apportion-appointment-line">
-                                  <span>{formatShortDateTimeIst(appointment.startsAt)}</span>
+                                  <span>{`Scheduled date: ${formatShortDate(appointment.startsAt)}`}</span>
+                                  <span>{`Operating hours: ${ownerHoursText}`}</span>
+                                </p>
+                                <p className="apportion-appointment-line">
                                   <span className={`status-chip apportion-status-chip is-${appointment.currentStatus}`}>
                                     {isOwnerScope ? ownerStatusLabel : requesterQueueStatus.label}
                                   </span>
@@ -4698,22 +4834,42 @@ export function AdminQuestionWorkspace({
                                   <button className="button-secondary small-button" type="button" onClick={() => void handleCancelApportionAppointment(appointment.id)}>
                                     Cancel
                                   </button>
-                                  <button className="button-secondary small-button" type="button" onClick={() => beginRescheduleApportionAppointment(appointment)}>
-                                    Reschedule
-                                  </button>
+                                  {!appointment.justAddToList ? (
+                                    <button className="button-secondary small-button" type="button" onClick={() => beginRescheduleApportionAppointment(appointment)}>
+                                      Reschedule
+                                    </button>
+                                  ) : null}
                                 </>
                               ) : null}
                             </div>
                             {!isOwnerScope && isRescheduling ? (
                               <div className="apportion-inline-editor">
-                                <label className="sr-only" htmlFor={`reschedule-${appointment.id}`}>New appointment date and time</label>
+                                <label className="sr-only" htmlFor={`reschedule-date-${appointment.id}`}>New appointment date</label>
+                                <input
+                                  className="date-time-input"
+                                  id={`reschedule-date-${appointment.id}`}
+                                  type="date"
+                                  value={rescheduleDateInput}
+                                  onChange={(event) => {
+                                    setRescheduleDateInput(event.target.value);
+                                    setRescheduleDateTimeInput("");
+                                  }}
+                                />
+                                <label className="sr-only" htmlFor={`reschedule-${appointment.id}`}>New appointment time slot</label>
                                 <input
                                   className="date-time-input"
                                   id={`reschedule-${appointment.id}`}
-                                  type="datetime-local"
+                                  list={`reschedule-slots-${appointment.id}`}
+                                  placeholder="Choose an operating-hours slot"
                                   value={rescheduleDateTimeInput}
                                   onChange={(event) => setRescheduleDateTimeInput(event.target.value)}
                                 />
+                                <datalist id={`reschedule-slots-${appointment.id}`}>
+                                  {rescheduleSlotOptions.map((slotOption) => (
+                                    <option key={slotOption.value} value={slotOption.value}>{slotOption.label}</option>
+                                  ))}
+                                </datalist>
+                                <p className="muted-text">Select from owner operating-hours slots for the chosen date.</p>
                                 <div className="inline-actions apportion-inline-editor-actions">
                                   <button className="button small-button" type="button" onClick={() => void submitRescheduleApportionAppointment(appointment)}>
                                     Save time

@@ -125,8 +125,22 @@ export async function POST(request: Request) {
           warning: "An account already exists for this phone number. A fresh OTP has been sent.",
         });
       } catch (resendError) {
+        const resendCode = getCognitoErrorCode(resendError);
+        const resendMessage = getCognitoRawErrorMessage(resendError)?.toLowerCase() ?? "";
+
+        if (
+          resendCode === "InvalidParameterException"
+          && resendMessage.includes("already confirmed")
+        ) {
+          return NextResponse.json({
+            requiresConfirmation: false,
+            shouldSignIn: true,
+            warning: "This phone number is already confirmed. Sign in with your password.",
+          });
+        }
+
         console.error("[auth/sign-up] Failed to resend confirmation code for existing account", {
-          code: getCognitoErrorCode(resendError),
+          code: resendCode,
           phoneSuffix: maskPhoneForLogs(phoneNumber),
         });
       }

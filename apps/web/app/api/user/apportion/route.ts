@@ -2,8 +2,15 @@ import { NextResponse } from "next/server";
 
 import { cancelApportionAppointment, listApportionAppointmentsForOwner, listApportionAppointmentsForRequester, updateApportionAppointment } from "../../../../lib/apportion-store";
 import { publishWorkspaceEvent } from "../../../../lib/realtime-events";
-import { getOrCreateWorkspaceAppointmentShareCode } from "../../../../lib/testing-store";
+import { getOrCreateWorkspaceAppointmentShareCode, getWorkspaceBranding } from "../../../../lib/testing-store";
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
+
+type OwnerOperatingHours = {
+  justAddToList: boolean;
+  slotDurationMinutes: number | null;
+  workingHours: string;
+  workingHoursSecondWindow: string;
+};
 
 async function buildApportionDashboardPayload(actorIdentifier: string) {
   const [appointmentShareCode, ownerAppointments, requesterAppointments] = await Promise.all([
@@ -23,7 +30,31 @@ async function buildApportionDashboardPayload(actorIdentifier: string) {
     }, [])
     .sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
 
-  return { appointmentShareCode, appointments, ownerAppointments, requesterAppointments };
+  const uniqueOwnerIdentifiers = Array.from(
+    new Set(appointments.map((appointment) => appointment.ownerIdentifier.trim()).filter(Boolean)),
+  );
+  const ownerOperatingHoursEntries = await Promise.all(uniqueOwnerIdentifiers.map(async (ownerIdentifier) => {
+    const ownerBranding = await getWorkspaceBranding(ownerIdentifier);
+
+    return [
+      ownerIdentifier,
+      {
+        justAddToList: ownerBranding?.justAddToList === true,
+        slotDurationMinutes: ownerBranding?.slotDurationMinutes ?? null,
+        workingHours: ownerBranding?.workingHours ?? "",
+        workingHoursSecondWindow: ownerBranding?.workingHoursSecondWindow ?? "",
+      } satisfies OwnerOperatingHours,
+    ] as const;
+  }));
+  const ownerOperatingHoursByIdentifier = Object.fromEntries(ownerOperatingHoursEntries);
+
+  return {
+    appointmentShareCode,
+    appointments,
+    ownerAppointments,
+    ownerOperatingHoursByIdentifier,
+    requesterAppointments,
+  };
 }
 
 export async function GET(request: Request) {
@@ -51,13 +82,7 @@ export async function DELETE(request: Request) {
       appointmentId: body.appointmentId ?? "",
     });
     publishWorkspaceEvent("apportion");
-    const [appointmentShareCode, ownerAppointments, requesterAppointments] = await Promise.all([
-      getOrCreateWorkspaceAppointmentShareCode(actor.identifier),
-      listApportionAppointmentsForOwner(actor.identifier),
-      listApportionAppointmentsForRequester(actor.identifier),
-    ]);
-
-    return NextResponse.json({ appointmentShareCode, ownerAppointments, requesterAppointments });
+    return NextResponse.json(await buildApportionDashboardPayload(actor.identifier));
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to cancel appointment." }, { status: 400 });
   }

@@ -487,6 +487,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
         workingHoursSecondWindow: payload.business.workingHoursSecondWindow,
       })
     : null;
+  const queueCountForSelectedDate = queueCountsByDateKey[selectedDateKey] ?? 0;
   const businessContactText = [payload.business.address, payload.business.name, formatPhoneNumberForDisplay(payload.business.ownerIdentifier, { showFullPhoneNumber: true })]
     .filter(Boolean)
     .join(" • ");
@@ -560,15 +561,15 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
           <div className="form-stack apportion-booking-form">
             {payload.business.justAddToList ? (
               <div className="field">
-                <label>Approximate latest appointment time</label>
+                <label>Scheduled date and operating hours</label>
+                <p className="muted-text apportion-working-hours">Scheduled date: {createDateFromKey(selectedDateKey).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</p>
                 <p className="muted-text apportion-working-hours">Working hours: {workingHoursText || "Not specified"}</p>
-                <p className="apportion-queue-estimate">{queueEstimate?.label ?? "Not available"}</p>
                 <p className="muted-text">
-                  You do not need to select a slot for this business. Joining the queue places you in the live queue for the selected day.
+                  Queue size for selected date: {queueCountForSelectedDate}
                 </p>
                 {queueEstimate?.exceedsWorkingHours ? (
                   <p className="muted-text apportion-queue-warning">
-                    Caution: the estimated latest availability is beyond the configured working hours for this day.
+                    Caution: high queue volume may extend service beyond configured working hours for this day.
                   </p>
                 ) : null}
               </div>
