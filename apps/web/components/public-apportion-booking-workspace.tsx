@@ -719,7 +719,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
             <div className="field">
               <div className="apportion-notes-label-row">
                 <label htmlFor="apportion-notes">Notes</label>
-                <span>{payload.business.appointmentNotesPrompt || "Share a brief about appointment purpose"}</span>
+                <span className="muted-text">{payload.business.appointmentNotesPrompt || "Share a brief about appointment purpose"}</span>
               </div>
               <textarea
                 id="apportion-notes"

@@ -1597,6 +1597,8 @@ export function AdminQuestionWorkspace({
   const [isLoading, setIsLoading] = useState(true);
   const [isMutating, setIsMutating] = useState(false);
   const [isOverflowMenuOpen, setIsOverflowMenuOpen] = useState(false);
+  const [isTestAddQuestionOpen, setIsTestAddQuestionOpen] = useState(false);
+  const [isPollAddQuestionOpen, setIsPollAddQuestionOpen] = useState(false);
   const [isPollImporting, setIsPollImporting] = useState(false);
   const [isPollOcrImportOpen, setIsPollOcrImportOpen] = useState(true);
   const [isSearchingGroups, setIsSearchingGroups] = useState(false);
@@ -2884,20 +2886,14 @@ export function AdminQuestionWorkspace({
     closeManagementDrawers();
 
     if (section === "test") {
-      setOpenSection((currentSection) =>
-        currentSection === "question-bank" || currentSection === "schedule"
-          ? currentSection
-          : "question-bank",
-      );
+      setIsTestAddQuestionOpen(false);
+      setOpenSection("schedule");
       return;
     }
 
     if (section === "poll") {
-      setOpenSection((currentSection) =>
-        currentSection === "poll-questions" || currentSection === "poll-schedule"
-          ? currentSection
-          : "poll-questions",
-      );
+      setIsPollAddQuestionOpen(false);
+      setOpenSection("poll-schedule");
       return;
     }
 
@@ -4208,25 +4204,16 @@ export function AdminQuestionWorkspace({
   const topLevelNavigationItems: Array<{
     label: string;
     section: "apportion" | "poll" | "reports" | "test";
-    submenuItems?: Array<{ label: string; section: AdminWorkspaceSection }>;
   }> = [
     {
       label: "Test",
       section: "test",
-      submenuItems: [
-        { label: "Add Questions", section: "question-bank" },
-        { label: "Schedule", section: "schedule" },
-      ],
     },
     { label: "R....", section: "reports" },
     { label: "Apportion", section: "apportion" },
     {
       label: "Poll",
       section: "poll",
-      submenuItems: [
-        { label: "Add Questions", section: "poll-questions" },
-        { label: "Schedule", section: "poll-schedule" },
-      ],
     },
   ];
   const isComingSoonSection = openSection === "reports-coming-soon" || openSection === "analytics-coming-soon";
@@ -4907,7 +4894,7 @@ export function AdminQuestionWorkspace({
             {topLevelNavigationItems.map((item) => (
               <div
                 key={item.section}
-                className={`dashboard-top-nav-item-shell${item.submenuItems?.length ? " has-submenu" : ""}${activeTopLevelSection === item.section ? " is-active" : ""}`}
+                className={`dashboard-top-nav-item-shell${activeTopLevelSection === item.section ? " is-active" : ""}`}
               >
                 <button
                   aria-selected={activeTopLevelSection === item.section}
@@ -4917,14 +4904,7 @@ export function AdminQuestionWorkspace({
                   onClick={() => handleTopLevelSelection(item.section)}
                 >
                   {item.label}
-                  {item.submenuItems?.length ? <span className="dashboard-top-nav-caret" aria-hidden="true">v</span> : null}
                 </button>
-                {item.submenuItems?.length ? (
-                  <div className="dashboard-top-nav-submenu" role="menu" aria-label={`${item.label} options`}>
-                    {item.submenuItems.map((submenuItem) =>
-                      renderMenuItem(submenuItem.label, submenuItem.section, "dashboard-top-nav-submenu-item"))}
-                  </div>
-                ) : null}
               </div>
             ))}
           </div>
@@ -5284,7 +5264,6 @@ export function AdminQuestionWorkspace({
                                     ))
                                     : null}
                                 </select>
-                                <p className="muted-text">Non-working dates are disabled based on this business schedule.</p>
                               </div>
                               {!selectedBusiness?.justAddToList ? (
                                 <div className="field">
@@ -5305,7 +5284,6 @@ export function AdminQuestionWorkspace({
                                       </option>
                                     ))}
                                   </select>
-                                  <p className="muted-text">Slot list mirrors business timings and current booking availability.</p>
                                 </div>
                               ) : null}
                             </div>
@@ -6736,6 +6714,172 @@ export function AdminQuestionWorkspace({
         onToggle={() => toggleSection("schedule")}
       >
         <div className="form-stack">
+          <CollapsibleWorkspaceSection
+            eyebrow=""
+            isOpen={isTestAddQuestionOpen}
+            sectionId="admin-schedule-test-add-questions"
+            title="Add Questions"
+            onToggle={() => setIsTestAddQuestionOpen((current) => !current)}
+          >
+            <div className="form-stack">
+              <div className="field">
+                <div className="question-list">
+                  <div className="field compact-field">
+                    <label htmlFor="author-pool">Select or create question pool</label>
+                    <select
+                      className="select-field"
+                      id="author-pool"
+                      value={authorPoolId}
+                      onChange={(event) => setAuthorPoolId(event.target.value)}
+                    >
+                      <option value="">Select a pool</option>
+                      {pools.map((pool) => (
+                        <option key={pool.id} value={pool.id}>
+                          {pool.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="role-option role-option-create">
+                    <div className="field compact-field">
+                      <label htmlFor="pool-name-inline">Create New Pool</label>
+                      <input
+                        id="pool-name-inline"
+                        placeholder="Pool name"
+                        value={poolName}
+                        onChange={(event) => setPoolName(event.target.value)}
+                      />
+                    </div>
+                    <button className="button-secondary small-button" disabled={isMutating} type="button" onClick={handleCreatePool}>
+                      Create pool
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {poolFeedback ? <p className="muted-text">{poolFeedback}</p> : null}
+              {feedback ? <p className="muted-text">{feedback}</p> : null}
+
+              <div className="question-bank-summary">
+                <div>
+                  <strong>OCR import</strong>
+                  <p className="muted-text question-bank-summary-copy">
+                    Select or create a pool first, then use OCR import to preview and clean pasted text before saving.
+                  </p>
+                </div>
+                <button
+                  className="button-secondary small-button"
+                  disabled={!authorPoolId}
+                  type="button"
+                  onClick={() => setIsOcrImportOpen((currentState) => !currentState)}
+                >
+                  {isOcrImportOpen ? "Hide OCR import" : "Show OCR import"}
+                </button>
+              </div>
+
+              {!authorPoolId ? <p className="muted-text">Select or create a pool to enable OCR import.</p> : null}
+
+              {authorPoolId && isOcrImportOpen ? (
+                <div className="form-stack import-card">
+                  <div className="section-head">
+                    <div>
+                      <p className="eyebrow">OCR import</p>
+                      <h2 className="section-title">Import, preview, and clean pasted text</h2>
+                    </div>
+                    <div className="form-stack">
+                      <p className="muted-text">
+                        If the questions are on paper or already in text, send the photo or text to AI and use this exact prompt.
+                      </p>
+                      <div className="field textarea-field">
+                        <label htmlFor="meta-ai-prompt">AI prompt</label>
+                        <textarea
+                          id="meta-ai-prompt"
+                          readOnly
+                          value={AI_OCR_PROMPT}
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="field textarea-field">
+                    <label htmlFor="import-text">OCR text</label>
+                    <textarea
+                      id="import-text"
+                      placeholder={AI_OCR_EXAMPLE}
+                      value={importText}
+                      onChange={(event) => setImportText(event.target.value)}
+                    />
+                  </div>
+
+                  {importFeedback ? <p className="muted-text">{importFeedback}</p> : null}
+                  <div className="inline-actions">
+                    <button className="button" disabled={isImporting || isMutating} type="button" onClick={handlePreviewImport}>
+                      Preview import
+                    </button>
+                    <button
+                      className="button-secondary"
+                      disabled={!importPreview?.validCount || isMutating}
+                      type="button"
+                      onClick={handleCommitImport}
+                    >
+                      Import valid questions
+                    </button>
+                    <button
+                      className="button-secondary"
+                      disabled={!importPreview?.validCount || isMutating}
+                      type="button"
+                      onClick={handleKeepValidBlocks}
+                    >
+                      Keep valid blocks only
+                    </button>
+                  </div>
+
+                  {importPreview ? (
+                    <div className="import-preview-list">
+                      <div className="import-summary">
+                        <strong>{importPreview.validCount}</strong>
+                        <span>valid</span>
+                        <strong>{importPreview.invalidCount}</strong>
+                        <span>need fixes</span>
+                        <strong>{importPreview.totalCount}</strong>
+                        <span>total blocks</span>
+                      </div>
+
+                      {importPreview.candidates.map((candidate, index) => (
+                        <article className="question-card" key={candidate.id}>
+                          <div className="question-head">
+                            <strong>Imported block {index + 1}</strong>
+                            <span className={candidate.valid ? "status-chip success" : "status-chip warning"}>
+                              {candidate.valid ? "Ready" : "Needs cleanup"}
+                            </span>
+                          </div>
+                          <p>{candidate.draft.prompt || "Prompt missing"}</p>
+                          {candidate.draft.options.length ? (
+                            <ol className="question-options">
+                              {candidate.draft.options.map((option, optionIndex) => (
+                                <li key={`${candidate.id}-${optionIndex}`}>
+                                  {option}
+                                  {optionIndex === candidate.draft.correctOptionIndex ? " (correct)" : ""}
+                                </li>
+                              ))}
+                            </ol>
+                          ) : null}
+                          {candidate.issues.length ? (
+                            <ul className="issue-list">
+                              {candidate.issues.map((issue, issueIndex) => (
+                                <li key={`${candidate.id}-issue-${issueIndex}`}>{issue.message}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </article>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </CollapsibleWorkspaceSection>
+
           <div className="field">
             <label htmlFor="schedule-title">Topic or purpose</label>
             <input
@@ -7205,6 +7349,233 @@ export function AdminQuestionWorkspace({
         onToggle={() => toggleSection("poll-schedule")}
       >
         <div className="form-stack">
+          <CollapsibleWorkspaceSection
+            eyebrow=""
+            isOpen={isPollAddQuestionOpen}
+            sectionId="admin-schedule-poll-add-questions"
+            title="Add Poll Question"
+            onToggle={() => setIsPollAddQuestionOpen((current) => !current)}
+          >
+            <div className="form-stack">
+              <div className="question-bank-summary">
+                <div>
+                  <strong>OCR import</strong>
+                  <p className="muted-text question-bank-summary-copy">
+                    Use the same OCR workflow as tests to preview and clean poll questions before saving them.
+                  </p>
+                </div>
+                <button
+                  className="button-secondary small-button"
+                  type="button"
+                  onClick={() => setIsPollOcrImportOpen((currentState) => !currentState)}
+                >
+                  {isPollOcrImportOpen ? "Hide OCR import" : "Show OCR import"}
+                </button>
+              </div>
+
+              {isPollOcrImportOpen ? (
+                <div className="form-stack import-card">
+                  <div className="section-head">
+                    <div>
+                      <p className="eyebrow">OCR import</p>
+                      <h2 className="section-title">Import and preview poll questions</h2>
+                    </div>
+                    <div className="form-stack">
+                      <p className="muted-text">
+                        If the poll questions are on paper or already in text, send the photo or text to AI and use this exact prompt.
+                      </p>
+                      <div className="field textarea-field">
+                        <label htmlFor="poll-ai-prompt">AI prompt</label>
+                        <textarea id="poll-ai-prompt" readOnly value={POLL_OCR_PROMPT} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="field textarea-field">
+                    <label htmlFor="poll-import-text">OCR text</label>
+                    <textarea
+                      id="poll-import-text"
+                      placeholder={POLL_OCR_EXAMPLE}
+                      value={pollImportText}
+                      onChange={(event) => setPollImportText(event.target.value)}
+                    />
+                  </div>
+
+                  {pollImportFeedback ? <p className="muted-text">{pollImportFeedback}</p> : null}
+                  <div className="inline-actions">
+                    <button className="button" disabled={isPollImporting || isMutating} type="button" onClick={handlePreviewPollImport}>
+                      Preview import
+                    </button>
+                    <button
+                      className="button-secondary"
+                      disabled={!pollImportPreview?.validCount || isMutating}
+                      type="button"
+                      onClick={handleCommitPollImport}
+                    >
+                      Import valid poll questions
+                    </button>
+                    <button
+                      className="button-secondary"
+                      disabled={!pollImportPreview?.validCount || isMutating}
+                      type="button"
+                      onClick={handleKeepValidPollBlocks}
+                    >
+                      Keep valid blocks only
+                    </button>
+                  </div>
+
+                  {pollImportPreview ? (
+                    <div className="import-preview-list">
+                      <div className="import-summary">
+                        <strong>{pollImportPreview.validCount}</strong>
+                        <span>valid</span>
+                        <strong>{pollImportPreview.invalidCount}</strong>
+                        <span>need fixes</span>
+                        <strong>{pollImportPreview.totalCount}</strong>
+                        <span>total blocks</span>
+                      </div>
+
+                      {pollImportPreview.candidates.map((candidate, index) => (
+                        <article className="question-card" key={candidate.id}>
+                          <div className="question-head">
+                            <strong>Imported block {index + 1}</strong>
+                            <span className={candidate.valid ? "status-chip success" : "status-chip warning"}>
+                              {candidate.valid ? "Ready" : "Needs cleanup"}
+                            </span>
+                          </div>
+                          <p>{candidate.draft.prompt || "Prompt missing"}</p>
+                          {candidate.draft.options.length ? (
+                            <ol className="question-options">
+                              {candidate.draft.options.map((option, optionIndex) => (
+                                <li key={`${candidate.id}-${optionIndex}`}>{option}</li>
+                              ))}
+                            </ol>
+                          ) : null}
+                          {candidate.issues.length ? (
+                            <ul className="issue-list">
+                              {candidate.issues.map((issue, issueIndex) => (
+                                <li key={`${candidate.id}-issue-${issueIndex}`}>{issue.message}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </article>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {pollFeedback ? <p className="muted-text">{pollFeedback}</p> : null}
+
+              <div className="field form-stack">
+                <div className="question-head">
+                  <strong>Type additional poll questions</strong>
+                  <button className="button-secondary small-button" type="button" onClick={handleAddTypedPollScheduleDraft}>
+                    Add question
+                  </button>
+                </div>
+                {pollScheduleTypedDrafts.length ? (
+                  <div className="question-list">
+                    {pollScheduleTypedDrafts.map((draft, draftIndex) => (
+                      <article className="question-card nested-card form-stack" key={`typed-poll-draft-${draftIndex}`}>
+                        <div className="question-head">
+                          <strong>Typed question {draftIndex + 1}</strong>
+                          <button
+                            className="button-secondary small-button"
+                            type="button"
+                            onClick={() => handleRemoveTypedPollScheduleDraft(draftIndex)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <div className="field compact-field">
+                          <label htmlFor={`typed-poll-topic-${draftIndex}`}>Topic</label>
+                          <input
+                            id={`typed-poll-topic-${draftIndex}`}
+                            placeholder="Parent feedback"
+                            value={draft.topic}
+                            onChange={(event) =>
+                              handleUpdateTypedPollScheduleDraft(draftIndex, (currentDraft) => ({
+                                ...currentDraft,
+                                topic: event.target.value,
+                              }))
+                            }
+                          />
+                        </div>
+                        <div className="field compact-field">
+                          <label htmlFor={`typed-poll-prompt-${draftIndex}`}>Question</label>
+                          <input
+                            id={`typed-poll-prompt-${draftIndex}`}
+                            placeholder="How satisfied are you with the event?"
+                            value={draft.prompt}
+                            onChange={(event) =>
+                              handleUpdateTypedPollScheduleDraft(draftIndex, (currentDraft) => ({
+                                ...currentDraft,
+                                prompt: event.target.value,
+                              }))
+                            }
+                          />
+                        </div>
+                        <div className="form-stack">
+                          {draft.options.map((option, optionIndex) => (
+                            <div className="field compact-field" key={`typed-poll-option-${draftIndex}-${optionIndex}`}>
+                              <label htmlFor={`typed-poll-option-${draftIndex}-${optionIndex}`}>Option {optionIndex + 1}</label>
+                              <div className="inline-actions">
+                                <input
+                                  id={`typed-poll-option-${draftIndex}-${optionIndex}`}
+                                  placeholder={`Option ${optionIndex + 1}`}
+                                  value={option}
+                                  onChange={(event) =>
+                                    handleUpdateTypedPollScheduleDraft(draftIndex, (currentDraft) => ({
+                                      ...currentDraft,
+                                      options: currentDraft.options.map((currentOption, currentIndex) =>
+                                        currentIndex === optionIndex ? event.target.value : currentOption,
+                                      ),
+                                    }))
+                                  }
+                                />
+                                {draft.options.length > 2 ? (
+                                  <button
+                                    className="button-secondary small-button"
+                                    type="button"
+                                    onClick={() =>
+                                      handleUpdateTypedPollScheduleDraft(draftIndex, (currentDraft) => ({
+                                        ...currentDraft,
+                                        options: currentDraft.options.filter((_, currentIndex) => currentIndex !== optionIndex),
+                                      }))
+                                    }
+                                  >
+                                    Remove option
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                          ))}
+                          <div className="inline-actions">
+                            <button
+                              className="button-secondary small-button"
+                              type="button"
+                              onClick={() =>
+                                handleUpdateTypedPollScheduleDraft(draftIndex, (currentDraft) => ({
+                                  ...currentDraft,
+                                  options: [...currentDraft.options, ""],
+                                }))
+                              }
+                            >
+                              Add option
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted-text">Use Add question if you want to type new poll questions while scheduling.</p>
+                )}
+              </div>
+            </div>
+          </CollapsibleWorkspaceSection>
+
           <div className="question-card form-stack">
             <div className="field">
               <label htmlFor="poll-title">Topic or purpose</label>
