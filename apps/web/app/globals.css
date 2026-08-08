@@ -362,6 +362,10 @@ main {
   background: rgba(227, 218, 250, 0.96);
 }
 
+.collapsible-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 16px;
 }
 
