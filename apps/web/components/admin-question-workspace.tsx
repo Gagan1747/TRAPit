@@ -30,13 +30,14 @@ import {
   type TestResult,
   type WorkspaceBranding,
 } from "@trapit/testing";
-import { type DragEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type DragEvent, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
+import { SignOutButton } from "./sign-out-button";
 
 const AI_OCR_EXAMPLE = `Question: 5+3?
 Option A: 10
@@ -910,8 +911,6 @@ type AdminWorkspaceSection =
   | "reports-coming-soon"
   | "schedule";
 
-type AdminMenuGroup = "groups" | "poll" | "test";
-
 type AdminTestListFilter = "admin" | "both" | "participant";
 
 type AdminResultsMode = "polls" | "tests";
@@ -1483,7 +1482,6 @@ export function AdminQuestionWorkspace({
   const [expandedOpenPollResultIds, setExpandedOpenPollResultIds] = useState<string[]>([]);
   const [collapsedTestResultIds, setCollapsedTestResultIds] = useState<string[]>([]);
   const [copiedLinkKey, setCopiedLinkKey] = useState<string | null>(null);
-  const [openMenuGroup, setOpenMenuGroup] = useState<AdminMenuGroup | null>(null);
   const [editingScheduledTestId, setEditingScheduledTestId] = useState<string | null>(null);
   const [scheduleDurationMinutes, setScheduleDurationMinutes] = useState("30");
   const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
@@ -2572,19 +2570,47 @@ export function AdminQuestionWorkspace({
     setSelectedQuestionIds((currentIds) => toggleArrayValue(currentIds, questionId));
   }
 
-  function isMenuGroupActive(group: AdminMenuGroup) {
-    if (group === "test") {
-      return openSection === "author" || openSection === "question-bank" || openSection === "schedule";
+  function getActiveTopLevelSection(): "apportion" | "poll" | "reports" | "test" {
+    if (openSection === "poll-questions" || openSection === "poll-schedule") {
+      return "poll";
     }
 
-    if (group === "poll") {
-      return openSection === "poll-questions" || openSection === "poll-schedule";
+    if (openSection === "reports-coming-soon") {
+      return "reports";
     }
 
-    return openSection === "create-groups" || openSection === "manage-groups" || openSection === "join-groups";
+    if (openSection === "apportion") {
+      return "apportion";
+    }
+
+    return "test";
   }
 
-  function renderMenuItem(label: string, section: AdminWorkspaceSection) {
+  function handleTopLevelSelection(section: "apportion" | "poll" | "reports" | "test") {
+    closeManagementDrawers();
+
+    if (section === "test") {
+      setOpenSection((currentSection) =>
+        currentSection === "question-bank" || currentSection === "schedule"
+          ? currentSection
+          : "question-bank",
+      );
+      return;
+    }
+
+    if (section === "poll") {
+      setOpenSection((currentSection) =>
+        currentSection === "poll-questions" || currentSection === "poll-schedule"
+          ? currentSection
+          : "poll-questions",
+      );
+      return;
+    }
+
+    setOpenSection(section === "reports" ? "reports-coming-soon" : "apportion");
+  }
+
+  function renderMenuItem(label: string, section: AdminWorkspaceSection, className = "admin-menu-item") {
     const lockedPrompt =
       currentActorRole === "user" && currentUserCategory
         ? getSectionUpgradePrompt(section, currentUserCategory)
@@ -2593,7 +2619,7 @@ export function AdminQuestionWorkspace({
     return (
       <button
         key={section}
-        className={`admin-menu-item${openSection === section ? " is-active" : ""}`}
+        className={`${className}${openSection === section ? " is-active" : ""}`}
         type="button"
         onClick={() => {
           if (lockedPrompt) {
@@ -2632,40 +2658,6 @@ export function AdminQuestionWorkspace({
       >
         {label}
       </button>
-    );
-  }
-
-  function renderMenuGroup(
-    label: string,
-    group: AdminMenuGroup,
-    items: Array<{ label: string; section: AdminWorkspaceSection }>,
-    extraContent?: ReactNode,
-  ) {
-    const isOpen = openMenuGroup === group;
-    const isActive = isMenuGroupActive(group);
-
-    return (
-      <div className="admin-menu-group" key={group}>
-        <button
-          aria-expanded={isOpen}
-          className={`admin-menu-group-toggle${isOpen || isActive ? " is-active" : ""}`}
-          type="button"
-          onClick={() => setOpenMenuGroup((currentGroup) => (currentGroup === group ? null : group))}
-        >
-          <span>{label}</span>
-          <span className="admin-menu-group-toggle-symbol" aria-hidden="true">
-            <svg viewBox="0 0 20 20" focusable="false">
-              <path d="M5.5 7.5 10 12l4.5-4.5" />
-            </svg>
-          </span>
-        </button>
-        {isOpen ? (
-          <div className="admin-menu-substack">
-            {items.map((item) => renderMenuItem(item.label, item.section))}
-            {extraContent}
-          </div>
-        ) : null}
-      </div>
     );
   }
 
@@ -3921,6 +3913,31 @@ export function AdminQuestionWorkspace({
       ? []
       : ([{ label: "Join", section: "join-groups" }] satisfies Array<{ label: string; section: AdminWorkspaceSection }>)),
   ];
+  const activeTopLevelSection = getActiveTopLevelSection();
+  const topLevelNavigationItems: Array<{
+    label: string;
+    section: "apportion" | "poll" | "reports" | "test";
+    submenuItems?: Array<{ label: string; section: AdminWorkspaceSection }>;
+  }> = [
+    {
+      label: "Test",
+      section: "test",
+      submenuItems: [
+        { label: "Add Questions", section: "question-bank" },
+        { label: "Schedule", section: "schedule" },
+      ],
+    },
+    { label: "R....", section: "reports" },
+    { label: "Apportion", section: "apportion" },
+    {
+      label: "Poll",
+      section: "poll",
+      submenuItems: [
+        { label: "Add Questions", section: "poll-questions" },
+        { label: "Schedule", section: "poll-schedule" },
+      ],
+    },
+  ];
   const isComingSoonSection = openSection === "reports-coming-soon" || openSection === "analytics-coming-soon";
   const sortedScheduledPolls = [...scheduledPolls].sort((leftPoll, rightPoll) => {
     const priorityDifference =
@@ -4279,6 +4296,34 @@ export function AdminQuestionWorkspace({
       ) : null}
 
       <div className="workspace-toolbar">
+        <div className="dashboard-top-nav panel workspace-card">
+          <div className="dashboard-top-nav-row" role="tablist" aria-label="Workspace navigation">
+            {topLevelNavigationItems.map((item) => (
+              <div
+                key={item.section}
+                className={`dashboard-top-nav-item-shell${item.submenuItems?.length ? " has-submenu" : ""}${activeTopLevelSection === item.section ? " is-active" : ""}`}
+              >
+                <button
+                  aria-selected={activeTopLevelSection === item.section}
+                  className={`dashboard-top-nav-item${activeTopLevelSection === item.section ? " is-active" : ""}`}
+                  role="tab"
+                  type="button"
+                  onClick={() => handleTopLevelSelection(item.section)}
+                >
+                  {item.label}
+                  {item.submenuItems?.length ? <span className="dashboard-top-nav-caret" aria-hidden="true">v</span> : null}
+                </button>
+                {item.submenuItems?.length ? (
+                  <div className="dashboard-top-nav-submenu" role="menu" aria-label={`${item.label} options`}>
+                    {item.submenuItems.map((submenuItem) =>
+                      renderMenuItem(submenuItem.label, submenuItem.section, "dashboard-top-nav-submenu-item"))}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+
         <div className="workspace-overflow" ref={toolbarMenuRef}>
           <button
             aria-expanded={isOverflowMenuOpen}
@@ -4339,6 +4384,10 @@ export function AdminQuestionWorkspace({
                   >
                     Business
                   </button>
+                  <SignOutButton
+                    className="workspace-overflow-action"
+                    onSignedOut={() => setIsOverflowMenuOpen(false)}
+                  />
                   <p className="eyebrow">Groups</p>
                   {groupMenuItems.map((item) => renderOverflowSectionItem(item.label, item.section))}
                 </div>
@@ -4707,29 +4756,6 @@ export function AdminQuestionWorkspace({
       </div>
 
       <div className="admin-shell">
-        <aside
-          aria-label="Workspace menu"
-          className="admin-menu panel workspace-card"
-        >
-          <div className="section-head compact-head">
-            <div>
-              <h2 className="section-title">Menu</h2>
-            </div>
-          </div>
-          <div className="admin-menu-stack">
-            {renderMenuGroup("Test", "test", [
-              { label: "Add Questions", section: "question-bank" },
-              { label: "Schedule", section: "schedule" },
-            ])}
-            {renderMenuItem("R...", "reports-coming-soon")}
-            {renderMenuItem("Apportion", "apportion")}
-            {renderMenuGroup("Poll", "poll", [
-              { label: "Add Questions", section: "poll-questions" },
-              { label: "Schedule", section: "poll-schedule" },
-            ])}
-          </div>
-        </aside>
-
         <div className="admin-main-column">
           {isComingSoonSection ? (
             <section className="panel workspace-card">

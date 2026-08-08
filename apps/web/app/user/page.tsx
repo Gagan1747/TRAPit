@@ -1,11 +1,8 @@
-import { getSessionDisplayName, getSessionIdentifier, normalUserCategoryLabels } from "@trapit/auth";
+import { getSessionDisplayName, getSessionIdentifier } from "@trapit/auth";
 
 import { AdminQuestionWorkspace } from "../../components/admin-question-workspace";
-import { LocalDateTimeText } from "../../components/local-date-time-text";
-import { SignOutButton } from "../../components/sign-out-button";
 import { UserTestWorkspace } from "../../components/user-test-workspace";
 import { isWebAuthConfigured } from "../../lib/auth-config";
-import { formatPhoneNumberForDisplay } from "../../lib/privacy";
 import { getPreviousWebSignIn, requireWebSession } from "../../lib/session";
 import { isSuperAdminIdentifier } from "../../lib/workspace-actor";
 
@@ -18,7 +15,6 @@ export default async function UserPage({
   const authConfigured = isWebAuthConfigured();
   const sessionIdentifier = getSessionIdentifier(session);
   const displayName = getSessionDisplayName(session) ?? "User";
-  const categoryLabel = session.userCategory ? normalUserCategoryLabels[session.userCategory].replace(/ users$/i, " user") : null;
   const isSuperAdmin = isSuperAdminIdentifier(session.phoneNumber ?? sessionIdentifier);
   const previousSignInAt = authConfigured ? await getPreviousWebSignIn(session) : null;
   const openTestsView = searchParams?.view === "tests";
@@ -36,16 +32,7 @@ export default async function UserPage({
               </a>
             </h1>
             <p className="hero-kicker">TRAPit workspace</p>
-            <p className="hero-text">
-              {authConfigured
-                ? `Signed in with ${formatPhoneNumberForDisplay(sessionIdentifier ?? "user", { showFullPhoneNumber: isSuperAdmin })}${categoryLabel ? ` as ${categoryLabel}` : ""}`
-                : "Auth setup pending. User area is open for feature work."}
-            </p>
-            <p className="hero-text">
-              Last signed in: <LocalDateTimeText fallback="First recorded sign in" value={previousSignInAt} />
-            </p>
           </div>
-          {authConfigured ? <SignOutButton /> : null}
         </div>
         {showWorkspace ? (
           <AdminQuestionWorkspace

@@ -12,7 +12,6 @@ import {
 export function PasswordResetForm() {
   const router = useRouter();
   const [confirmationCode, setConfirmationCode] = useState("");
-  const [deliveryDestination, setDeliveryDestination] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isCodeSent, setIsCodeSent] = useState(false);
   const [isPending, setIsPending] = useState(false);
@@ -34,7 +33,6 @@ export function PasswordResetForm() {
     setConfirmationCode("");
     setPassword("");
     setConfirmPassword("");
-    setDeliveryDestination(null);
     setIsCodeSent(false);
     setErrorMessage(null);
   }
@@ -50,7 +48,6 @@ export function PasswordResetForm() {
     setConfirmationCode("");
     setPassword("");
     setConfirmPassword("");
-    setDeliveryDestination(null);
     setIsCodeSent(false);
     setErrorMessage(null);
   }
@@ -87,7 +84,6 @@ export function PasswordResetForm() {
         throw new Error(payload.error ?? "Password reset request failed.");
       }
 
-      setDeliveryDestination(payload.deliveryDestination ?? null);
       setIsCodeSent(true);
     } catch (error) {
       setErrorMessage(
@@ -108,7 +104,7 @@ export function PasswordResetForm() {
     }
 
     if (!phoneNumber || !confirmationCode || !password || !confirmPassword) {
-      setErrorMessage("Phone number, SMS code, and new password are required.");
+      setErrorMessage("Phone number, OTP, and new password are required.");
       return;
     }
 
@@ -145,9 +141,6 @@ export function PasswordResetForm() {
     <form className="form-stack" onSubmit={handleSubmit}>
       <div>
         <h2>Reset password</h2>
-        <p className="muted-text">
-          Request an SMS code for this Cognito user, then set a new password.
-        </p>
         {!authConfigured ? <p className="muted-text">{getPublicWebAuthSetupMessage()}</p> : null}
       </div>
 
@@ -178,10 +171,10 @@ export function PasswordResetForm() {
       {isCodeSent ? (
         <>
           <div className="field">
-            <label htmlFor="reset-code">SMS code</label>
+            <label htmlFor="reset-code">Check whatsapp for OTP</label>
             <input
               id="reset-code"
-              placeholder="Enter the code from SMS"
+              placeholder="Enter the OTP"
               disabled={!authConfigured}
               value={confirmationCode}
               onChange={(event) => setConfirmationCode(event.target.value)}
@@ -212,12 +205,6 @@ export function PasswordResetForm() {
             />
           </div>
         </>
-      ) : null}
-
-      {isCodeSent ? (
-        <p className="muted-text">
-          Reset code sent{deliveryDestination ? ` to ${deliveryDestination}` : ""}. Enter it below with your new password.
-        </p>
       ) : null}
 
       {errorMessage ? <p className="muted-text">{errorMessage}</p> : null}

@@ -372,15 +372,16 @@ export function AuthForm({ mode }: AuthFormProps) {
   return (
     <form className="form-stack" onSubmit={handleSubmit}>
       <div>
-        <div aria-label="Authentication mode" className="segmented-control segmented-control-wide" role="group">
-          <a className={`segmented-control-item${mode === "sign-in" ? " is-active" : ""}`} href={`/sign-in${redirectQuery}`}>
-            Sign in
-          </a>
-          <a className={`segmented-control-item${mode === "sign-up" ? " is-active" : ""}`} href={`/sign-up${redirectQuery}`}>
-            Sign up
-          </a>
-        </div>
-        <h2>{mode === "sign-up" ? "Create account" : "Welcome back"}</h2>
+        {mode === "sign-up" ? (
+          <div aria-label="Authentication mode" className="segmented-control segmented-control-wide" role="group">
+            <a className="segmented-control-item" href={`/sign-in${redirectQuery}`}>
+              Sign in
+            </a>
+            <a className="segmented-control-item is-active" href={`/sign-up${redirectQuery}`}>
+              Sign up
+            </a>
+          </div>
+        ) : null}
         {!authConfigured ? <p className="muted-text">{getPublicWebAuthSetupMessage()}</p> : null}
       </div>
 
@@ -478,12 +479,6 @@ export function AuthForm({ mode }: AuthFormProps) {
         </div>
       ) : null}
 
-      {mode === "sign-up" && signUpState?.requiresConfirmation ? (
-        <p className="muted-text">
-          OTP sent{signUpState?.destination ? ` to ${signUpState.destination}` : ""}. Confirm the account before signing in.
-        </p>
-      ) : null}
-
       {(mode === "sign-in" || (mode === "sign-up" && !signUpState?.requiresConfirmation)) && isTermsAgreementVisible ? (
         <div className="terms-consent-box">
           <label className="role-option terms-consent-checkbox">
@@ -493,7 +488,7 @@ export function AuthForm({ mode }: AuthFormProps) {
               type="checkbox"
               onChange={(event) => setHasAcceptedTerms(event.target.checked)}
             />
-            <span>I agree to the TRAPit.in Terms of Service and consent to essential service communications.</span>
+            <span>I agree to the TRAPit.in Terms of Service.</span>
           </label>
           <details className="terms-details">
             <summary>Read Terms of Service</summary>
@@ -504,10 +499,6 @@ export function AuthForm({ mode }: AuthFormProps) {
             </div>
           </details>
         </div>
-      ) : mode === "sign-in" ? (
-        <button className="button-secondary small-button" type="button" onClick={() => setIsTermsAgreementVisible(true)}>
-          Review Terms of Service
-        </button>
       ) : null}
 
       {mode === "sign-up" && signUpState?.requiresConfirmation ? (
@@ -555,6 +546,7 @@ export function AuthForm({ mode }: AuthFormProps) {
         </a>
       ) : null}
 
+      {mode === "sign-in" ? <a className="button-secondary" href={`/sign-up${redirectQuery}`}>New user? Sign up</a> : null}
       {mode === "sign-up" ? <a className="button-secondary" href={`/sign-in${redirectQuery}`}>Already have an account? Sign in</a> : null}
     </form>
   );

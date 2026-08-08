@@ -3,7 +3,12 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-export function SignOutButton() {
+type SignOutButtonProps = {
+  className?: string;
+  onSignedOut?: () => void;
+};
+
+export function SignOutButton({ className = "button-secondary", onSignedOut }: SignOutButtonProps) {
   const router = useRouter();
   const [isPending, setIsPending] = useState(false);
 
@@ -14,6 +19,7 @@ export function SignOutButton() {
       await fetch("/api/auth/sign-out", {
         method: "POST",
       });
+      onSignedOut?.();
       router.push("/sign-in");
       router.refresh();
     } finally {
@@ -22,7 +28,7 @@ export function SignOutButton() {
   }
 
   return (
-    <button className="button-secondary" disabled={isPending} type="button" onClick={handleSignOut}>
+    <button className={className} disabled={isPending} type="button" onClick={handleSignOut}>
       {isPending ? "Signing out..." : "Sign out"}
     </button>
   );
