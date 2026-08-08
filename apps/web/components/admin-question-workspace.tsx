@@ -5121,7 +5121,7 @@ export function AdminQuestionWorkspace({
                                     recurringEndDateKey: currentDraft.recurringEndDateKey || currentDraft.slotDateKey,
                                     recurringWeekdayKeys: currentDraft.recurringWeekdayKeys.length
                                       ? currentDraft.recurringWeekdayKeys
-                                      : [BUSINESS_WEEK_DAYS[createDateFromKey(currentDraft.slotDateKey).getDay()].key],
+                                      : [BUSINESS_WEEK_DAYS[new Date(`${currentDraft.slotDateKey}T00:00:00`).getDay()].key],
                                   }))}
                                 >
                                   <option value="none">Single appointment</option>
