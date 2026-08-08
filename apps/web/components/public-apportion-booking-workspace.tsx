@@ -21,6 +21,7 @@ type BookingPayload = {
     name: string;
     ownerIdentifier: string;
     profileImageDataUrl: string | null;
+    recurringBookingsEnabled: boolean;
     showRemainingBookings: boolean;
     slotDurationMinutes: number | null;
     workingDays: string;
@@ -390,6 +391,12 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       return;
     }
 
+    if (!payload.business.recurringBookingsEnabled) {
+      setRecurrenceMode("none");
+      setRecurringEndDateKey("");
+      setRecurringWeekdayKeys([]);
+    }
+
     const workingDays = parseWorkingDays(payload.business.workingDays);
     const today = createDateFromKey(getIstDateKey(new Date()));
     const nextWorkingDate = Array.from({ length: 28 }, (_, offset) => {
@@ -438,6 +445,11 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     }
 
     if (recurrenceMode === "weekly") {
+      if (!payload.business.recurringBookingsEnabled) {
+        setFeedback("Recurring bookings are disabled for this business.");
+        return;
+      }
+
       if (!recurringWeekdayKeys.length) {
         setFeedback("Choose at least one weekday for recurring booking.");
         return;
@@ -458,6 +470,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
             slotDateKey: selectedDateKey,
             notes,
             recurrence: recurrenceMode === "weekly"
+              && payload.business.recurringBookingsEnabled
               ? {
                   endDateKey: recurringEndDateKey,
                   mode: "weekly",
@@ -652,27 +665,29 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                 <p className="muted-text">{selectedSlot ? `${selectedSlot.label} selected${payload.business.showRemainingBookings ? `, ${selectedSlot.remainingCount} booking${selectedSlot.remainingCount === 1 ? "" : "s"} left` : ""}` : "Filled slots are greyed out in the list."}</p>
               </div>
             )}
-            <div className="field">
-              <label htmlFor="apportion-recurrence-mode">Recurring booking</label>
-              <select
-                className="select-field"
-                id="apportion-recurrence-mode"
-                value={recurrenceMode}
-                onChange={(event) => {
-                  const nextMode = event.target.value === "weekly" ? "weekly" : "none";
-                  setRecurrenceMode(nextMode);
+            {payload.business.recurringBookingsEnabled ? (
+              <div className="field">
+                <label htmlFor="apportion-recurrence-mode">Recurring booking</label>
+                <select
+                  className="select-field"
+                  id="apportion-recurrence-mode"
+                  value={recurrenceMode}
+                  onChange={(event) => {
+                    const nextMode = event.target.value === "weekly" ? "weekly" : "none";
+                    setRecurrenceMode(nextMode);
 
-                  if (nextMode === "weekly") {
-                    setRecurringEndDateKey((current) => current || selectedDateKey);
-                    setRecurringWeekdayKeys((current) => current.length ? current : [getWeekdayKeyForDateKey(selectedDateKey)]);
-                  }
-                }}
-              >
-                <option value="none">Single appointment</option>
-                <option value="weekly">Weekly recurring</option>
-              </select>
-            </div>
-            {recurrenceMode === "weekly" ? (
+                    if (nextMode === "weekly") {
+                      setRecurringEndDateKey((current) => current || selectedDateKey);
+                      setRecurringWeekdayKeys((current) => current.length ? current : [getWeekdayKeyForDateKey(selectedDateKey)]);
+                    }
+                  }}
+                >
+                  <option value="none">Single appointment</option>
+                  <option value="weekly">Weekly recurring</option>
+                </select>
+              </div>
+            ) : null}
+            {payload.business.recurringBookingsEnabled && recurrenceMode === "weekly" ? (
               <div className="field">
                 <label htmlFor="apportion-recurring-weekdays">Weekday selections</label>
                 <select

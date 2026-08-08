@@ -233,6 +233,12 @@ main {
   font: inherit;
 }
 
+.select-field option:disabled {
+  color: rgba(28, 20, 15, 0.5);
+  background: rgba(28, 20, 15, 0.06);
+  font-style: italic;
+}
+
 .textarea-field textarea {
   min-height: 120px;
   resize: vertical;
@@ -1145,7 +1151,26 @@ main {
 
 .apportion-calendar-day:disabled {
   cursor: not-allowed;
-  opacity: 0.48;
+  opacity: 1;
+  border-color: rgba(28, 20, 15, 0.12);
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      rgba(28, 20, 15, 0.04),
+      rgba(28, 20, 15, 0.04) 6px,
+      rgba(28, 20, 15, 0.01) 6px,
+      rgba(28, 20, 15, 0.01) 12px
+    ),
+    rgba(28, 20, 15, 0.08);
+  color: rgba(28, 20, 15, 0.36);
+}
+
+.apportion-calendar-day:disabled strong {
+  opacity: 0.82;
+}
+
+.apportion-calendar-day:disabled small {
+  opacity: 0.72;
 }
 
 .apportion-calendar-day strong {

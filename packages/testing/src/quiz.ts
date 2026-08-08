@@ -72,6 +72,7 @@ export type WorkspaceBranding = {
   instituteName: string;
   justAddToList: boolean;
   profileImageDataUrl: string | null;
+  recurringBookingsEnabled?: boolean;
   showRemainingBookings: boolean;
   slotDurationMinutes: number | null;
   workingHoursSecondWindow: string;
@@ -561,6 +562,7 @@ export function normalizeWorkspaceBranding(
   const appointmentNotesPrompt = branding.appointmentNotesPrompt?.trim() || "Share a brief about appointment purpose";
   const breakHours = branding.breakHours?.trim() ?? "";
   const justAddToList = branding.justAddToList === true;
+  const recurringBookingsEnabled = branding.recurringBookingsEnabled === true;
   const workingDays = branding.workingDays?.trim() ?? "";
   const workingHours = branding.workingHours?.trim() ?? "";
   const workingHoursSecondWindow = branding.workingHoursSecondWindow?.trim() ?? "";
@@ -572,7 +574,7 @@ export function normalizeWorkspaceBranding(
     ? branding.slotDurationMinutes
     : null;
 
-  if (!instituteName && !address && !imageDataUrl && !profileImageDataUrl && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null && !justAddToList) {
+  if (!instituteName && !address && !imageDataUrl && !profileImageDataUrl && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null && !justAddToList && !recurringBookingsEnabled) {
     return null;
   }
 
@@ -587,6 +589,7 @@ export function normalizeWorkspaceBranding(
     instituteName,
     justAddToList,
     profileImageDataUrl,
+    recurringBookingsEnabled,
     showRemainingBookings,
     slotDurationMinutes,
     workingHoursSecondWindow,

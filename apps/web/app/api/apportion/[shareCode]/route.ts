@@ -317,6 +317,7 @@ export async function GET(
       name: business.branding.instituteName,
       ownerIdentifier: business.ownerIdentifier,
       profileImageDataUrl: business.branding.profileImageDataUrl,
+      recurringBookingsEnabled: business.branding.recurringBookingsEnabled === true,
       showRemainingBookings: business.branding.showRemainingBookings,
       slotDurationMinutes: business.branding.slotDurationMinutes ?? null,
       workingDays: business.branding.workingDays,
@@ -368,6 +369,11 @@ export async function POST(
         weekdayKeys: body.recurrence.weekdayKeys ?? [],
       }
     : null;
+
+  if (recurrence && business.branding.recurringBookingsEnabled !== true) {
+    return NextResponse.json({ error: "Recurring bookings are disabled for this business." }, { status: 400 });
+  }
+
   const slotDateKeys = recurrence
     ? buildRecurringDateKeys({
         endDateKey: recurrence.endDateKey,

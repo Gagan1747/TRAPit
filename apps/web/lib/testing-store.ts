@@ -420,23 +420,31 @@ export async function listWorkspaceAppointmentBusinesses() {
       }
 
       return {
+        advanceBookingWeeks: branding.advanceBookingWeeks ?? 4,
+        appointmentNotesPrompt: branding.appointmentNotesPrompt,
         appointmentShareCode,
         appointmentsPerSlot: branding.appointmentsPerSlot ?? null,
         justAddToList: branding.justAddToList === true,
         name,
         ownerIdentifier,
+        recurringBookingsEnabled: branding.recurringBookingsEnabled === true,
         slotDurationMinutes: branding.slotDurationMinutes ?? null,
+        workingDays: branding.workingDays,
         workingHours: branding.workingHours,
         workingHoursSecondWindow: branding.workingHoursSecondWindow,
       };
     })
     .filter((entry): entry is {
+      advanceBookingWeeks: number;
+      appointmentNotesPrompt: string;
       appointmentShareCode: string;
       appointmentsPerSlot: number | null;
       justAddToList: boolean;
       name: string;
       ownerIdentifier: string;
+      recurringBookingsEnabled: boolean;
       slotDurationMinutes: number | null;
+      workingDays: string;
       workingHours: string;
       workingHoursSecondWindow: string;
     } => Boolean(entry))

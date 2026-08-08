@@ -372,16 +372,6 @@ export function AuthForm({ mode }: AuthFormProps) {
   return (
     <form className="form-stack" onSubmit={handleSubmit}>
       <div>
-        {mode === "sign-up" ? (
-          <div aria-label="Authentication mode" className="segmented-control segmented-control-wide" role="group">
-            <a className="segmented-control-item" href={`/sign-in${redirectQuery}`}>
-              Sign in
-            </a>
-            <a className="segmented-control-item is-active" href={`/sign-up${redirectQuery}`}>
-              Sign up
-            </a>
-          </div>
-        ) : null}
         {!authConfigured ? <p className="muted-text">{getPublicWebAuthSetupMessage()}</p> : null}
       </div>
 
@@ -543,6 +533,12 @@ export function AuthForm({ mode }: AuthFormProps) {
       {mode === "sign-in" ? (
         <a className="button-secondary" href="/reset-password">
           Reset password
+        </a>
+      ) : null}
+
+      {mode === "sign-in" ? (
+        <a className="button-secondary" href={`/sign-up${redirectQuery}`}>
+          New user? Sign up
         </a>
       ) : null}
 
