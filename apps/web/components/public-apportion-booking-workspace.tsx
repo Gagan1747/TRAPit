@@ -7,6 +7,7 @@ import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-
 
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const WEEKDAY_SHORT_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEKDAY_KEYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
 type BookingPayload = {
@@ -33,6 +34,7 @@ type BookingPayload = {
 
 type BookingResponse = {
   appointment: { id: string };
+  appointmentCount?: number;
   caution: string | null;
 };
 
@@ -76,6 +78,12 @@ function createDateFromKey(value: string) {
   const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
 
   return new Date(year, month - 1, day);
+}
+
+function getWeekdayKeyForDateKey(value: string) {
+  const date = createDateFromKey(value);
+
+  return WEEKDAY_KEYS[date.getDay()] ?? "Sun";
 }
 
 function createUtcSlotIso(slotDateKey: string, dayOffset: number, minutesOfDay: number) {
@@ -347,6 +355,9 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   const [isLoading, setIsLoading] = useState(true);
   const [notes, setNotes] = useState("");
   const [payload, setPayload] = useState<BookingPayload | null>(null);
+  const [recurrenceMode, setRecurrenceMode] = useState<"none" | "weekly">("none");
+  const [recurringEndDateKey, setRecurringEndDateKey] = useState("");
+  const [recurringWeekdayKeys, setRecurringWeekdayKeys] = useState<string[]>([]);
   const [selectedDateKey, setSelectedDateKey] = useState(getIstDateKey(new Date()));
   const [selectedSlotIso, setSelectedSlotIso] = useState<string | null>(null);
 
@@ -358,6 +369,9 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
         await fetch(`/api/apportion/${encodeURIComponent(shareCode)}`),
       );
       setPayload(nextPayload);
+      setRecurrenceMode("none");
+      setRecurringEndDateKey("");
+      setRecurringWeekdayKeys([]);
       setSelectedSlotIso(null);
       setFeedback(null);
     } catch (error) {
@@ -391,8 +405,24 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
 
     if (nextWorkingDate) {
       setSelectedDateKey(createDateKey(nextWorkingDate));
+      setRecurringEndDateKey(createDateKey(nextWorkingDate));
+      setRecurringWeekdayKeys([WEEKDAY_KEYS[nextWorkingDate.getDay()] ?? "Sun"]);
     }
   }, [payload]);
+
+  useEffect(() => {
+    if (recurrenceMode !== "weekly") {
+      return;
+    }
+
+    if (!recurringEndDateKey) {
+      setRecurringEndDateKey(selectedDateKey);
+    }
+
+    if (!recurringWeekdayKeys.length) {
+      setRecurringWeekdayKeys([getWeekdayKeyForDateKey(selectedDateKey)]);
+    }
+  }, [recurrenceMode, recurringEndDateKey, recurringWeekdayKeys, selectedDateKey]);
 
   async function handleBookAppointment() {
     if (!payload) {
@@ -407,6 +437,18 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       return;
     }
 
+    if (recurrenceMode === "weekly") {
+      if (!recurringWeekdayKeys.length) {
+        setFeedback("Choose at least one weekday for recurring booking.");
+        return;
+      }
+
+      if (!recurringEndDateKey) {
+        setFeedback("Choose an end date for recurring booking.");
+        return;
+      }
+    }
+
     setIsBooking(true);
 
     try {
@@ -415,17 +457,31 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
           body: JSON.stringify({
             slotDateKey: selectedDateKey,
             notes,
+            recurrence: recurrenceMode === "weekly"
+              ? {
+                  endDateKey: recurringEndDateKey,
+                  mode: "weekly",
+                  weekdayKeys: recurringWeekdayKeys,
+                }
+              : null,
             startsAt: selectedSlot?.startsAt,
           }),
           headers: { "Content-Type": "application/json" },
           method: "POST",
         }),
       );
+      const successLabel = bookingPayload.appointmentCount && bookingPayload.appointmentCount > 1
+        ? `${bookingPayload.appointmentCount} appointments booked.`
+        : "Appointment booked.";
+
       setFeedback(bookingPayload.caution
-        ? `Appointment booked. ${bookingPayload.caution}`
-        : "Appointment booked. You can see it in the Apportion tab on your dashboard.");
+        ? `${successLabel} ${bookingPayload.caution}`
+        : `${successLabel} You can see it in the Apportion tab on your dashboard.`);
       markNotificationPromptOpportunity();
       setNotes("");
+      setRecurrenceMode("none");
+      setRecurringEndDateKey(selectedDateKey);
+      setRecurringWeekdayKeys([getWeekdayKeyForDateKey(selectedDateKey)]);
       setSelectedSlotIso(null);
       await loadBookingPage();
     } catch (error) {
@@ -488,6 +544,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       })
     : null;
   const queueCountForSelectedDate = queueCountsByDateKey[selectedDateKey] ?? 0;
+  const selectedDateLabel = createDateFromKey(selectedDateKey).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
   const businessContactText = [payload.business.address, payload.business.name, formatPhoneNumberForDisplay(payload.business.ownerIdentifier, { showFullPhoneNumber: true })]
     .filter(Boolean)
     .join(" • ");
@@ -548,6 +605,9 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                   type="button"
                   onClick={() => {
                     setSelectedDateKey(dateKey);
+                    if (recurrenceMode === "weekly" && recurringWeekdayKeys.length <= 1) {
+                      setRecurringWeekdayKeys([getWeekdayKeyForDateKey(dateKey)]);
+                    }
                     setSelectedSlotIso(null);
                   }}
                 >
@@ -561,12 +621,9 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
           <div className="form-stack apportion-booking-form">
             {payload.business.justAddToList ? (
               <div className="field">
-                <label>Scheduled date and operating hours</label>
-                <p className="muted-text apportion-working-hours">Scheduled date: {createDateFromKey(selectedDateKey).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</p>
-                <p className="muted-text apportion-working-hours">Working hours: {workingHoursText || "Not specified"}</p>
-                <p className="muted-text">
-                  Queue size for selected date: {queueCountForSelectedDate}
-                </p>
+                <label>{selectedDateLabel}</label>
+                <p className="muted-text">Queue size: {queueCountForSelectedDate}</p>
+                {queueEstimate ? <p className="muted-text">Estimated start time: {queueEstimate.label}</p> : null}
                 {queueEstimate?.exceedsWorkingHours ? (
                   <p className="muted-text apportion-queue-warning">
                     Caution: high queue volume may extend service beyond configured working hours for this day.
@@ -576,7 +633,6 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
             ) : (
               <div className="field">
                 <label htmlFor="apportion-appointment-time">Appointment time</label>
-                <p className="muted-text apportion-working-hours">Working hours: {workingHoursText || "Not specified"}</p>
                 <select
                   className="select-field"
                   id="apportion-appointment-time"
@@ -596,6 +652,55 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                 <p className="muted-text">{selectedSlot ? `${selectedSlot.label} selected${payload.business.showRemainingBookings ? `, ${selectedSlot.remainingCount} booking${selectedSlot.remainingCount === 1 ? "" : "s"} left` : ""}` : "Filled slots are greyed out in the list."}</p>
               </div>
             )}
+            <div className="field">
+              <label htmlFor="apportion-recurrence-mode">Recurring booking</label>
+              <select
+                className="select-field"
+                id="apportion-recurrence-mode"
+                value={recurrenceMode}
+                onChange={(event) => {
+                  const nextMode = event.target.value === "weekly" ? "weekly" : "none";
+                  setRecurrenceMode(nextMode);
+
+                  if (nextMode === "weekly") {
+                    setRecurringEndDateKey((current) => current || selectedDateKey);
+                    setRecurringWeekdayKeys((current) => current.length ? current : [getWeekdayKeyForDateKey(selectedDateKey)]);
+                  }
+                }}
+              >
+                <option value="none">Single appointment</option>
+                <option value="weekly">Weekly recurring</option>
+              </select>
+            </div>
+            {recurrenceMode === "weekly" ? (
+              <div className="field">
+                <label htmlFor="apportion-recurring-weekdays">Weekday selections</label>
+                <select
+                  multiple
+                  className="select-field"
+                  id="apportion-recurring-weekdays"
+                  value={recurringWeekdayKeys}
+                  onChange={(event) => {
+                    const nextWeekdays = Array.from(event.target.selectedOptions, (option) => option.value);
+                    setRecurringWeekdayKeys(nextWeekdays);
+                  }}
+                >
+                  {WEEKDAY_KEYS.map((weekdayKey, index) => (
+                    <option key={weekdayKey} value={weekdayKey}>{WEEKDAY_NAMES[index]}</option>
+                  ))}
+                </select>
+                <label htmlFor="apportion-recurring-end-date">Recurring end date</label>
+                <input
+                  className="date-time-input"
+                  id="apportion-recurring-end-date"
+                  max={createDateKey(maxBookableDate)}
+                  min={selectedDateKey}
+                  type="date"
+                  value={recurringEndDateKey}
+                  onChange={(event) => setRecurringEndDateKey(event.target.value)}
+                />
+              </div>
+            ) : null}
             <div className="field">
               <div className="apportion-notes-label-row">
                 <label htmlFor="apportion-notes">Notes</label>

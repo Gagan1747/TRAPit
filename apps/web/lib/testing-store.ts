@@ -405,6 +405,44 @@ export async function getWorkspaceBranding(actorKey?: string | null) {
   return state.workspaceBrandingByActor[normalizedActorKey] ?? null;
 }
 
+export async function listWorkspaceAppointmentBusinesses() {
+  const state = await readStore();
+
+  return Object.entries(state.workspaceBrandingByActor)
+    .map(([ownerIdentifier, branding]) => {
+      const appointmentShareCode = branding.appointmentShareCode?.trim()
+        || state.workspaceAppointmentShareCodesByActor[ownerIdentifier]?.trim()
+        || "";
+      const name = branding.instituteName.trim() || ownerIdentifier;
+
+      if (!appointmentShareCode) {
+        return null;
+      }
+
+      return {
+        appointmentShareCode,
+        appointmentsPerSlot: branding.appointmentsPerSlot ?? null,
+        justAddToList: branding.justAddToList === true,
+        name,
+        ownerIdentifier,
+        slotDurationMinutes: branding.slotDurationMinutes ?? null,
+        workingHours: branding.workingHours,
+        workingHoursSecondWindow: branding.workingHoursSecondWindow,
+      };
+    })
+    .filter((entry): entry is {
+      appointmentShareCode: string;
+      appointmentsPerSlot: number | null;
+      justAddToList: boolean;
+      name: string;
+      ownerIdentifier: string;
+      slotDurationMinutes: number | null;
+      workingHours: string;
+      workingHoursSecondWindow: string;
+    } => Boolean(entry))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
 export async function updateWorkspaceBranding(
   branding: WorkspaceBranding | null,
   actorKey?: string | null,

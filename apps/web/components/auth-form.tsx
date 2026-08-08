@@ -546,7 +546,6 @@ export function AuthForm({ mode }: AuthFormProps) {
         </a>
       ) : null}
 
-      {mode === "sign-in" ? <a className="button-secondary" href={`/sign-up${redirectQuery}`}>New user? Sign up</a> : null}
       {mode === "sign-up" ? <a className="button-secondary" href={`/sign-in${redirectQuery}`}>Already have an account? Sign in</a> : null}
     </form>
   );

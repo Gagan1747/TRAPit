@@ -2,10 +2,11 @@ import { NextResponse } from "next/server";
 
 import { cancelApportionAppointment, listApportionAppointmentsForOwner, listApportionAppointmentsForRequester, updateApportionAppointment } from "../../../../lib/apportion-store";
 import { publishWorkspaceEvent } from "../../../../lib/realtime-events";
-import { getOrCreateWorkspaceAppointmentShareCode, getWorkspaceBranding } from "../../../../lib/testing-store";
+import { getOrCreateWorkspaceAppointmentShareCode, getWorkspaceBranding, listWorkspaceAppointmentBusinesses } from "../../../../lib/testing-store";
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 
 type OwnerOperatingHours = {
+  appointmentsPerSlot: number | null;
   justAddToList: boolean;
   slotDurationMinutes: number | null;
   workingHours: string;
@@ -13,8 +14,9 @@ type OwnerOperatingHours = {
 };
 
 async function buildApportionDashboardPayload(actorIdentifier: string) {
-  const [appointmentShareCode, ownerAppointments, requesterAppointments] = await Promise.all([
+  const [appointmentShareCode, availableBusinesses, ownerAppointments, requesterAppointments] = await Promise.all([
     getOrCreateWorkspaceAppointmentShareCode(actorIdentifier),
+    listWorkspaceAppointmentBusinesses(),
     listApportionAppointmentsForOwner(actorIdentifier),
     listApportionAppointmentsForRequester(actorIdentifier),
   ]);
@@ -39,6 +41,7 @@ async function buildApportionDashboardPayload(actorIdentifier: string) {
     return [
       ownerIdentifier,
       {
+        appointmentsPerSlot: ownerBranding?.appointmentsPerSlot ?? null,
         justAddToList: ownerBranding?.justAddToList === true,
         slotDurationMinutes: ownerBranding?.slotDurationMinutes ?? null,
         workingHours: ownerBranding?.workingHours ?? "",
@@ -51,6 +54,7 @@ async function buildApportionDashboardPayload(actorIdentifier: string) {
   return {
     appointmentShareCode,
     appointments,
+    availableBusinesses,
     ownerAppointments,
     ownerOperatingHoursByIdentifier,
     requesterAppointments,

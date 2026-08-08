@@ -390,7 +390,7 @@ main {
   pointer-events: none;
   transform: translateY(6px);
   transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
-  z-index: 18;
+  z-index: 24;
 }
 
 .dashboard-top-nav-item-shell.has-submenu:hover .dashboard-top-nav-submenu,
@@ -974,6 +974,10 @@ main {
   overflow: hidden;
 }
 
+.business-logo-preview.is-circular {
+  border-radius: 999px;
+}
+
 .business-logo-preview img {
   display: block;
   width: 104px;
@@ -1042,15 +1046,14 @@ main {
   width: 112px;
   height: 112px;
   flex: 0 0 112px;
-  border-radius: 24px;
+  border-radius: 999px;
   background-color: rgba(255, 255, 255, 0.78);
   border: 1px solid rgba(81, 55, 133, 0.14);
-  object-fit: contain;
-  padding: 10px;
+  object-fit: cover;
+  padding: 0;
 }
 
 .apportion-business-logo.is-profile {
-  border-radius: 999px;
   object-fit: cover;
   padding: 0;
 }
@@ -1235,11 +1238,33 @@ main {
   min-width: 0;
 }
 
+.apportion-log-head-actions {
+  align-items: center;
+  gap: 10px;
+}
+
 .apportion-log-topline {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: start;
+}
+
+.apportion-log-topline-card {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.apportion-log-card-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.apportion-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .apportion-log-badges {
@@ -1278,13 +1303,22 @@ main {
 }
 
 .apportion-log-item.is-owner-scope {
+  align-self: flex-start;
+  width: min(100%, 760px);
   border-left: 4px solid rgba(81, 55, 133, 0.48);
   background: linear-gradient(90deg, rgba(81, 55, 133, 0.06), rgba(255, 255, 255, 0));
 }
 
 .apportion-log-item.is-requester-scope {
+  align-self: flex-end;
+  width: min(100%, 760px);
+  margin-left: auto;
   border-left: 4px solid rgba(59, 130, 246, 0.48);
   background: linear-gradient(90deg, rgba(59, 130, 246, 0.06), rgba(255, 255, 255, 0));
+}
+
+.apportion-log-item.is-draft {
+  border-style: dashed;
 }
 
 .apportion-log-actions {
@@ -1342,6 +1376,12 @@ main {
 
 .apportion-inline-editor-actions {
   gap: 8px;
+}
+
+@media (max-width: 720px) {
+  .apportion-card-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .date-time-input {

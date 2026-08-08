@@ -506,9 +506,11 @@ type ApportionAppointment = {
 type ApportionDashboardResponse = {
   appointmentShareCode: string | null;
   appointments: ApportionAppointment[];
+  availableBusinesses?: ApportionBusinessLookup[];
   nextInPersonAppointment?: ApportionAppointment | null;
   ownerAppointments: ApportionAppointment[];
   ownerOperatingHoursByIdentifier?: Record<string, {
+    appointmentsPerSlot: number | null;
     justAddToList: boolean;
     slotDurationMinutes: number | null;
     workingHours: string;
@@ -518,11 +520,36 @@ type ApportionDashboardResponse = {
   updatedAppointment?: ApportionAppointment;
 };
 
+type ApportionBusinessLookup = {
+  appointmentShareCode: string;
+  appointmentsPerSlot: number | null;
+  justAddToList: boolean;
+  name: string;
+  ownerIdentifier: string;
+  slotDurationMinutes: number | null;
+  workingHours: string;
+  workingHoursSecondWindow: string;
+};
+
 type ApportionOwnerOperatingHours = {
+  appointmentsPerSlot: number | null;
   justAddToList: boolean;
   slotDurationMinutes: number | null;
   workingHours: string;
   workingHoursSecondWindow: string;
+};
+
+type ApportionDraftCard = {
+  appointmentShareCode: string;
+  businessTitleQuery: string;
+  id: string;
+  notes: string;
+  ownerPhoneQuery: string;
+  recurrenceMode: "none" | "weekly";
+  recurringEndDateKey: string;
+  recurringWeekdayKeys: string[];
+  slotDateKey: string;
+  slotTimeInput: string;
 };
 
 type TestQuestionReportSummary = {
@@ -818,6 +845,85 @@ function buildRescheduleSlotOptions(input: {
   });
 }
 
+function buildApportionSlotDetails(input: {
+  dateInput: string;
+  ownerHours: ApportionOwnerOperatingHours;
+}) {
+  const slotDurationMinutes = input.ownerHours.slotDurationMinutes ?? 30;
+  const slotStepMinutes = getRescheduleSlotStepMinutes(slotDurationMinutes);
+  const ranges = [input.ownerHours.workingHours, input.ownerHours.workingHoursSecondWindow]
+    .map((value) => parseBusinessTimeRange(value))
+    .filter((range): range is { endMinutes: number; startMinutes: number } => Boolean(range));
+  const effectiveRanges = ranges.length
+    ? ranges
+    : [parseBusinessTimeRange("10:00 AM - 6:00 PM")];
+
+  return effectiveRanges.flatMap((range) => {
+    const totalSlots = Math.max(0, Math.floor((range.endMinutes - range.startMinutes - slotDurationMinutes) / slotStepMinutes) + 1);
+
+    return Array.from({ length: totalSlots }, (_, index) => {
+      const slotMinutes = range.startMinutes + (index * slotStepMinutes);
+      const startsAtIso = createUtcIsoFromIstDateAndMinutes(input.dateInput, slotMinutes);
+
+      if (!startsAtIso) {
+        return null;
+      }
+
+      return {
+        label: formatBusinessTime(slotMinutes),
+        startsAt: startsAtIso,
+      };
+    }).filter((slot): slot is { label: string; startsAt: string } => Boolean(slot));
+  });
+}
+
+function estimateApportionQueueStart(input: {
+  ownerHours: ApportionOwnerOperatingHours;
+  queuePosition: number;
+  serviceDateKey: string;
+}) {
+  const appointmentsPerSlot = Math.max(1, input.ownerHours.appointmentsPerSlot ?? 1);
+  const slotIndex = Math.max(0, input.queuePosition - 1);
+  const slotBucketIndex = Math.floor(slotIndex / appointmentsPerSlot);
+  const slotDurationMinutes = input.ownerHours.slotDurationMinutes ?? 30;
+  const slotDetails = buildApportionSlotDetails({
+    dateInput: input.serviceDateKey,
+    ownerHours: input.ownerHours,
+  });
+
+  if (!slotDetails.length) {
+    const fallbackIso = createUtcIsoFromIstDateAndMinutes(input.serviceDateKey, (10 * 60) + (slotBucketIndex * slotDurationMinutes));
+    return fallbackIso ? formatShortDateTime(fallbackIso) : formatShortDate(input.serviceDateKey);
+  }
+
+  if (slotBucketIndex < slotDetails.length) {
+    return formatShortDateTime(slotDetails[slotBucketIndex].startsAt);
+  }
+
+  const overflowDate = new Date(slotDetails[slotDetails.length - 1].startsAt);
+  overflowDate.setMinutes(overflowDate.getMinutes() + ((slotBucketIndex - (slotDetails.length - 1)) * slotDurationMinutes));
+  return formatShortDateTime(overflowDate.toISOString());
+}
+
+function createApportionDraftCard(): ApportionDraftCard {
+  const draftId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `apportion-draft-${Date.now()}-${Math.round(Math.random() * 100000)}`;
+
+  return {
+    appointmentShareCode: "",
+    businessTitleQuery: "",
+    id: draftId,
+    notes: "",
+    ownerPhoneQuery: "",
+    recurrenceMode: "none",
+    recurringEndDateKey: toIstDateInputValue(new Date().toISOString()),
+    recurringWeekdayKeys: [],
+    slotDateKey: toIstDateInputValue(new Date().toISOString()),
+    slotTimeInput: "",
+  };
+}
+
 function isActiveApportionStatus(status: ApportionAppointment["currentStatus"]) {
   return status === "pending" || status === "present-in-person" || status === "pushed-back";
 }
@@ -859,7 +965,7 @@ function getRequesterQueueStatusLabel(input: {
 
   if (input.queuePosition === 2) {
     return {
-      helperText: "Your appointment will start as soon as the appointment before you finishes.",
+      helperText: null,
       label: "You are the next",
     };
   }
@@ -1391,6 +1497,8 @@ export function AdminQuestionWorkspace({
   const [groupSearchResults, setGroupSearchResults] = useState<ParticipantGroup[]>([]);
   const [groupName, setGroupName] = useState("");
   const [history, setHistory] = useState<TestHistoryEntry[]>([]);
+  const [availableApportionBusinesses, setAvailableApportionBusinesses] = useState<ApportionBusinessLookup[]>([]);
+  const [apportionDraftCards, setApportionDraftCards] = useState<ApportionDraftCard[]>([]);
   const [ownerApportionAppointments, setOwnerApportionAppointments] = useState<ApportionAppointment[]>([]);
   const [ownerOperatingHoursByIdentifier, setOwnerOperatingHoursByIdentifier] = useState<Record<string, ApportionOwnerOperatingHours>>({});
   const [brandingFeedback, setBrandingFeedback] = useState<string | null>(null);
@@ -1398,6 +1506,7 @@ export function AdminQuestionWorkspace({
   const [brandingImageDataUrl, setBrandingImageDataUrl] = useState<string | null>(null);
   const [brandingInstituteName, setBrandingInstituteName] = useState("");
   const [brandingProfileImageDataUrl, setBrandingProfileImageDataUrl] = useState<string | null>(null);
+  const [isApportionBusinessPanelOpen, setIsApportionBusinessPanelOpen] = useState(true);
   const [isBrandingDragActive, setIsBrandingDragActive] = useState(false);
   const [businessAdvanceBookingWeeks, setBusinessAdvanceBookingWeeks] = useState("4");
   const [businessAppointmentQrCode, setBusinessAppointmentQrCode] = useState<string | null>(null);
@@ -1521,7 +1630,7 @@ export function AdminQuestionWorkspace({
     setBrandingInstituteName(branding?.instituteName ?? "");
     setBrandingImageDataUrl(branding?.imageDataUrl ?? null);
     setBrandingProfileImageDataUrl(branding?.profileImageDataUrl ?? null);
-    setBusinessAdvanceBookingWeeks(branding?.advanceBookingWeeks ? String(branding.advanceBookingWeeks) : "4");
+    setBusinessAdvanceBookingWeeks("4");
     setBusinessAppointmentsPerSlot(branding?.appointmentsPerSlot ? String(branding.appointmentsPerSlot) : "");
     setBusinessAppointmentNotesPrompt(branding?.appointmentNotesPrompt ?? DEFAULT_APPOINTMENT_NOTES_PROMPT);
     setBusinessJustAddToList(branding?.justAddToList === true);
@@ -1565,6 +1674,7 @@ export function AdminQuestionWorkspace({
       setParticipantTestHistory(userDashboardPayload.history);
       setWorkspaceBranding(brandingPayload.branding);
       setBusinessAppointmentShareCode(apportionPayload.appointmentShareCode ?? brandingPayload.branding?.appointmentShareCode ?? null);
+      setAvailableApportionBusinesses(apportionPayload.availableBusinesses ?? []);
       if (!isBrandingDraftDirtyRef.current) {
         syncBrandingDraft(brandingPayload.branding);
       }
@@ -1884,6 +1994,7 @@ export function AdminQuestionWorkspace({
       );
 
       setBusinessAppointmentShareCode(payload.appointmentShareCode ?? businessAppointmentShareCode);
+      setAvailableApportionBusinesses(payload.availableBusinesses ?? availableApportionBusinesses);
       setOwnerApportionAppointments(payload.ownerAppointments);
       setOwnerOperatingHoursByIdentifier(
         normalizeOwnerOperatingHoursByIdentifier(payload.ownerOperatingHoursByIdentifier),
@@ -1927,6 +2038,7 @@ export function AdminQuestionWorkspace({
       );
 
       setBusinessAppointmentShareCode(payload.appointmentShareCode ?? businessAppointmentShareCode);
+      setAvailableApportionBusinesses(payload.availableBusinesses ?? availableApportionBusinesses);
       setOwnerApportionAppointments(payload.ownerAppointments);
       setOwnerOperatingHoursByIdentifier(
         normalizeOwnerOperatingHoursByIdentifier(payload.ownerOperatingHoursByIdentifier),
@@ -1944,6 +2056,94 @@ export function AdminQuestionWorkspace({
           : "Appointment updated.");
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to update appointment.");
+    }
+  }
+
+  function updateApportionDraftCard(draftId: string, updater: (draft: ApportionDraftCard) => ApportionDraftCard) {
+    setApportionDraftCards((currentDrafts) => currentDrafts.map((draft) => (draft.id === draftId ? updater(draft) : draft)));
+  }
+
+  function removeApportionDraftCard(draftId: string) {
+    setApportionDraftCards((currentDrafts) => currentDrafts.filter((draft) => draft.id !== draftId));
+  }
+
+  function addApportionDraftCard() {
+    setApportionDraftCards((currentDrafts) => [createApportionDraftCard(), ...currentDrafts]);
+  }
+
+  function handleApportionDraftBusinessSelection(draftId: string, business: ApportionBusinessLookup) {
+    updateApportionDraftCard(draftId, (draft) => ({
+      ...draft,
+      appointmentShareCode: business.appointmentShareCode,
+      businessTitleQuery: business.name,
+      ownerPhoneQuery: formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true }),
+      slotTimeInput: business.justAddToList ? "" : draft.slotTimeInput,
+    }));
+  }
+
+  async function submitApportionDraftCard(draft: ApportionDraftCard) {
+    const selectedBusiness = availableApportionBusinesses.find((business) => business.appointmentShareCode === draft.appointmentShareCode)
+      ?? availableApportionBusinesses.find((business) => business.name === draft.businessTitleQuery)
+      ?? availableApportionBusinesses.find((business) => formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true }) === draft.ownerPhoneQuery);
+
+    if (!selectedBusiness) {
+      setFeedback("Choose a valid business before booking the appointment.");
+      return;
+    }
+
+    if (!draft.slotDateKey.trim()) {
+      setFeedback("Choose an appointment date.");
+      return;
+    }
+
+    if (draft.recurrenceMode === "weekly") {
+      if (!draft.recurringWeekdayKeys.length) {
+        setFeedback("Choose at least one recurring weekday.");
+        return;
+      }
+
+      if (!draft.recurringEndDateKey.trim()) {
+        setFeedback("Choose a recurring end date.");
+        return;
+      }
+    }
+
+    const nextStartsAt = selectedBusiness.justAddToList
+      ? undefined
+      : parseIstDateTimeInputToIso(draft.slotTimeInput);
+
+    if (!selectedBusiness.justAddToList && !nextStartsAt) {
+      setFeedback("Choose a valid appointment time.");
+      return;
+    }
+
+    setFeedback(null);
+
+    try {
+      await readJson<{ appointment: { id: string } }>(
+        await fetch(`/api/apportion/${encodeURIComponent(selectedBusiness.appointmentShareCode)}`, {
+          body: JSON.stringify({
+            notes: draft.notes,
+            recurrence: draft.recurrenceMode === "weekly"
+              ? {
+                  endDateKey: draft.recurringEndDateKey,
+                  mode: "weekly",
+                  weekdayKeys: draft.recurringWeekdayKeys,
+                }
+              : null,
+            slotDateKey: draft.slotDateKey,
+            startsAt: nextStartsAt,
+          }),
+          headers: { "Content-Type": "application/json" },
+          method: "POST",
+        }),
+      );
+
+      removeApportionDraftCard(draft.id);
+      await loadWorkspace({ silent: true });
+      setFeedback("Appointment booked from the dashboard.");
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to add the appointment.");
     }
   }
 
@@ -3303,7 +3503,7 @@ export function AdminQuestionWorkspace({
 
   async function handleSaveBranding() {
     const appointmentsPerSlot = businessAppointmentsPerSlot.trim() ? Number(businessAppointmentsPerSlot) : null;
-    const advanceBookingWeeks = businessAdvanceBookingWeeks.trim() ? Number(businessAdvanceBookingWeeks) : null;
+    const advanceBookingWeeks = 4;
     const slotDurationMinutes = businessSlotDurationMinutes.trim() ? Number(businessSlotDurationMinutes) : null;
 
     if (appointmentsPerSlot !== null && (!Number.isFinite(appointmentsPerSlot) || appointmentsPerSlot < 1)) {
@@ -3313,11 +3513,6 @@ export function AdminQuestionWorkspace({
 
     if (slotDurationMinutes !== null && ![15, 30, 45, 60, 120, 180, 240].includes(slotDurationMinutes)) {
       setBrandingFeedback("Slot duration must be 15 minutes, 30 minutes, 45 minutes, 1 hour, 2 hours, 3 hours, or 4 hours.");
-      return;
-    }
-
-    if (advanceBookingWeeks !== null && ![1, 2, 3, 4].includes(advanceBookingWeeks)) {
-      setBrandingFeedback("Advance booking must be between 1 and 4 weeks.");
       return;
     }
 
@@ -4006,7 +4201,7 @@ export function AdminQuestionWorkspace({
   const pollToggleUpcomingCount = filteredMergedPolls.filter((poll) => poll.status === "scheduled").length;
   const brandingPreview = normalizeBrandingInput({
     address: brandingAddress,
-    advanceBookingWeeks: Number.parseInt(businessAdvanceBookingWeeks, 10),
+    advanceBookingWeeks: 4,
     appointmentNotesPrompt: businessAppointmentNotesPrompt,
     appointmentShareCode: businessAppointmentShareCode ?? workspaceBranding?.appointmentShareCode ?? null,
     appointmentsPerSlot: Number.parseInt(businessAppointmentsPerSlot, 10),
@@ -4030,6 +4225,308 @@ export function AdminQuestionWorkspace({
   const businessAppointmentUrl = activeAppointmentShareCode
     ? getApportionAccessUrl(activeAppointmentShareCode)
     : "";
+  const businessDetailsPanel = (
+    <div className="form-stack business-details-form">
+      {businessAppointmentUrl ? (
+        <div className="apportion-link-actions" aria-label="Business booking link actions">
+          <button
+            aria-label={copiedLinkKey === "business-panel" ? "Booking link copied" : "Copy booking link"}
+            className="button-secondary small-button icon-button"
+            title="Copy booking link"
+            type="button"
+            onClick={() => void handleCopyLink("business-panel", businessAppointmentUrl)}
+          >
+            {copiedLinkKey === "business-panel" ? <ApportionCopiedIcon /> : <ApportionCopyIcon />}
+          </button>
+          <a
+            aria-label="Open booking page"
+            className="button-secondary small-button icon-button"
+            href={businessAppointmentUrl}
+            rel="noreferrer"
+            target="_blank"
+            title="Open booking page"
+          >
+            <ApportionOpenIcon />
+          </a>
+          {businessAppointmentQrCode ? (
+            <a
+              aria-label="Download QR code"
+              className="button-secondary small-button icon-button"
+              download="trapit-apportion-qr.png"
+              href={businessAppointmentQrCode}
+              title="Download QR code"
+            >
+              <ApportionQrDownloadIcon />
+            </a>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="field business-field-card">
+        <label htmlFor="branding-institute-name">Business name</label>
+        <input
+          id="branding-institute-name"
+          placeholder="Enter business name"
+          value={brandingInstituteName}
+          onChange={(event) => {
+            markBrandingDraftDirty();
+            setBrandingInstituteName(event.target.value);
+          }}
+        />
+        <label htmlFor="branding-address">Address</label>
+        <textarea
+          id="branding-address"
+          placeholder="Enter business address"
+          rows={3}
+          value={brandingAddress}
+          onChange={(event) => {
+            markBrandingDraftDirty();
+            setBrandingAddress(event.target.value);
+          }}
+        />
+      </div>
+      <div className="field business-field-card">
+        <span className="field-label">Working days</span>
+        <div className="business-day-grid" role="group" aria-label="Working days">
+          {BUSINESS_WEEK_DAYS.map((day) => {
+            const isActive = selectedBusinessDayKeys.includes(day.key);
+
+            return (
+              <button
+                aria-pressed={isActive}
+                className={`business-day-toggle${isActive ? " is-active" : ""}`}
+                key={day.key}
+                title={day.name}
+                type="button"
+                onClick={() => handleToggleBusinessDay(day.key)}
+              >
+                {day.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="field business-field-card">
+        <span className="field-label">Working hours</span>
+        <div className="business-time-window-grid">
+          <label htmlFor="business-window-one-start">Start 1</label>
+          <select
+            className="select-field"
+            id="business-window-one-start"
+            value={formatBusinessTime(businessTimeRange.startMinutes)}
+            onChange={(event) => handleBusinessTimeDropdownChange("first", "start", event.target.value)}
+          >
+            {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
+              <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
+            ))}
+          </select>
+          <label htmlFor="business-window-one-end">Close 1</label>
+          <select
+            className="select-field"
+            id="business-window-one-end"
+            value={formatBusinessTime(businessTimeRange.endMinutes)}
+            onChange={(event) => handleBusinessTimeDropdownChange("first", "end", event.target.value)}
+          >
+            {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
+              <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
+            ))}
+          </select>
+        </div>
+        <div className="business-second-window-actions">
+          <button
+            aria-expanded={isBusinessSecondWindowOpen}
+            className="button-secondary small-button"
+            type="button"
+            onClick={() => setIsBusinessSecondWindowOpen((isOpen) => !isOpen)}
+          >
+            {isBusinessSecondWindowOpen ? "Hide second slot" : "Add second slot"}
+          </button>
+          <button className="button-secondary small-button" type="button" onClick={() => {
+            markBrandingDraftDirty();
+            setBusinessWorkingHoursSecondWindow("");
+            setIsBusinessSecondWindowOpen(false);
+          }}>
+            Clear second slot
+          </button>
+        </div>
+        {isBusinessSecondWindowOpen ? (
+          <div className="business-time-window-grid business-time-window-grid-secondary">
+            <label htmlFor="business-window-two-start">Start 2</label>
+            <select
+              className="select-field"
+              id="business-window-two-start"
+              value={businessSecondTimeRange ? formatBusinessTime(businessSecondTimeRange.startMinutes) : ""}
+              onChange={(event) => handleBusinessTimeDropdownChange("second", "start", event.target.value)}
+            >
+              <option value="">Select start</option>
+              {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
+                <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
+              ))}
+            </select>
+            <label htmlFor="business-window-two-end">Close 2</label>
+            <select
+              className="select-field"
+              id="business-window-two-end"
+              value={businessSecondTimeRange ? formatBusinessTime(businessSecondTimeRange.endMinutes) : ""}
+              onChange={(event) => handleBusinessTimeDropdownChange("second", "end", event.target.value)}
+            >
+              <option value="">Select close</option>
+              {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
+                <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+      </div>
+      <div className="field business-field-card">
+        <label htmlFor="business-appointments-per-slot">Appointments per slot</label>
+        <input
+          id="business-appointments-per-slot"
+          min="1"
+          placeholder="1"
+          type="number"
+          value={businessAppointmentsPerSlot}
+          onChange={(event) => {
+            markBrandingDraftDirty();
+            setBusinessAppointmentsPerSlot(event.target.value);
+          }}
+        />
+        <label htmlFor="business-slot-duration">Slot duration</label>
+        <select
+          className="select-field"
+          id="business-slot-duration"
+          value={businessSlotDurationMinutes}
+          onChange={(event) => {
+            markBrandingDraftDirty();
+            setBusinessSlotDurationMinutes(event.target.value);
+          }}
+        >
+          <option value="">Select duration</option>
+          <option value="15">15 mins</option>
+          <option value="30">30 mins</option>
+          <option value="45">45 mins</option>
+          <option value="60">1 hr</option>
+          <option value="120">2 hrs</option>
+          <option value="180">3 hrs</option>
+          <option value="240">4 hrs</option>
+        </select>
+        <label htmlFor="business-notes-prompt">Notes explanation text</label>
+        <input
+          id="business-notes-prompt"
+          placeholder={DEFAULT_APPOINTMENT_NOTES_PROMPT}
+          value={businessAppointmentNotesPrompt}
+          onChange={(event) => {
+            markBrandingDraftDirty();
+            setBusinessAppointmentNotesPrompt(event.target.value);
+          }}
+        />
+        <label className="checkbox-row" htmlFor="business-show-remaining-bookings">
+          <input
+            checked={businessShowRemainingBookings}
+            id="business-show-remaining-bookings"
+            type="checkbox"
+            onChange={(event) => {
+              markBrandingDraftDirty();
+              setBusinessShowRemainingBookings(event.target.checked);
+            }}
+          />
+          <span>Show users remaining bookings per slot</span>
+        </label>
+        <label className="checkbox-row" htmlFor="business-just-add-to-list">
+          <input
+            checked={businessJustAddToList}
+            id="business-just-add-to-list"
+            type="checkbox"
+            onChange={(event) => {
+              markBrandingDraftDirty();
+              setBusinessJustAddToList(event.target.checked);
+            }}
+          />
+          <span>Just add to the queue</span>
+        </label>
+        <p className="muted-text">If opening and closing times are the same, the booking page treats the business as open for 24 hours starting from that time.</p>
+      </div>
+      <div className="field business-field-card">
+        <span className="field-label">Logo or business image</span>
+        <div className="business-logo-row">
+          <div
+            className={`business-logo-dropzone${isBrandingDragActive ? " is-dragging" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => brandingFileInputRef.current?.click()}
+            onDragEnter={(event) => {
+              event.preventDefault();
+              setIsBrandingDragActive(true);
+            }}
+            onDragLeave={() => setIsBrandingDragActive(false)}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={handleBrandingDrop}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                brandingFileInputRef.current?.click();
+              }
+            }}
+          >
+            <span aria-hidden="true" className="business-upload-icon">Up</span>
+            <strong>Drag & Drop your logo</strong>
+            <span>or Browse</span>
+          </div>
+          <input
+            accept="image/*"
+            className="sr-only"
+            id="branding-image"
+            ref={brandingFileInputRef}
+            type="file"
+            onChange={(event) => void handleBrandingFileSelection(event.target.files?.[0] ?? null)}
+          />
+          <div className="business-logo-preview is-circular" aria-label="Logo preview">
+            {brandingPreview?.imageDataUrl ? (
+              <img alt="Branding preview" src={brandingPreview.imageDataUrl} />
+            ) : (
+              <span>Logo</span>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="field business-field-card">
+        <span className="field-label">Profile image</span>
+        <div className="business-logo-row">
+          <button className="button-secondary" type="button" onClick={() => brandingProfileFileInputRef.current?.click()}>
+            Upload profile image
+          </button>
+          <input
+            accept="image/*"
+            className="sr-only"
+            id="branding-profile-image"
+            ref={brandingProfileFileInputRef}
+            type="file"
+            onChange={(event) => void handleBrandingProfileFileSelection(event.target.files?.[0] ?? null)}
+          />
+          <div className="business-logo-preview is-circular" aria-label="Profile preview">
+            {brandingPreview?.profileImageDataUrl ? (
+              <img alt="Profile preview" src={brandingPreview.profileImageDataUrl} />
+            ) : (
+              <span>Profile</span>
+            )}
+          </div>
+        </div>
+      </div>
+      {brandingFeedback ? <p className="muted-text">{brandingFeedback}</p> : null}
+      <div className="inline-actions">
+        <button className="button" disabled={isMutating} type="button" onClick={() => void handleSaveBranding()}>
+          Save business
+        </button>
+        <button
+          className="button-secondary"
+          disabled={isMutating || (!brandingInstituteName.trim() && !brandingAddress.trim() && !brandingImageDataUrl && !brandingProfileImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && !businessAppointmentsPerSlot.trim() && !businessSlotDurationMinutes.trim() && businessAppointmentNotesPrompt.trim() === DEFAULT_APPOINTMENT_NOTES_PROMPT && !businessShowRemainingBookings && !businessJustAddToList)}
+          type="button"
+          onClick={() => void handleClearBranding()}
+        >
+          Clear form
+        </button>
+      </div>
+    </div>
+  );
   const combinedApportionAppointments = [...ownerApportionAppointments, ...requesterApportionAppointments]
     .reduce<Array<ApportionAppointment & { queuePosition: number | null; scope: "owner" | "requester"; serialLabel: string }>>((entries, appointment) => {
       if (entries.some((entry) => entry.id === appointment.id)) {
@@ -4380,7 +4877,11 @@ export function AdminQuestionWorkspace({
                   <button
                     className="workspace-overflow-action"
                     type="button"
-                    onClick={() => setToolbarMenuView("branding")}
+                    onClick={() => {
+                      setOpenSection("apportion");
+                      setIsApportionBusinessPanelOpen(true);
+                      setIsOverflowMenuOpen(false);
+                    }}
                   >
                     Business
                   </button>
@@ -4432,321 +4933,21 @@ export function AdminQuestionWorkspace({
                     </button>
                     <p className="eyebrow">Business</p>
                   </div>
-                  <h2 className="section-title">Business details</h2>
-                  {businessAppointmentUrl ? (
-                    <div className="apportion-link-actions" aria-label="Business booking link actions">
-                      <button
-                        aria-label={copiedLinkKey === "business-panel" ? "Booking link copied" : "Copy booking link"}
-                        className="button-secondary small-button icon-button"
-                        title="Copy booking link"
-                        type="button"
-                        onClick={() => void handleCopyLink("business-panel", businessAppointmentUrl)}
-                      >
-                        {copiedLinkKey === "business-panel" ? <ApportionCopiedIcon /> : <ApportionCopyIcon />}
-                      </button>
-                      <a
-                        aria-label="Open booking page"
-                        className="button-secondary small-button icon-button"
-                        href={businessAppointmentUrl}
-                        rel="noreferrer"
-                        target="_blank"
-                        title="Open booking page"
-                      >
-                        <ApportionOpenIcon />
-                      </a>
-                      {businessAppointmentQrCode ? (
-                        <a
-                          aria-label="Download QR code"
-                          className="button-secondary small-button icon-button"
-                          download="trapit-apportion-qr.png"
-                          href={businessAppointmentQrCode}
-                          title="Download QR code"
-                        >
-                          <ApportionQrDownloadIcon />
-                        </a>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  <div className="form-stack business-details-form">
-                    <div className="field business-field-card">
-                      <label htmlFor="branding-institute-name">Business name</label>
-                      <input
-                        id="branding-institute-name"
-                        placeholder="Enter business name"
-                        value={brandingInstituteName}
-                        onChange={(event) => {
-                          markBrandingDraftDirty();
-                          setBrandingInstituteName(event.target.value);
-                        }}
-                      />
-                      <label htmlFor="branding-address">Address</label>
-                      <textarea
-                        id="branding-address"
-                        placeholder="Enter business address"
-                        rows={3}
-                        value={brandingAddress}
-                        onChange={(event) => {
-                          markBrandingDraftDirty();
-                          setBrandingAddress(event.target.value);
-                        }}
-                      />
-                    </div>
-                    <div className="field business-field-card">
-                      <span className="field-label">Working days</span>
-                      <div className="business-day-grid" role="group" aria-label="Working days">
-                        {BUSINESS_WEEK_DAYS.map((day) => {
-                          const isActive = selectedBusinessDayKeys.includes(day.key);
-
-                          return (
-                            <button
-                              aria-pressed={isActive}
-                              className={`business-day-toggle${isActive ? " is-active" : ""}`}
-                              key={day.key}
-                              title={day.name}
-                              type="button"
-                              onClick={() => handleToggleBusinessDay(day.key)}
-                            >
-                              {day.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    <div className="field business-field-card">
-                      <span className="field-label">Working hours</span>
-                      <div className="business-time-window-grid">
-                        <label htmlFor="business-window-one-start">Start 1</label>
-                        <select
-                          className="select-field"
-                          id="business-window-one-start"
-                          value={formatBusinessTime(businessTimeRange.startMinutes)}
-                          onChange={(event) => handleBusinessTimeDropdownChange("first", "start", event.target.value)}
-                        >
-                          {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
-                            <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
-                          ))}
-                        </select>
-                        <label htmlFor="business-window-one-end">Close 1</label>
-                        <select
-                          className="select-field"
-                          id="business-window-one-end"
-                          value={formatBusinessTime(businessTimeRange.endMinutes)}
-                          onChange={(event) => handleBusinessTimeDropdownChange("first", "end", event.target.value)}
-                        >
-                          {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
-                            <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
-                          ))}
-                        </select>
-                      </div>
-                      <div className="business-second-window-actions">
-                        <button
-                          aria-expanded={isBusinessSecondWindowOpen}
-                          className="button-secondary small-button"
-                          type="button"
-                          onClick={() => setIsBusinessSecondWindowOpen((isOpen) => !isOpen)}
-                        >
-                          {isBusinessSecondWindowOpen ? "Hide second slot" : "Add second slot"}
-                        </button>
-                        <button className="button-secondary small-button" type="button" onClick={() => {
-                          markBrandingDraftDirty();
-                          setBusinessWorkingHoursSecondWindow("");
-                          setIsBusinessSecondWindowOpen(false);
-                        }}>
-                          Clear second slot
-                        </button>
-                      </div>
-                      {isBusinessSecondWindowOpen ? (
-                        <div className="business-time-window-grid business-time-window-grid-secondary">
-                          <label htmlFor="business-window-two-start">Start 2</label>
-                          <select
-                            className="select-field"
-                            id="business-window-two-start"
-                            value={businessSecondTimeRange ? formatBusinessTime(businessSecondTimeRange.startMinutes) : ""}
-                            onChange={(event) => handleBusinessTimeDropdownChange("second", "start", event.target.value)}
-                          >
-                            <option value="">Select start</option>
-                            {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
-                              <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
-                            ))}
-                          </select>
-                          <label htmlFor="business-window-two-end">Close 2</label>
-                          <select
-                            className="select-field"
-                            id="business-window-two-end"
-                            value={businessSecondTimeRange ? formatBusinessTime(businessSecondTimeRange.endMinutes) : ""}
-                            onChange={(event) => handleBusinessTimeDropdownChange("second", "end", event.target.value)}
-                          >
-                            <option value="">Select close</option>
-                            {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
-                              <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
-                            ))}
-                          </select>
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="field business-field-card">
-                      <label htmlFor="business-appointments-per-slot">Appointments per slot</label>
-                      <input
-                        id="business-appointments-per-slot"
-                        min="1"
-                        placeholder="1"
-                        type="number"
-                        value={businessAppointmentsPerSlot}
-                        onChange={(event) => {
-                          markBrandingDraftDirty();
-                          setBusinessAppointmentsPerSlot(event.target.value);
-                        }}
-                      />
-                      <label htmlFor="business-slot-duration">Slot duration</label>
-                      <select
-                        className="select-field"
-                        id="business-slot-duration"
-                        value={businessSlotDurationMinutes}
-                        onChange={(event) => {
-                          markBrandingDraftDirty();
-                          setBusinessSlotDurationMinutes(event.target.value);
-                        }}
-                      >
-                        <option value="">Select duration</option>
-                        <option value="15">15 mins</option>
-                        <option value="30">30 mins</option>
-                        <option value="45">45 mins</option>
-                        <option value="60">1 hr</option>
-                        <option value="120">2 hrs</option>
-                        <option value="180">3 hrs</option>
-                        <option value="240">4 hrs</option>
-                      </select>
-                      <label htmlFor="business-advance-booking">Allowed advance booking</label>
-                      <select
-                        className="select-field"
-                        id="business-advance-booking"
-                        value={businessAdvanceBookingWeeks}
-                        onChange={(event) => {
-                          markBrandingDraftDirty();
-                          setBusinessAdvanceBookingWeeks(event.target.value);
-                        }}
-                      >
-                        <option value="1">1 week</option>
-                        <option value="2">2 weeks</option>
-                        <option value="3">3 weeks</option>
-                        <option value="4">4 weeks</option>
-                      </select>
-                      <label htmlFor="business-notes-prompt">Notes explanation text</label>
-                      <input
-                        id="business-notes-prompt"
-                        placeholder={DEFAULT_APPOINTMENT_NOTES_PROMPT}
-                        value={businessAppointmentNotesPrompt}
-                        onChange={(event) => {
-                          markBrandingDraftDirty();
-                          setBusinessAppointmentNotesPrompt(event.target.value);
-                        }}
-                      />
-                      <label className="checkbox-row" htmlFor="business-show-remaining-bookings">
-                        <input
-                          checked={businessShowRemainingBookings}
-                          id="business-show-remaining-bookings"
-                          type="checkbox"
-                          onChange={(event) => {
-                            markBrandingDraftDirty();
-                            setBusinessShowRemainingBookings(event.target.checked);
-                          }}
-                        />
-                        <span>Show users remaining bookings per slot</span>
-                      </label>
-                      <label className="checkbox-row" htmlFor="business-just-add-to-list">
-                        <input
-                          checked={businessJustAddToList}
-                          id="business-just-add-to-list"
-                          type="checkbox"
-                          onChange={(event) => {
-                            markBrandingDraftDirty();
-                            setBusinessJustAddToList(event.target.checked);
-                          }}
-                        />
-                        <span>Just add to the queue</span>
-                      </label>
-                      <p className="muted-text">If opening and closing times are the same, the booking page treats the business as open for 24 hours starting from that time.</p>
-                    </div>
-                    <div className="field business-field-card">
-                      <span className="field-label">Logo or business image</span>
-                      <div className="business-logo-row">
-                        <div
-                          className={`business-logo-dropzone${isBrandingDragActive ? " is-dragging" : ""}`}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => brandingFileInputRef.current?.click()}
-                          onDragEnter={(event) => {
-                            event.preventDefault();
-                            setIsBrandingDragActive(true);
-                          }}
-                          onDragLeave={() => setIsBrandingDragActive(false)}
-                          onDragOver={(event) => event.preventDefault()}
-                          onDrop={handleBrandingDrop}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              brandingFileInputRef.current?.click();
-                            }
-                          }}
-                        >
-                          <span aria-hidden="true" className="business-upload-icon">Up</span>
-                          <strong>Drag & Drop your logo</strong>
-                          <span>or Browse</span>
-                        </div>
-                        <input
-                          accept="image/*"
-                          className="sr-only"
-                          id="branding-image"
-                          ref={brandingFileInputRef}
-                          type="file"
-                          onChange={(event) => void handleBrandingFileSelection(event.target.files?.[0] ?? null)}
-                        />
-                        <div className="business-logo-preview" aria-label="Logo preview">
-                          {brandingPreview?.imageDataUrl ? (
-                            <img alt="Branding preview" src={brandingPreview.imageDataUrl} />
-                          ) : (
-                            <span>Logo</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="field business-field-card">
-                      <span className="field-label">Profile image</span>
-                      <div className="business-logo-row">
-                        <button className="button-secondary" type="button" onClick={() => brandingProfileFileInputRef.current?.click()}>
-                          Upload profile image
-                        </button>
-                        <input
-                          accept="image/*"
-                          className="sr-only"
-                          id="branding-profile-image"
-                          ref={brandingProfileFileInputRef}
-                          type="file"
-                          onChange={(event) => void handleBrandingProfileFileSelection(event.target.files?.[0] ?? null)}
-                        />
-                        <div className="business-logo-preview" aria-label="Profile preview">
-                          {brandingPreview?.profileImageDataUrl ? (
-                            <img alt="Profile preview" src={brandingPreview.profileImageDataUrl} />
-                          ) : (
-                            <span>Profile</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    {brandingFeedback ? <p className="muted-text">{brandingFeedback}</p> : null}
-                    <div className="inline-actions">
-                      <button className="button" disabled={isMutating} type="button" onClick={() => void handleSaveBranding()}>
-                        Save business
-                      </button>
-                      <button
-                        className="button-secondary"
-                        disabled={isMutating || (!brandingInstituteName.trim() && !brandingAddress.trim() && !brandingImageDataUrl && !brandingProfileImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && !businessAppointmentsPerSlot.trim() && !businessSlotDurationMinutes.trim() && businessAppointmentNotesPrompt.trim() === DEFAULT_APPOINTMENT_NOTES_PROMPT && !businessShowRemainingBookings && !businessJustAddToList)}
-                        type="button"
-                        onClick={() => void handleClearBranding()}
-                      >
-                        Clear form
-                      </button>
-                    </div>
+                  <h2 className="section-title">Business details moved</h2>
+                  <p className="muted-text">Open the Apportion tab to manage your business panel.</p>
+                  <div className="inline-actions">
+                    <button
+                      className="button"
+                      type="button"
+                      onClick={() => {
+                        setOpenSection("apportion");
+                        setIsApportionBusinessPanelOpen(true);
+                        setIsOverflowMenuOpen(false);
+                        setToolbarMenuView("menu");
+                      }}
+                    >
+                      Open Apportion
+                    </button>
                   </div>
                 </div>
               ) : null}
@@ -4765,28 +4966,234 @@ export function AdminQuestionWorkspace({
             </section>
           ) : openSection === "apportion" ? (
             <section className="panel workspace-card">
-              <div className="section-head compact-head">
-                <div>
-                  <p className="eyebrow">Apportion</p>
-                  <h2 className="section-title">Appointments</h2>
-                  <p className="muted-text">Track appointments you requested and appointments booked with your business.</p>
-                </div>
-              </div>
+              <CollapsibleWorkspaceSection
+                isOpen={isApportionBusinessPanelOpen}
+                onToggle={() => setIsApportionBusinessPanelOpen((current) => !current)}
+                sectionId="apportion-business-panel"
+                title="Business panel"
+              >
+                {businessDetailsPanel}
+              </CollapsibleWorkspaceSection>
 
               <article className="question-card nested-card">
                 <div className="question-head">
                   <strong>Appointment log</strong>
-                  <span className="status-chip">{combinedApportionAppointments.length}</span>
+                  <div className="inline-actions apportion-log-head-actions">
+                    <span className="status-chip">{combinedApportionAppointments.length}</span>
+                    <button className="button-secondary small-button" type="button" onClick={() => addApportionDraftCard()}>
+                      Add Appointments
+                    </button>
+                  </div>
                 </div>
-                {combinedApportionAppointments.length ? (
+                {apportionDraftCards.length || combinedApportionAppointments.length ? (
                   <div className="notification-panel-list">
+                    {apportionDraftCards.map((draft) => {
+                      const selectedBusiness = availableApportionBusinesses.find((business) => business.appointmentShareCode === draft.appointmentShareCode)
+                        ?? availableApportionBusinesses.find((business) => business.name === draft.businessTitleQuery)
+                        ?? availableApportionBusinesses.find((business) => formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true }) === draft.ownerPhoneQuery)
+                        ?? null;
+                      const draftOwnerHours = selectedBusiness
+                        ? {
+                            appointmentsPerSlot: selectedBusiness.appointmentsPerSlot,
+                            justAddToList: selectedBusiness.justAddToList,
+                            slotDurationMinutes: selectedBusiness.slotDurationMinutes,
+                            workingHours: selectedBusiness.workingHours,
+                            workingHoursSecondWindow: selectedBusiness.workingHoursSecondWindow,
+                          } satisfies ApportionOwnerOperatingHours
+                        : null;
+                      const draftSlotOptions = draftOwnerHours && !draftOwnerHours.justAddToList && draft.slotDateKey
+                        ? buildRescheduleSlotOptions({
+                            dateInput: draft.slotDateKey,
+                            ownerHours: draftOwnerHours,
+                          })
+                        : [];
+
+                      return (
+                        <div className="notification-panel-item apportion-log-item is-requester-scope is-draft" key={draft.id}>
+                          <div className="apportion-appointment-summary">
+                            <div className="apportion-log-topline apportion-log-topline-card">
+                              <span className="status-chip apportion-serial-chip">--</span>
+                              <div className="apportion-log-card-copy">
+                                <strong>{draft.slotDateKey ? formatShortDate(draft.slotDateKey) : "Draft appointment"}</strong>
+                                <span className="muted-text">Draft booking</span>
+                              </div>
+                              <span className="status-chip apportion-status-chip is-pending">Draft</span>
+                            </div>
+                            <div className="apportion-card-grid">
+                              <div className="field">
+                                <label htmlFor={`apportion-draft-business-${draft.id}`}>Business title</label>
+                                <input
+                                  id={`apportion-draft-business-${draft.id}`}
+                                  list={`apportion-draft-business-options-${draft.id}`}
+                                  placeholder="Search business title"
+                                  value={draft.businessTitleQuery}
+                                  onChange={(event) => {
+                                    const nextValue = event.target.value;
+                                    const matchedBusiness = availableApportionBusinesses.find((business) => business.name === nextValue) ?? null;
+
+                                    updateApportionDraftCard(draft.id, (currentDraft) => ({
+                                      ...currentDraft,
+                                      appointmentShareCode: matchedBusiness?.appointmentShareCode ?? currentDraft.appointmentShareCode,
+                                      businessTitleQuery: nextValue,
+                                      ownerPhoneQuery: matchedBusiness
+                                        ? formatPhoneNumberForDisplay(matchedBusiness.ownerIdentifier, { showFullPhoneNumber: true })
+                                        : currentDraft.ownerPhoneQuery,
+                                      slotTimeInput: matchedBusiness?.justAddToList ? "" : currentDraft.slotTimeInput,
+                                    }));
+                                  }}
+                                />
+                                <datalist id={`apportion-draft-business-options-${draft.id}`}>
+                                  {availableApportionBusinesses.map((business) => (
+                                    <option key={`${draft.id}-${business.appointmentShareCode}-name`} value={business.name}>{formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true })}</option>
+                                  ))}
+                                </datalist>
+                              </div>
+                              <div className="field">
+                                <label htmlFor={`apportion-draft-phone-${draft.id}`}>Business owner phone number</label>
+                                <input
+                                  id={`apportion-draft-phone-${draft.id}`}
+                                  list={`apportion-draft-phone-options-${draft.id}`}
+                                  placeholder="Search owner phone"
+                                  value={draft.ownerPhoneQuery}
+                                  onChange={(event) => {
+                                    const nextValue = event.target.value;
+                                    const matchedBusiness = availableApportionBusinesses.find((business) => formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true }) === nextValue) ?? null;
+
+                                    updateApportionDraftCard(draft.id, (currentDraft) => ({
+                                      ...currentDraft,
+                                      appointmentShareCode: matchedBusiness?.appointmentShareCode ?? currentDraft.appointmentShareCode,
+                                      businessTitleQuery: matchedBusiness?.name ?? currentDraft.businessTitleQuery,
+                                      ownerPhoneQuery: nextValue,
+                                      slotTimeInput: matchedBusiness?.justAddToList ? "" : currentDraft.slotTimeInput,
+                                    }));
+                                  }}
+                                />
+                                <datalist id={`apportion-draft-phone-options-${draft.id}`}>
+                                  {availableApportionBusinesses.map((business) => (
+                                    <option key={`${draft.id}-${business.appointmentShareCode}-phone`} value={formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true })}>{business.name}</option>
+                                  ))}
+                                </datalist>
+                              </div>
+                              <div className="field">
+                                <label htmlFor={`apportion-draft-date-${draft.id}`}>Appointment date</label>
+                                <input
+                                  className="date-time-input"
+                                  id={`apportion-draft-date-${draft.id}`}
+                                  type="date"
+                                  value={draft.slotDateKey}
+                                  onChange={(event) => updateApportionDraftCard(draft.id, (currentDraft) => ({
+                                    ...currentDraft,
+                                    slotDateKey: event.target.value,
+                                    slotTimeInput: "",
+                                  }))}
+                                />
+                              </div>
+                              {!selectedBusiness?.justAddToList ? (
+                                <div className="field">
+                                  <label htmlFor={`apportion-draft-time-${draft.id}`}>Appointment time</label>
+                                  <select
+                                    className="select-field"
+                                    id={`apportion-draft-time-${draft.id}`}
+                                    value={draft.slotTimeInput}
+                                    onChange={(event) => updateApportionDraftCard(draft.id, (currentDraft) => ({
+                                      ...currentDraft,
+                                      slotTimeInput: event.target.value,
+                                    }))}
+                                  >
+                                    <option value="">Select a time</option>
+                                    {draftSlotOptions.map((slotOption) => (
+                                      <option key={slotOption.value} value={slotOption.value}>{slotOption.label}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              ) : null}
+                            </div>
+                            <div className="apportion-card-grid">
+                              <div className="field">
+                                <label htmlFor={`apportion-draft-recurrence-${draft.id}`}>Recurring booking</label>
+                                <select
+                                  className="select-field"
+                                  id={`apportion-draft-recurrence-${draft.id}`}
+                                  value={draft.recurrenceMode}
+                                  onChange={(event) => updateApportionDraftCard(draft.id, (currentDraft) => ({
+                                    ...currentDraft,
+                                    recurrenceMode: event.target.value === "weekly" ? "weekly" : "none",
+                                    recurringEndDateKey: currentDraft.recurringEndDateKey || currentDraft.slotDateKey,
+                                    recurringWeekdayKeys: currentDraft.recurringWeekdayKeys.length
+                                      ? currentDraft.recurringWeekdayKeys
+                                      : [BUSINESS_WEEK_DAYS[createDateFromKey(currentDraft.slotDateKey).getDay()].key],
+                                  }))}
+                                >
+                                  <option value="none">Single appointment</option>
+                                  <option value="weekly">Weekly recurring</option>
+                                </select>
+                              </div>
+                              {draft.recurrenceMode === "weekly" ? (
+                                <>
+                                  <div className="field">
+                                    <label htmlFor={`apportion-draft-recurring-weekdays-${draft.id}`}>Weekday selections</label>
+                                    <select
+                                      multiple
+                                      className="select-field"
+                                      id={`apportion-draft-recurring-weekdays-${draft.id}`}
+                                      value={draft.recurringWeekdayKeys}
+                                      onChange={(event) => updateApportionDraftCard(draft.id, (currentDraft) => ({
+                                        ...currentDraft,
+                                        recurringWeekdayKeys: Array.from(event.target.selectedOptions, (option) => option.value),
+                                      }))}
+                                    >
+                                      {BUSINESS_WEEK_DAYS.map((day) => (
+                                        <option key={`${draft.id}-${day.key}`} value={day.key}>{day.name}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div className="field">
+                                    <label htmlFor={`apportion-draft-recurring-end-${draft.id}`}>Recurring end date</label>
+                                    <input
+                                      className="date-time-input"
+                                      id={`apportion-draft-recurring-end-${draft.id}`}
+                                      min={draft.slotDateKey}
+                                      type="date"
+                                      value={draft.recurringEndDateKey}
+                                      onChange={(event) => updateApportionDraftCard(draft.id, (currentDraft) => ({
+                                        ...currentDraft,
+                                        recurringEndDateKey: event.target.value,
+                                      }))}
+                                    />
+                                  </div>
+                                </>
+                              ) : null}
+                            </div>
+                            <div className="field">
+                              <label htmlFor={`apportion-draft-notes-${draft.id}`}>Notes</label>
+                              <textarea
+                                id={`apportion-draft-notes-${draft.id}`}
+                                rows={3}
+                                value={draft.notes}
+                                onChange={(event) => updateApportionDraftCard(draft.id, (currentDraft) => ({
+                                  ...currentDraft,
+                                  notes: event.target.value,
+                                }))}
+                              />
+                            </div>
+                            <div className="inline-actions apportion-log-actions">
+                              <button className="button small-button" type="button" onClick={() => void submitApportionDraftCard(draft)}>
+                                Book
+                              </button>
+                              <button className="button-secondary small-button" type="button" onClick={() => removeApportionDraftCard(draft.id)}>
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                     {combinedApportionAppointments.map((appointment) => {
                       const isOwnerScope = appointment.scope === "owner";
                       const isFutureAppointment = new Date(appointment.startsAt).getTime() > Date.now();
                       const isRescheduling = rescheduleAppointmentId === appointment.id;
                       const normalizedOwnerIdentifier = normalizeApportionIdentifier(appointment.ownerIdentifier);
                       const ownerHours = ownerOperatingHoursByIdentifier[normalizedOwnerIdentifier] ?? null;
-                      const ownerHoursText = formatOwnerOperatingHours(ownerHours);
                       const rescheduleSlotOptions = isRescheduling && ownerHours && rescheduleDateInput
                         ? buildRescheduleSlotOptions({
                             dateInput: rescheduleDateInput,
@@ -4802,45 +5209,41 @@ export function AdminQuestionWorkspace({
                           ? "Move in"
                           : "Pending"
                         : getApportionStatusLabel(appointment.currentStatus);
+                      const scheduleDetail = appointment.justAddToList && ownerHours && appointment.queuePosition
+                        ? `Estimated start: ${estimateApportionQueueStart({
+                            ownerHours,
+                            queuePosition: appointment.queuePosition,
+                            serviceDateKey: appointment.serviceDateKey,
+                          })}`
+                        : `Selected slot: ${formatShortDateTime(appointment.startsAt)}`;
 
                       return (
                         <div className={`notification-panel-item apportion-log-item ${isOwnerScope ? "is-owner-scope" : "is-requester-scope"}`} key={appointment.id}>
                           <div className="apportion-appointment-summary">
-                            <div className="apportion-log-topline">
-                              <div>
-                                <p className="apportion-appointment-line">
-                                  <span className="status-chip apportion-serial-chip" aria-label={appointment.queuePosition ? `Serial number ${appointment.queuePosition}` : "No active serial number"}>
-                                    {appointment.queuePosition ? `#${appointment.serialLabel}` : "--"}
-                                  </span>
-                                  {isOwnerScope ? (
-                                    <strong>{appointment.requesterName}</strong>
-                                  ) : (
-                                    <>
-                                      <strong>{appointment.ownerName ?? "Business"}</strong>
-                                      <span>{`Owner: ${appointment.ownerName ?? "Business owner"}`}</span>
-                                    </>
-                                  )}
-                                  <span>
-                                    {isOwnerScope
-                                      ? formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier, { showFullPhoneNumber: true })
-                                      : formatPhoneNumberForDisplay(appointment.ownerIdentifier, { showFullPhoneNumber: true })}
-                                  </span>
-                                </p>
-                                <p className="apportion-appointment-line">
-                                  <span>{`Scheduled date: ${formatShortDate(appointment.startsAt)}`}</span>
-                                  <span>{`Operating hours: ${ownerHoursText}`}</span>
-                                </p>
-                                <p className="apportion-appointment-line">
-                                  <span className={`status-chip apportion-status-chip is-${appointment.currentStatus}`}>
-                                    {isOwnerScope ? ownerStatusLabel : requesterQueueStatus.label}
-                                  </span>
-                                </p>
-                                {!isOwnerScope && requesterQueueStatus.helperText ? (
-                                  <p className="muted-text apportion-appointment-notes">{requesterQueueStatus.helperText}</p>
-                                ) : null}
-                                {appointment.notes ? <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes}</p> : null}
+                            <div className="apportion-log-topline apportion-log-topline-card">
+                              <span className="status-chip apportion-serial-chip" aria-label={appointment.queuePosition ? `Serial number ${appointment.queuePosition}` : "No active serial number"}>
+                                {appointment.queuePosition ? `#${appointment.serialLabel}` : "--"}
+                              </span>
+                              <div className="apportion-log-card-copy">
+                                <strong>{formatShortDateTime(appointment.startsAt)}</strong>
+                                <span className="muted-text">
+                                  {isOwnerScope ? appointment.requesterName : appointment.ownerName ?? "Business"}
+                                </span>
+                                <span className="muted-text">
+                                  {isOwnerScope
+                                    ? formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier, { showFullPhoneNumber: true })
+                                    : formatPhoneNumberForDisplay(appointment.ownerIdentifier, { showFullPhoneNumber: true })}
+                                </span>
                               </div>
+                              <span className={`status-chip apportion-status-chip is-${appointment.currentStatus}`}>
+                                {isOwnerScope ? ownerStatusLabel : requesterQueueStatus.label}
+                              </span>
                             </div>
+                            <p className="muted-text apportion-appointment-notes">{scheduleDetail}</p>
+                            {appointment.notes ? <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes}</p> : null}
+                            {!isOwnerScope && requesterQueueStatus.helperText ? (
+                              <p className="muted-text apportion-appointment-notes">{requesterQueueStatus.helperText}</p>
+                            ) : null}
                             <div className="inline-actions apportion-log-actions">
                               {isOwnerScope && isActiveApportionStatus(appointment.currentStatus) ? (
                                 <>

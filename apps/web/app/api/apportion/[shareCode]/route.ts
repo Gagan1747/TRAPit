@@ -8,6 +8,7 @@ import { getWebSession } from "../../../../lib/session";
 import { getWorkspaceBrandingByAppointmentShareCode } from "../../../../lib/testing-store";
 
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const WEEKDAY_KEYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
 function parseTimeToMinutes(value: string) {
@@ -86,6 +87,10 @@ function createDateFromKeyUtc(value: string) {
   return new Date(Date.UTC(year, month - 1, day));
 }
 
+function getWeekdayKey(value: Date) {
+  return WEEKDAY_KEYS[value.getUTCDay()] ?? "Sun";
+}
+
 function createDateKey(value: Date) {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, "0");
@@ -159,6 +164,45 @@ function buildSlotStartsForDate(branding: WorkspaceBranding, slotDateKey: string
       };
     }).filter((slot): slot is { dayOffset: number; minutesOfDay: number; startsAt: string } => Boolean(slot));
   });
+}
+
+function buildRecurringDateKeys(input: {
+  endDateKey: string;
+  slotDateKey: string;
+  weekdayKeys: string[];
+}) {
+  const startDate = createDateFromKeyUtc(input.slotDateKey);
+  const endDate = createDateFromKeyUtc(input.endDateKey);
+
+  if (!startDate || !endDate) {
+    throw new Error("Choose a valid recurring date range.");
+  }
+
+  if (endDate.getTime() < startDate.getTime()) {
+    throw new Error("Recurring end date must be on or after the selected appointment date.");
+  }
+
+  const weekdayKeys = Array.from(new Set(input.weekdayKeys.map((value) => value.trim()).filter(Boolean)));
+
+  if (!weekdayKeys.length) {
+    throw new Error("Choose at least one recurring weekday.");
+  }
+
+  const dateKeys: string[] = [];
+
+  for (const cursor = new Date(startDate); cursor.getTime() <= endDate.getTime(); cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    if (!weekdayKeys.includes(getWeekdayKey(cursor))) {
+      continue;
+    }
+
+    dateKeys.push(createDateKeyUtc(cursor));
+  }
+
+  if (!dateKeys.length) {
+    throw new Error("No recurring appointments fall within the selected date range.");
+  }
+
+  return dateKeys;
 }
 
 function validateBookingDate(branding: WorkspaceBranding, slotDateKey: string) {
@@ -307,41 +351,74 @@ export async function POST(
     return NextResponse.json({ error: "Business booking page not found." }, { status: 404 });
   }
 
-  const body = (await request.json()) as { notes?: string | null; slotDateKey?: string; startsAt?: string };
-  let appointment;
-  let caution: string | null = null;
+  const body = (await request.json()) as {
+    notes?: string | null;
+    recurrence?: {
+      endDateKey?: string;
+      mode?: "weekly";
+      weekdayKeys?: string[];
+    } | null;
+    slotDateKey?: string;
+    startsAt?: string;
+  };
+  const slotDateKey = body.slotDateKey?.trim() || getIstDateKey(new Date());
+  const recurrence = body.recurrence?.mode === "weekly"
+    ? {
+        endDateKey: body.recurrence.endDateKey?.trim() ?? "",
+        weekdayKeys: body.recurrence.weekdayKeys ?? [],
+      }
+    : null;
+  const slotDateKeys = recurrence
+    ? buildRecurringDateKeys({
+        endDateKey: recurrence.endDateKey,
+        slotDateKey,
+        weekdayKeys: recurrence.weekdayKeys,
+      })
+    : [slotDateKey];
+  const appointments = [] as Array<{ id: string }>;
+  const cautionMessages = new Set<string>();
 
   try {
-    const slotDateKey = body.slotDateKey?.trim() || getIstDateKey(new Date());
     validateBookingDate(business.branding, slotDateKey);
 
     if (business.branding.justAddToList) {
       const ownerAppointments = await listApportionAppointmentsForOwner(business.ownerIdentifier);
-      const activeCount = ownerAppointments.filter((appointment) =>
-        appointment.serviceDateKey === slotDateKey
-        && (appointment.currentStatus === "pending" || appointment.currentStatus === "present-in-person" || appointment.currentStatus === "pushed-back"),
-      ).length;
-      const estimate = estimateQueueStart({
-        activeCount,
-        appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
-        branding: business.branding,
-        serviceDateKey: slotDateKey,
-      });
-      appointment = await createApportionAppointment({
-        appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
-        justAddToList: true,
-        notes: body.notes,
-        ownerIdentifier: business.ownerIdentifier,
-        ownerName: business.branding.instituteName,
-        requesterIdentifier,
-        requesterName: getSessionDisplayName(session) ?? requesterIdentifier,
-        requesterPhone: session.phoneNumber ?? requesterIdentifier,
-        serviceDateKey: slotDateKey,
-        startsAt: estimate.startsAt,
-      });
+      const activeCountsByDateKey = ownerAppointments
+        .filter((appointment) => appointment.currentStatus === "pending" || appointment.currentStatus === "present-in-person" || appointment.currentStatus === "pushed-back")
+        .reduce<Record<string, number>>((counts, appointment) => {
+          counts[appointment.serviceDateKey] = (counts[appointment.serviceDateKey] ?? 0) + 1;
+          return counts;
+        }, {});
 
-      if (estimate.exceedsWorkingHours) {
-        caution = "Estimated latest availability is beyond the configured working hours for that day.";
+      for (const recurringDateKey of slotDateKeys) {
+        validateBookingDate(business.branding, recurringDateKey);
+
+        const activeCount = activeCountsByDateKey[recurringDateKey] ?? 0;
+        const estimate = estimateQueueStart({
+          activeCount,
+          appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
+          branding: business.branding,
+          serviceDateKey: recurringDateKey,
+        });
+        const appointment = await createApportionAppointment({
+          appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
+          justAddToList: true,
+          notes: body.notes,
+          ownerIdentifier: business.ownerIdentifier,
+          ownerName: business.branding.instituteName,
+          requesterIdentifier,
+          requesterName: getSessionDisplayName(session) ?? requesterIdentifier,
+          requesterPhone: session.phoneNumber ?? requesterIdentifier,
+          serviceDateKey: recurringDateKey,
+          startsAt: estimate.startsAt,
+        });
+
+        appointments.push({ id: appointment.id });
+        activeCountsByDateKey[recurringDateKey] = activeCount + 1;
+
+        if (estimate.exceedsWorkingHours) {
+          cautionMessages.add("Estimated latest availability is beyond the configured working hours for at least one booked day.");
+        }
       }
     } else {
       const requestedStart = new Date(body.startsAt ?? "");
@@ -351,23 +428,45 @@ export async function POST(
       }
 
       validateRequestedSlot(business.branding, requestedStart, slotDateKey);
+      const selectedSlot = buildSlotStartsForDate(business.branding, slotDateKey).find((slot) => slot.startsAt === requestedStart.toISOString());
 
-      appointment = await createApportionAppointment({
-        appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
-        notes: body.notes,
-        ownerIdentifier: business.ownerIdentifier,
-        ownerName: business.branding.instituteName,
-        requesterIdentifier,
-        requesterName: getSessionDisplayName(session) ?? requesterIdentifier,
-        requesterPhone: session.phoneNumber ?? requesterIdentifier,
-        serviceDateKey: slotDateKey,
-        startsAt: requestedStart.toISOString(),
-      });
+      if (!selectedSlot) {
+        throw new Error("Choose one of the available appointment slots.");
+      }
+
+      for (const recurringDateKey of slotDateKeys) {
+        validateBookingDate(business.branding, recurringDateKey);
+        const recurringStartsAt = createUtcSlotIso(recurringDateKey, selectedSlot.dayOffset, selectedSlot.minutesOfDay);
+
+        if (!recurringStartsAt) {
+          throw new Error("Choose a valid appointment date and time.");
+        }
+
+        const recurringStartDate = new Date(recurringStartsAt);
+        validateRequestedSlot(business.branding, recurringStartDate, recurringDateKey);
+        const appointment = await createApportionAppointment({
+          appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
+          notes: body.notes,
+          ownerIdentifier: business.ownerIdentifier,
+          ownerName: business.branding.instituteName,
+          requesterIdentifier,
+          requesterName: getSessionDisplayName(session) ?? requesterIdentifier,
+          requesterPhone: session.phoneNumber ?? requesterIdentifier,
+          serviceDateKey: recurringDateKey,
+          startsAt: recurringStartsAt,
+        });
+
+        appointments.push({ id: appointment.id });
+      }
     }
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to book appointment." }, { status: 400 });
   }
 
   publishWorkspaceEvent("apportion");
-  return NextResponse.json({ appointment, caution });
+  return NextResponse.json({
+    appointment: appointments[0],
+    appointmentCount: appointments.length,
+    caution: cautionMessages.size ? Array.from(cautionMessages).join(" ") : null,
+  });
 }
