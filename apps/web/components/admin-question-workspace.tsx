@@ -871,6 +871,7 @@ function buildRescheduleSlotOptions(input: {
   const slotDurationMinutes = input.ownerHours.slotDurationMinutes ?? 30;
   const slotStepMinutes = getRescheduleSlotStepMinutes(slotDurationMinutes);
   const ranges = [input.ownerHours.workingHours, input.ownerHours.workingHoursSecondWindow]
+    .filter((value) => value.trim().length > 0)
     .map((value) => parseBusinessTimeRange(value))
     .filter((range): range is { endMinutes: number; startMinutes: number } => Boolean(range));
   const effectiveRanges = ranges.length
