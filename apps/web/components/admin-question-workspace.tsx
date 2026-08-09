@@ -33,7 +33,7 @@ import {
 import { type DragEvent, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
-import { formatShortDate, formatShortDateTime } from "../lib/date-format";
+import { formatShortDate, formatShortDateTime, formatShortDateTimeIst } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
@@ -557,7 +557,7 @@ type ApportionDraftCard = {
   slotTimeInput: string;
 };
 
-type BookingBehaviorMode = "queue" | "recurring" | "standard";
+type BookingBehaviorMode = "none" | "queue" | "recurring" | "standard";
 
 type TestQuestionReportSummary = {
   createdAt: string;
@@ -716,7 +716,7 @@ function getBookingBehaviorMode(branding: WorkspaceBranding | null): BookingBeha
     return "recurring";
   }
 
-  return "standard";
+  return branding?.showRemainingBookings === true ? "standard" : "none";
 }
 
 function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBranding | null {
@@ -1530,6 +1530,7 @@ export function AdminQuestionWorkspace({
   const [brandingImageDataUrl, setBrandingImageDataUrl] = useState<string | null>(null);
   const [brandingInstituteName, setBrandingInstituteName] = useState("");
   const [brandingProfileImageDataUrl, setBrandingProfileImageDataUrl] = useState<string | null>(null);
+  const [isApportionAddAppointmentOpen, setIsApportionAddAppointmentOpen] = useState(false);
   const [isApportionBusinessPanelOpen, setIsApportionBusinessPanelOpen] = useState(false);
   const [isBrandingDragActive, setIsBrandingDragActive] = useState(false);
   const [businessAdvanceBookingWeeks, setBusinessAdvanceBookingWeeks] = useState("4");
@@ -1537,7 +1538,7 @@ export function AdminQuestionWorkspace({
   const [businessAppointmentShareCode, setBusinessAppointmentShareCode] = useState<string | null>(null);
   const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("1");
   const [businessAppointmentNotesPrompt, setBusinessAppointmentNotesPrompt] = useState(DEFAULT_APPOINTMENT_NOTES_PROMPT);
-  const [businessBookingBehaviorMode, setBusinessBookingBehaviorMode] = useState<BookingBehaviorMode>("standard");
+  const [businessBookingBehaviorMode, setBusinessBookingBehaviorMode] = useState<BookingBehaviorMode>("none");
   const [businessSlotDurationMinutes, setBusinessSlotDurationMinutes] = useState("");
   const [businessWorkingDays, setBusinessWorkingDays] = useState("");
   const [businessWorkingHours, setBusinessWorkingHours] = useState("");
@@ -1638,7 +1639,7 @@ export function AdminQuestionWorkspace({
     scheduledTests: 0,
   });
   const [testListFilter, setTestListFilter] = useState<AdminTestListFilter>("both");
-  const [toolbarMenuView, setToolbarMenuView] = useState<"branding" | "menu" | "user-details">("menu");
+  const [toolbarMenuView, setToolbarMenuView] = useState<"menu" | "user-details">("menu");
   const [visibleParticipantReviewTestIds, setVisibleParticipantReviewTestIds] = useState<string[]>([]);
   const [visibleReviewTestIds, setVisibleReviewTestIds] = useState<string[]>([]);
   const [workspaceBranding, setWorkspaceBranding] = useState<WorkspaceBranding | null>(null);
@@ -1799,6 +1800,20 @@ export function AdminQuestionWorkspace({
 
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
+  useEffect(() => {
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") {
+        return;
+      }
+
+      setIsApportionAddAppointmentOpen(false);
+      setIsApportionBusinessPanelOpen(false);
+    }
+
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
   }, []);
 
   useEffect(() => {
@@ -2088,11 +2103,20 @@ export function AdminQuestionWorkspace({
   }
 
   function removeApportionDraftCard(draftId: string) {
-    setApportionDraftCards((currentDrafts) => currentDrafts.filter((draft) => draft.id !== draftId));
+    setApportionDraftCards((currentDrafts) => {
+      const nextDrafts = currentDrafts.filter((draft) => draft.id !== draftId);
+
+      if (!nextDrafts.length) {
+        setIsApportionAddAppointmentOpen(false);
+      }
+
+      return nextDrafts;
+    });
   }
 
   function addApportionDraftCard() {
-    setApportionDraftCards((currentDrafts) => [createApportionDraftCard(), ...currentDrafts]);
+    setApportionDraftCards((currentDrafts) => currentDrafts.length ? currentDrafts : [createApportionDraftCard()]);
+    setIsApportionAddAppointmentOpen(true);
   }
 
   function handleApportionDraftBusinessSelection(draftId: string, business: ApportionBusinessLookup) {
@@ -2195,6 +2219,7 @@ export function AdminQuestionWorkspace({
       );
 
       removeApportionDraftCard(draft.id);
+      setIsApportionAddAppointmentOpen(false);
       await loadWorkspace({ silent: true });
       setFeedback("Appointment booked from the dashboard.");
     } catch (error) {
@@ -2373,6 +2398,8 @@ export function AdminQuestionWorkspace({
   }
 
   function closeManagementDrawers() {
+    setIsApportionAddAppointmentOpen(false);
+    setIsApportionBusinessPanelOpen(false);
     setIsUpgradePanelOpen(false);
     setIsManageUpgradesPanelOpen(false);
   }
@@ -3665,7 +3692,7 @@ export function AdminQuestionWorkspace({
     setBusinessAdvanceBookingWeeks("4");
     setBusinessAppointmentsPerSlot("1");
     setBusinessAppointmentNotesPrompt(DEFAULT_APPOINTMENT_NOTES_PROMPT);
-    setBusinessBookingBehaviorMode("standard");
+    setBusinessBookingBehaviorMode("none");
     setBusinessSlotDurationMinutes("");
     setBusinessWorkingDays("");
     setBusinessWorkingHours("");
@@ -4474,6 +4501,7 @@ export function AdminQuestionWorkspace({
             setBusinessBookingBehaviorMode(event.target.value as BookingBehaviorMode);
           }}
         >
+          <option value="none">None</option>
           <option value="standard">Standard slots (show remaining)</option>
           <option value="queue">Queue only</option>
           <option value="recurring">Recurring slots</option>
@@ -4553,7 +4581,7 @@ export function AdminQuestionWorkspace({
         </button>
         <button
           className="button-secondary"
-          disabled={isMutating || (!brandingInstituteName.trim() && !brandingAddress.trim() && !brandingImageDataUrl && !brandingProfileImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && businessAppointmentsPerSlot === "1" && !businessSlotDurationMinutes.trim() && businessAppointmentNotesPrompt.trim() === DEFAULT_APPOINTMENT_NOTES_PROMPT && businessBookingBehaviorMode === "standard")}
+          disabled={isMutating || (!brandingInstituteName.trim() && !brandingAddress.trim() && !brandingImageDataUrl && !brandingProfileImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && businessAppointmentsPerSlot === "1" && !businessSlotDurationMinutes.trim() && businessAppointmentNotesPrompt.trim() === DEFAULT_APPOINTMENT_NOTES_PROMPT && businessBookingBehaviorMode === "none")}
           type="button"
           onClick={() => void handleClearBranding()}
         >
@@ -4593,6 +4621,10 @@ export function AdminQuestionWorkspace({
 
       return new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime();
     });
+  const upcomingApportionAppointments = combinedApportionAppointments.filter((appointment) => isActiveApportionStatus(appointment.currentStatus));
+  const completedApportionAppointments = combinedApportionAppointments
+    .filter((appointment) => !isActiveApportionStatus(appointment.currentStatus))
+    .sort((left, right) => new Date(right.startsAt).getTime() - new Date(left.startsAt).getTime());
   const filteredManagedUsers = categoryManagement?.managedUsers.filter((user) => {
     const query = categorySearchQuery.trim().toLowerCase();
     const normalizedQueryCandidates = Array.from(getParticipantIdentifierCandidates(query));
@@ -4865,7 +4897,7 @@ export function AdminQuestionWorkspace({
           </button>
 
           {isOverflowMenuOpen ? (
-            <div className={`workspace-overflow-panel panel${toolbarMenuView === "branding" ? " is-business-drawer" : ""}`} role="dialog">
+            <div className="workspace-overflow-panel panel" role="dialog">
               {toolbarMenuView === "menu" ? (
                 <div className="workspace-overflow-stack">
                   <p className="eyebrow">Workspace actions</p>
@@ -4902,17 +4934,6 @@ export function AdminQuestionWorkspace({
                       User details
                     </button>
                   ) : null}
-                  <button
-                    className="workspace-overflow-action"
-                    type="button"
-                    onClick={() => {
-                      setOpenSection("apportion");
-                      setIsApportionBusinessPanelOpen(true);
-                      setIsOverflowMenuOpen(false);
-                    }}
-                  >
-                    Business
-                  </button>
                   <SignOutButton
                     className="workspace-overflow-action"
                     onSignedOut={() => setIsOverflowMenuOpen(false)}
@@ -4953,32 +4974,6 @@ export function AdminQuestionWorkspace({
                 </div>
               ) : null}
 
-              {toolbarMenuView === "branding" ? (
-                <div className="workspace-overflow-stack business-drawer-stack">
-                  <div className="workspace-overflow-head">
-                    <button className="button-secondary small-button" type="button" onClick={() => setToolbarMenuView("menu")}>
-                      Back
-                    </button>
-                    <p className="eyebrow">Business</p>
-                  </div>
-                  <h2 className="section-title">Business details moved</h2>
-                  <p className="muted-text">Open the Apportion tab to manage your business panel.</p>
-                  <div className="inline-actions">
-                    <button
-                      className="button"
-                      type="button"
-                      onClick={() => {
-                        setOpenSection("apportion");
-                        setIsApportionBusinessPanelOpen(true);
-                        setIsOverflowMenuOpen(false);
-                        setToolbarMenuView("menu");
-                      }}
-                    >
-                      Open Apportion
-                    </button>
-                  </div>
-                </div>
-              ) : null}
             </div>
           ) : null}
         </div>
@@ -4994,14 +4989,38 @@ export function AdminQuestionWorkspace({
             </section>
           ) : openSection === "apportion" ? (
             <section className="panel workspace-card">
-              <CollapsibleWorkspaceSection
-                isOpen={isApportionBusinessPanelOpen}
-                onToggle={() => setIsApportionBusinessPanelOpen((current) => !current)}
-                sectionId="apportion-business-panel"
-                title="Business panel"
-              >
-                {businessDetailsPanel}
-              </CollapsibleWorkspaceSection>
+              <div className="apportion-section-actions">
+                <button className="button-secondary" type="button" onClick={() => setIsApportionBusinessPanelOpen(true)}>
+                  Business Panel
+                </button>
+              </div>
+
+              {isApportionBusinessPanelOpen ? (
+                <div className="apportion-modal-overlay" role="presentation" onClick={() => setIsApportionBusinessPanelOpen(false)}>
+                  <div
+                    aria-labelledby="apportion-business-panel-title"
+                    aria-modal="true"
+                    className="apportion-floating-drawer panel"
+                    role="dialog"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <div className="workspace-overflow-head">
+                      <div>
+                        <p className="eyebrow">Apportion</p>
+                        <h2 className="section-title" id="apportion-business-panel-title">Business Panel</h2>
+                      </div>
+                      <button className="button-secondary small-button" type="button" onClick={() => setIsApportionBusinessPanelOpen(false)}>
+                        Close
+                      </button>
+                    </div>
+                    {businessDetailsPanel}
+                  </div>
+                </div>
+              ) : null}
+
+              {isApportionAddAppointmentOpen ? (
+                <div className="apportion-modal-overlay" role="presentation" onClick={() => setIsApportionAddAppointmentOpen(false)} />
+              ) : null}
 
               <article className="question-card nested-card">
                 <div className="question-head">
@@ -5009,13 +5028,13 @@ export function AdminQuestionWorkspace({
                   <div className="inline-actions apportion-log-head-actions">
                     <span className="status-chip">{combinedApportionAppointments.length}</span>
                     <button className="button-secondary small-button" type="button" onClick={() => addApportionDraftCard()}>
-                      Add Appointments
+                      Add Appointment
                     </button>
                   </div>
                 </div>
-                {apportionDraftCards.length || combinedApportionAppointments.length ? (
+                {isApportionAddAppointmentOpen || upcomingApportionAppointments.length ? (
                   <div className="notification-panel-list">
-                    {apportionDraftCards.map((draft) => {
+                    {isApportionAddAppointmentOpen ? apportionDraftCards.map((draft) => {
                       const selectedBusiness = availableApportionBusinesses.find((business) => business.appointmentShareCode === draft.appointmentShareCode)
                         ?? availableApportionBusinesses.find((business) => business.name === draft.businessTitleQuery)
                         ?? availableApportionBusinesses.find((business) => formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true }) === draft.ownerPhoneQuery)
@@ -5069,7 +5088,7 @@ export function AdminQuestionWorkspace({
                       const canUseRecurring = selectedBusiness?.recurringBookingsEnabled === true;
 
                       return (
-                        <div className="notification-panel-item apportion-log-item is-requester-scope is-draft" key={draft.id}>
+                        <div aria-modal="true" className="apportion-floating-drawer apportion-appointment-drawer panel" key={draft.id} role="dialog">
                           <div className="apportion-appointment-summary">
                             <div className="apportion-log-topline apportion-log-topline-card">
                               <span className="status-chip apportion-serial-chip">--</span>
@@ -5079,6 +5098,9 @@ export function AdminQuestionWorkspace({
                               </div>
                               <span className="status-chip apportion-status-chip is-pending">Draft</span>
                             </div>
+                            <p className="muted-text apportion-business-hours-context">
+                              Working hours: {selectedBusiness ? `${formatOwnerOperatingHours(draftOwnerHours)} (IST)` : "Select a business to view IST operating hours."}
+                            </p>
                             <div className="apportion-card-grid">
                               <div className="field">
                                 <label htmlFor={`apportion-draft-business-${draft.id}`}>Business title</label>
@@ -5278,12 +5300,15 @@ export function AdminQuestionWorkspace({
                               <button className="button-secondary small-button" type="button" onClick={() => removeApportionDraftCard(draft.id)}>
                                 Remove
                               </button>
+                              <button className="button-secondary small-button" type="button" onClick={() => setIsApportionAddAppointmentOpen(false)}>
+                                Close
+                              </button>
                             </div>
                           </div>
                         </div>
                       );
-                    })}
-                    {combinedApportionAppointments.map((appointment) => {
+                    }) : null}
+                    {upcomingApportionAppointments.map((appointment) => {
                       const isOwnerScope = appointment.scope === "owner";
                       const isFutureAppointment = new Date(appointment.startsAt).getTime() > Date.now();
                       const isRescheduling = rescheduleAppointmentId === appointment.id;
@@ -5401,8 +5426,57 @@ export function AdminQuestionWorkspace({
                     })}
                   </div>
                 ) : (
-                  <p className="muted-text">No appointments in the log yet.</p>
+                  <p className="muted-text">No upcoming appointments.</p>
                 )}
+
+                <div className="apportion-completed-section">
+                  <div className="question-head">
+                    <strong>Completed appointments</strong>
+                    <span className="status-chip">{completedApportionAppointments.length}</span>
+                  </div>
+                  {completedApportionAppointments.length ? (
+                    <div className="leaderboard-table-wrap apportion-completed-table-wrap">
+                      <table className="leaderboard-table apportion-completed-table">
+                        <thead>
+                          <tr>
+                            <th scope="col">Date and time (IST)</th>
+                            <th scope="col">Contact</th>
+                            <th scope="col">Phone</th>
+                            <th scope="col">Scope</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">Notes</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {completedApportionAppointments.map((appointment) => {
+                            const isOwnerScope = appointment.scope === "owner";
+
+                            return (
+                              <tr key={`completed-${appointment.id}`}>
+                                <td>{formatShortDateTimeIst(appointment.startsAt)}</td>
+                                <td>{isOwnerScope ? appointment.requesterName : appointment.ownerName ?? "Business"}</td>
+                                <td>
+                                  {isOwnerScope
+                                    ? formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier, { showFullPhoneNumber: true })
+                                    : formatPhoneNumberForDisplay(appointment.ownerIdentifier, { showFullPhoneNumber: true })}
+                                </td>
+                                <td>{isOwnerScope ? "Received" : "Booked"}</td>
+                                <td>
+                                  <span className={`status-chip apportion-status-chip is-${appointment.currentStatus}`}>
+                                    {getApportionStatusLabel(appointment.currentStatus)}
+                                  </span>
+                                </td>
+                                <td>{appointment.notes || "-"}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <p className="muted-text">No completed appointments.</p>
+                  )}
+                </div>
               </article>
             </section>
           ) : (

@@ -1193,6 +1193,77 @@ main {
   gap: 12px;
 }
 
+.apportion-section-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 14px;
+}
+
+.apportion-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(28, 20, 15, 0.22);
+  backdrop-filter: blur(8px);
+}
+
+.apportion-floating-drawer {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  bottom: 18px;
+  z-index: 61;
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  width: min(520px, calc(100vw - 28px));
+  padding: 22px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  border: 1px solid rgba(81, 55, 133, 0.22);
+  border-radius: 30px;
+  background:
+    linear-gradient(180deg, rgba(255, 252, 244, 0.98), rgba(248, 241, 229, 0.98)),
+    var(--surface-strong);
+  box-shadow: -24px 0 70px rgba(35, 25, 66, 0.18);
+  animation: businessDrawerIn 220ms ease-out;
+}
+
+.apportion-appointment-drawer {
+  width: min(760px, calc(100vw - 28px));
+}
+
+.apportion-business-hours-context {
+  margin: 0;
+  font-weight: 700;
+}
+
+.apportion-completed-section {
+  display: grid;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.apportion-completed-section .question-head {
+  margin-bottom: 0;
+}
+
+.apportion-completed-table-wrap {
+  margin-top: 0;
+}
+
+.apportion-completed-table td:first-child {
+  min-width: 170px;
+  font-weight: 700;
+}
+
+.apportion-completed-table td:last-child {
+  min-width: 180px;
+  white-space: normal;
+}
+
 .apportion-log-badges {
   display: flex;
   flex-wrap: wrap;
@@ -1307,6 +1378,16 @@ main {
 @media (max-width: 720px) {
   .apportion-card-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .apportion-floating-drawer,
+  .apportion-appointment-drawer {
+    top: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: calc(100vw - 16px);
+    padding: 18px;
+    border-radius: 20px;
   }
 }
 
