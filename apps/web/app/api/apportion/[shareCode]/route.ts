@@ -133,7 +133,7 @@ function createUtcSlotIso(slotDateKey: string, dayOffset: number, minutesOfDay: 
 }
 
 function getSlotStepMinutes(slotDurationMinutes: number) {
-  return slotDurationMinutes <= 60 ? 15 : slotDurationMinutes;
+  return slotDurationMinutes;
 }
 
 function buildSlotStartsForDate(branding: WorkspaceBranding, slotDateKey: string) {
@@ -207,17 +207,16 @@ function buildRecurringDateKeys(input: {
 
 function validateBookingDate(branding: WorkspaceBranding, slotDateKey: string) {
   const workingDays = parseWorkingDays(branding.workingDays);
-  const requestedLocalDate = createDateFromKey(slotDateKey);
   const requestedDateUtc = createDateFromKeyUtc(slotDateKey);
   const advanceBookingWeeks = branding.advanceBookingWeeks ?? 4;
   const todayIstDateKey = getIstDateKey(new Date());
   const todayUtcDate = createDateFromKeyUtc(todayIstDateKey);
 
-  if (!requestedLocalDate || !requestedDateUtc || !todayUtcDate) {
+  if (!requestedDateUtc || !todayUtcDate) {
     throw new Error("Choose a valid appointment date.");
   }
 
-  const dayName = WEEKDAY_NAMES[requestedLocalDate.getDay()];
+  const dayName = WEEKDAY_NAMES[requestedDateUtc.getUTCDay()];
 
   if (!workingDays.has(dayName)) {
     throw new Error("Choose a working day for this business.");

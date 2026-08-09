@@ -570,7 +570,7 @@ export function normalizeWorkspaceBranding(
   const appointmentsPerSlot = Number.isFinite(branding.appointmentsPerSlot) && branding.appointmentsPerSlot && branding.appointmentsPerSlot > 0
     ? Math.floor(branding.appointmentsPerSlot)
     : null;
-  const slotDurationMinutes = [15, 30, 45, 60, 120, 180, 240].includes(branding.slotDurationMinutes ?? 0)
+  const slotDurationMinutes = [5, 10, 15, 30, 45, 60, 120, 180, 240].includes(branding.slotDurationMinutes ?? 0)
     ? branding.slotDurationMinutes
     : null;
 

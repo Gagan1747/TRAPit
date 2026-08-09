@@ -179,7 +179,7 @@ function isSameDay(left: Date, right: Date) {
 }
 
 function getSlotStepMinutes(slotDurationMinutes: number) {
-  return slotDurationMinutes <= 60 ? 15 : slotDurationMinutes;
+  return slotDurationMinutes;
 }
 
 function buildSlotStartsForDate(input: {

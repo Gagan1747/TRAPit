@@ -80,6 +80,7 @@ const BUSINESS_WEEK_DAYS = [
   { key: "Sat", label: "S", name: "Saturday" },
   { key: "Sun", label: "S", name: "Sunday" },
 ] as const;
+const BUSINESS_WEEKDAY_KEYS_BY_JS_DAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
 const BUSINESS_TIME_STEP_MINUTES = 30;
 const BUSINESS_DAY_START_MINUTES = 6 * 60;
@@ -556,6 +557,8 @@ type ApportionDraftCard = {
   slotTimeInput: string;
 };
 
+type BookingBehaviorMode = "queue" | "recurring" | "standard";
+
 type TestQuestionReportSummary = {
   createdAt: string;
   id: string;
@@ -704,6 +707,18 @@ function createEmptyBranding(): WorkspaceBranding {
   };
 }
 
+function getBookingBehaviorMode(branding: WorkspaceBranding | null): BookingBehaviorMode {
+  if (branding?.justAddToList === true) {
+    return "queue";
+  }
+
+  if (branding?.recurringBookingsEnabled === true) {
+    return "recurring";
+  }
+
+  return "standard";
+}
+
 function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBranding | null {
   const instituteName = branding?.instituteName.trim() ?? "";
   const address = branding?.address.trim() ?? "";
@@ -724,7 +739,7 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
   const appointmentsPerSlot = Number.isFinite(branding?.appointmentsPerSlot) && branding?.appointmentsPerSlot && branding.appointmentsPerSlot > 0
     ? Math.floor(branding.appointmentsPerSlot)
     : null;
-  const slotDurationMinutes = [15, 30, 45, 60, 120, 180, 240].includes(branding?.slotDurationMinutes ?? 0)
+  const slotDurationMinutes = [5, 10, 15, 30, 45, 60, 120, 180, 240].includes(branding?.slotDurationMinutes ?? 0)
     ? branding?.slotDurationMinutes ?? null
     : null;
 
@@ -817,7 +832,7 @@ function createUtcIsoFromIstDateAndMinutes(dateInput: string, minutesOfDay: numb
 }
 
 function getRescheduleSlotStepMinutes(slotDurationMinutes: number) {
-  return slotDurationMinutes <= 60 ? 15 : slotDurationMinutes;
+  return slotDurationMinutes;
 }
 
 function buildRescheduleSlotOptions(input: {
@@ -852,66 +867,6 @@ function buildRescheduleSlotOptions(input: {
   });
 }
 
-function buildApportionSlotDetails(input: {
-  dateInput: string;
-  ownerHours: ApportionOwnerOperatingHours;
-}) {
-  const slotDurationMinutes = input.ownerHours.slotDurationMinutes ?? 30;
-  const slotStepMinutes = getRescheduleSlotStepMinutes(slotDurationMinutes);
-  const ranges = [input.ownerHours.workingHours, input.ownerHours.workingHoursSecondWindow]
-    .map((value) => parseBusinessTimeRange(value))
-    .filter((range): range is { endMinutes: number; startMinutes: number } => Boolean(range));
-  const effectiveRanges = ranges.length
-    ? ranges
-    : [parseBusinessTimeRange("10:00 AM - 6:00 PM")];
-
-  return effectiveRanges.flatMap((range) => {
-    const totalSlots = Math.max(0, Math.floor((range.endMinutes - range.startMinutes - slotDurationMinutes) / slotStepMinutes) + 1);
-
-    return Array.from({ length: totalSlots }, (_, index) => {
-      const slotMinutes = range.startMinutes + (index * slotStepMinutes);
-      const startsAtIso = createUtcIsoFromIstDateAndMinutes(input.dateInput, slotMinutes);
-
-      if (!startsAtIso) {
-        return null;
-      }
-
-      return {
-        label: formatBusinessTime(slotMinutes),
-        startsAt: startsAtIso,
-      };
-    }).filter((slot): slot is { label: string; startsAt: string } => Boolean(slot));
-  });
-}
-
-function estimateApportionQueueStart(input: {
-  ownerHours: ApportionOwnerOperatingHours;
-  queuePosition: number;
-  serviceDateKey: string;
-}) {
-  const appointmentsPerSlot = Math.max(1, input.ownerHours.appointmentsPerSlot ?? 1);
-  const slotIndex = Math.max(0, input.queuePosition - 1);
-  const slotBucketIndex = Math.floor(slotIndex / appointmentsPerSlot);
-  const slotDurationMinutes = input.ownerHours.slotDurationMinutes ?? 30;
-  const slotDetails = buildApportionSlotDetails({
-    dateInput: input.serviceDateKey,
-    ownerHours: input.ownerHours,
-  });
-
-  if (!slotDetails.length) {
-    const fallbackIso = createUtcIsoFromIstDateAndMinutes(input.serviceDateKey, (10 * 60) + (slotBucketIndex * slotDurationMinutes));
-    return fallbackIso ? formatShortDateTime(fallbackIso) : formatShortDate(input.serviceDateKey);
-  }
-
-  if (slotBucketIndex < slotDetails.length) {
-    return formatShortDateTime(slotDetails[slotBucketIndex].startsAt);
-  }
-
-  const overflowDate = new Date(slotDetails[slotDetails.length - 1].startsAt);
-  overflowDate.setMinutes(overflowDate.getMinutes() + ((slotBucketIndex - (slotDetails.length - 1)) * slotDurationMinutes));
-  return formatShortDateTime(overflowDate.toISOString());
-}
-
 function createApportionDraftCard(): ApportionDraftCard {
   const draftId = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
     ? crypto.randomUUID()
@@ -932,13 +887,13 @@ function createApportionDraftCard(): ApportionDraftCard {
 }
 
 function getBusinessWeekdayKeyForDateKey(value: string) {
-  const date = new Date(`${value}T00:00:00`);
+  const date = new Date(`${value}T00:00:00Z`);
 
   if (Number.isNaN(date.getTime())) {
     return "Sun";
   }
 
-  return BUSINESS_WEEK_DAYS[date.getDay()]?.key ?? "Sun";
+  return BUSINESS_WEEKDAY_KEYS_BY_JS_DAY[date.getUTCDay()] ?? "Sun";
 }
 
 function createDateKeyFromDate(value: Date) {
@@ -962,7 +917,7 @@ function getDraftBookingDateOptions(input: {
     const date = new Date(today);
     date.setDate(today.getDate() + offset);
     const dateKey = createDateKeyFromDate(date);
-    const weekdayKey = BUSINESS_WEEK_DAYS[date.getDay()]?.key ?? "Sun";
+    const weekdayKey = BUSINESS_WEEKDAY_KEYS_BY_JS_DAY[date.getDay()] ?? "Sun";
     const isWorkingDay = input.workingDayKeys.includes(weekdayKey);
 
     options.push({
@@ -1580,11 +1535,9 @@ export function AdminQuestionWorkspace({
   const [businessAdvanceBookingWeeks, setBusinessAdvanceBookingWeeks] = useState("4");
   const [businessAppointmentQrCode, setBusinessAppointmentQrCode] = useState<string | null>(null);
   const [businessAppointmentShareCode, setBusinessAppointmentShareCode] = useState<string | null>(null);
-  const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("");
+  const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("1");
   const [businessAppointmentNotesPrompt, setBusinessAppointmentNotesPrompt] = useState(DEFAULT_APPOINTMENT_NOTES_PROMPT);
-  const [businessJustAddToList, setBusinessJustAddToList] = useState(false);
-  const [businessRecurringBookingsEnabled, setBusinessRecurringBookingsEnabled] = useState(false);
-  const [businessShowRemainingBookings, setBusinessShowRemainingBookings] = useState(false);
+  const [businessBookingBehaviorMode, setBusinessBookingBehaviorMode] = useState<BookingBehaviorMode>("standard");
   const [businessSlotDurationMinutes, setBusinessSlotDurationMinutes] = useState("");
   const [businessWorkingDays, setBusinessWorkingDays] = useState("");
   const [businessWorkingHours, setBusinessWorkingHours] = useState("");
@@ -1703,11 +1656,9 @@ export function AdminQuestionWorkspace({
     setBrandingImageDataUrl(branding?.imageDataUrl ?? null);
     setBrandingProfileImageDataUrl(branding?.profileImageDataUrl ?? null);
     setBusinessAdvanceBookingWeeks("4");
-    setBusinessAppointmentsPerSlot(branding?.appointmentsPerSlot ? String(branding.appointmentsPerSlot) : "");
+    setBusinessAppointmentsPerSlot(String(Math.min(6, Math.max(1, branding?.appointmentsPerSlot ?? 1))));
     setBusinessAppointmentNotesPrompt(branding?.appointmentNotesPrompt ?? DEFAULT_APPOINTMENT_NOTES_PROMPT);
-    setBusinessJustAddToList(branding?.justAddToList === true);
-    setBusinessRecurringBookingsEnabled(branding?.recurringBookingsEnabled === true);
-    setBusinessShowRemainingBookings(branding?.showRemainingBookings === true);
+    setBusinessBookingBehaviorMode(getBookingBehaviorMode(branding));
     setBusinessSlotDurationMinutes(branding?.slotDurationMinutes ? String(branding.slotDurationMinutes) : "");
     setBusinessWorkingDays(branding?.workingDays ?? "");
     setBusinessWorkingHours(branding?.workingHours ?? "");
@@ -2158,15 +2109,13 @@ export function AdminQuestionWorkspace({
       appointmentShareCode: business.appointmentShareCode,
       businessTitleQuery: business.name,
       ownerPhoneQuery: formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true }),
-      recurrenceMode: business.recurringBookingsEnabled ? draft.recurrenceMode : "none",
-      recurringEndDateKey: draft.recurringEndDateKey || slotDateKey,
+      recurrenceMode: "none",
+      recurringEndDateKey: slotDateKey,
       recurringWeekdayKeys: business.recurringBookingsEnabled
-        ? draft.recurringWeekdayKeys.length
-          ? draft.recurringWeekdayKeys
-          : [getBusinessWeekdayKeyForDateKey(slotDateKey)]
+        ? [getBusinessWeekdayKeyForDateKey(slotDateKey)]
         : [],
       slotDateKey,
-      slotTimeInput: business.justAddToList ? "" : draft.slotTimeInput,
+      slotTimeInput: "",
       };
     });
   }
@@ -2183,6 +2132,16 @@ export function AdminQuestionWorkspace({
 
     if (!draft.slotDateKey.trim()) {
       setFeedback("Choose an appointment date.");
+      return;
+    }
+
+    const isValidBusinessDate = getDraftBookingDateOptions({
+      advanceBookingWeeks: selectedBusiness.advanceBookingWeeks,
+      workingDayKeys: parseBusinessDays(selectedBusiness.workingDays),
+    }).some((option) => option.dateKey === draft.slotDateKey && !option.disabled);
+
+    if (!isValidBusinessDate) {
+      setFeedback("Choose a working day for the selected business.");
       return;
     }
 
@@ -3596,13 +3555,13 @@ export function AdminQuestionWorkspace({
     const advanceBookingWeeks = 4;
     const slotDurationMinutes = businessSlotDurationMinutes.trim() ? Number(businessSlotDurationMinutes) : null;
 
-    if (appointmentsPerSlot !== null && (!Number.isFinite(appointmentsPerSlot) || appointmentsPerSlot < 1)) {
-      setBrandingFeedback("Appointments per slot must be at least 1.");
+    if (appointmentsPerSlot !== null && (!Number.isInteger(appointmentsPerSlot) || appointmentsPerSlot < 1 || appointmentsPerSlot > 6)) {
+      setBrandingFeedback("Appointments per slot must be between 1 and 6.");
       return;
     }
 
-    if (slotDurationMinutes !== null && ![15, 30, 45, 60, 120, 180, 240].includes(slotDurationMinutes)) {
-      setBrandingFeedback("Slot duration must be 15 minutes, 30 minutes, 45 minutes, 1 hour, 2 hours, 3 hours, or 4 hours.");
+    if (slotDurationMinutes !== null && ![5, 10, 15, 30, 45, 60, 120, 180, 240].includes(slotDurationMinutes)) {
+      setBrandingFeedback("Choose a valid slot duration.");
       return;
     }
 
@@ -3615,10 +3574,10 @@ export function AdminQuestionWorkspace({
       breakHours: "",
       imageDataUrl: brandingImageDataUrl,
       instituteName: brandingInstituteName,
-      justAddToList: businessJustAddToList,
+      justAddToList: businessBookingBehaviorMode === "queue",
       profileImageDataUrl: brandingProfileImageDataUrl,
-      recurringBookingsEnabled: businessRecurringBookingsEnabled,
-      showRemainingBookings: businessShowRemainingBookings,
+      recurringBookingsEnabled: businessBookingBehaviorMode === "recurring",
+      showRemainingBookings: businessBookingBehaviorMode === "standard",
       slotDurationMinutes,
       workingHoursSecondWindow: businessWorkingHoursSecondWindow,
       workingDays: businessWorkingDays,
@@ -3704,11 +3663,9 @@ export function AdminQuestionWorkspace({
     setBrandingImageDataUrl(null);
     setBrandingProfileImageDataUrl(null);
     setBusinessAdvanceBookingWeeks("4");
-    setBusinessAppointmentsPerSlot("");
+    setBusinessAppointmentsPerSlot("1");
     setBusinessAppointmentNotesPrompt(DEFAULT_APPOINTMENT_NOTES_PROMPT);
-    setBusinessJustAddToList(false);
-    setBusinessRecurringBookingsEnabled(false);
-    setBusinessShowRemainingBookings(false);
+    setBusinessBookingBehaviorMode("standard");
     setBusinessSlotDurationMinutes("");
     setBusinessWorkingDays("");
     setBusinessWorkingHours("");
@@ -4291,10 +4248,10 @@ export function AdminQuestionWorkspace({
     breakHours: "",
     imageDataUrl: brandingImageDataUrl,
     instituteName: brandingInstituteName,
-    justAddToList: businessJustAddToList,
+    justAddToList: businessBookingBehaviorMode === "queue",
     profileImageDataUrl: brandingProfileImageDataUrl,
-    recurringBookingsEnabled: businessRecurringBookingsEnabled,
-    showRemainingBookings: businessShowRemainingBookings,
+    recurringBookingsEnabled: businessBookingBehaviorMode === "recurring",
+    showRemainingBookings: businessBookingBehaviorMode === "standard",
     slotDurationMinutes: Number.parseInt(businessSlotDurationMinutes, 10),
     workingHoursSecondWindow: businessWorkingHoursSecondWindow,
     workingDays: businessWorkingDays,
@@ -4463,17 +4420,19 @@ export function AdminQuestionWorkspace({
       </div>
       <div className="field business-field-card">
         <label htmlFor="business-appointments-per-slot">Appointments per slot</label>
-        <input
+        <select
+          className="select-field"
           id="business-appointments-per-slot"
-          min="1"
-          placeholder="1"
-          type="number"
           value={businessAppointmentsPerSlot}
           onChange={(event) => {
             markBrandingDraftDirty();
             setBusinessAppointmentsPerSlot(event.target.value);
           }}
-        />
+        >
+          {[1, 2, 3, 4, 5, 6].map((count) => (
+            <option key={count} value={String(count)}>{count}</option>
+          ))}
+        </select>
         <label htmlFor="business-slot-duration">Slot duration</label>
         <select
           className="select-field"
@@ -4485,6 +4444,8 @@ export function AdminQuestionWorkspace({
           }}
         >
           <option value="">Select duration</option>
+          <option value="5">5 mins</option>
+          <option value="10">10 mins</option>
           <option value="15">15 mins</option>
           <option value="30">30 mins</option>
           <option value="45">45 mins</option>
@@ -4503,42 +4464,20 @@ export function AdminQuestionWorkspace({
             setBusinessAppointmentNotesPrompt(event.target.value);
           }}
         />
-        <label className="checkbox-row" htmlFor="business-show-remaining-bookings">
-          <input
-            checked={businessShowRemainingBookings}
-            id="business-show-remaining-bookings"
-            type="checkbox"
-            onChange={(event) => {
-              markBrandingDraftDirty();
-              setBusinessShowRemainingBookings(event.target.checked);
-            }}
-          />
-          <span>Show users remaining bookings per slot</span>
-        </label>
-        <label className="checkbox-row" htmlFor="business-just-add-to-list">
-          <input
-            checked={businessJustAddToList}
-            id="business-just-add-to-list"
-            type="checkbox"
-            onChange={(event) => {
-              markBrandingDraftDirty();
-              setBusinessJustAddToList(event.target.checked);
-            }}
-          />
-          <span>Just add to the queue</span>
-        </label>
-        <label className="checkbox-row" htmlFor="business-recurring-bookings-enabled">
-          <input
-            checked={businessRecurringBookingsEnabled}
-            id="business-recurring-bookings-enabled"
-            type="checkbox"
-            onChange={(event) => {
-              markBrandingDraftDirty();
-              setBusinessRecurringBookingsEnabled(event.target.checked);
-            }}
-          />
-          <span>Enable recurring bookings</span>
-        </label>
+        <label htmlFor="business-booking-behavior">Booking behavior</label>
+        <select
+          className="select-field"
+          id="business-booking-behavior"
+          value={businessBookingBehaviorMode}
+          onChange={(event) => {
+            markBrandingDraftDirty();
+            setBusinessBookingBehaviorMode(event.target.value as BookingBehaviorMode);
+          }}
+        >
+          <option value="standard">Standard slots (show remaining)</option>
+          <option value="queue">Queue only</option>
+          <option value="recurring">Recurring slots</option>
+        </select>
         <p className="muted-text">If opening and closing times are the same, the booking page treats the business as open for 24 hours starting from that time.</p>
       </div>
       <div className="field business-field-card">
@@ -4614,7 +4553,7 @@ export function AdminQuestionWorkspace({
         </button>
         <button
           className="button-secondary"
-          disabled={isMutating || (!brandingInstituteName.trim() && !brandingAddress.trim() && !brandingImageDataUrl && !brandingProfileImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && !businessAppointmentsPerSlot.trim() && !businessSlotDurationMinutes.trim() && businessAppointmentNotesPrompt.trim() === DEFAULT_APPOINTMENT_NOTES_PROMPT && !businessShowRemainingBookings && !businessJustAddToList && !businessRecurringBookingsEnabled)}
+          disabled={isMutating || (!brandingInstituteName.trim() && !brandingAddress.trim() && !brandingImageDataUrl && !brandingProfileImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && businessAppointmentsPerSlot === "1" && !businessSlotDurationMinutes.trim() && businessAppointmentNotesPrompt.trim() === DEFAULT_APPOINTMENT_NOTES_PROMPT && businessBookingBehaviorMode === "standard")}
           type="button"
           onClick={() => void handleClearBranding()}
         >
@@ -5152,36 +5091,21 @@ export function AdminQuestionWorkspace({
                                     const nextValue = event.target.value;
                                     const matchedBusiness = availableApportionBusinesses.find((business) => business.name === nextValue) ?? null;
 
-                                    updateApportionDraftCard(draft.id, (currentDraft) => {
-                                      const workingDayKeys = matchedBusiness ? parseBusinessDays(matchedBusiness.workingDays) : [];
-                                      const slotDateKey = matchedBusiness
-                                        ? getFirstAvailableDraftDateKey({
-                                            advanceBookingWeeks: matchedBusiness.advanceBookingWeeks,
-                                            fallbackDateKey: currentDraft.slotDateKey,
-                                            workingDayKeys,
-                                          })
-                                        : currentDraft.slotDateKey;
+                                    if (matchedBusiness) {
+                                      handleApportionDraftBusinessSelection(draft.id, matchedBusiness);
+                                      return;
+                                    }
 
-                                      return {
+                                    updateApportionDraftCard(draft.id, (currentDraft) => ({
                                       ...currentDraft,
-                                      appointmentShareCode: matchedBusiness?.appointmentShareCode ?? currentDraft.appointmentShareCode,
+                                      appointmentShareCode: "",
                                       businessTitleQuery: nextValue,
-                                      ownerPhoneQuery: matchedBusiness
-                                        ? formatPhoneNumberForDisplay(matchedBusiness.ownerIdentifier, { showFullPhoneNumber: true })
-                                        : currentDraft.ownerPhoneQuery,
-                                      recurrenceMode: matchedBusiness?.recurringBookingsEnabled
-                                        ? currentDraft.recurrenceMode
-                                        : "none",
-                                      recurringEndDateKey: currentDraft.recurringEndDateKey || slotDateKey,
-                                      recurringWeekdayKeys: matchedBusiness?.recurringBookingsEnabled
-                                        ? currentDraft.recurringWeekdayKeys.length
-                                          ? currentDraft.recurringWeekdayKeys
-                                          : [getBusinessWeekdayKeyForDateKey(slotDateKey)]
-                                        : [],
-                                      slotDateKey,
-                                      slotTimeInput: matchedBusiness?.justAddToList ? "" : currentDraft.slotTimeInput,
-                                      };
-                                    });
+                                      ownerPhoneQuery: "",
+                                      recurrenceMode: "none",
+                                      recurringEndDateKey: currentDraft.slotDateKey,
+                                      recurringWeekdayKeys: [],
+                                      slotTimeInput: "",
+                                    }));
                                   }}
                                 />
                                 <datalist id={`apportion-draft-business-options-${draft.id}`}>
@@ -5201,34 +5125,21 @@ export function AdminQuestionWorkspace({
                                     const nextValue = event.target.value;
                                     const matchedBusiness = availableApportionBusinesses.find((business) => formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true }) === nextValue) ?? null;
 
-                                    updateApportionDraftCard(draft.id, (currentDraft) => {
-                                      const workingDayKeys = matchedBusiness ? parseBusinessDays(matchedBusiness.workingDays) : [];
-                                      const slotDateKey = matchedBusiness
-                                        ? getFirstAvailableDraftDateKey({
-                                            advanceBookingWeeks: matchedBusiness.advanceBookingWeeks,
-                                            fallbackDateKey: currentDraft.slotDateKey,
-                                            workingDayKeys,
-                                          })
-                                        : currentDraft.slotDateKey;
+                                    if (matchedBusiness) {
+                                      handleApportionDraftBusinessSelection(draft.id, matchedBusiness);
+                                      return;
+                                    }
 
-                                      return {
+                                    updateApportionDraftCard(draft.id, (currentDraft) => ({
                                       ...currentDraft,
-                                      appointmentShareCode: matchedBusiness?.appointmentShareCode ?? currentDraft.appointmentShareCode,
-                                      businessTitleQuery: matchedBusiness?.name ?? currentDraft.businessTitleQuery,
+                                      appointmentShareCode: "",
+                                      businessTitleQuery: "",
                                       ownerPhoneQuery: nextValue,
-                                      recurrenceMode: matchedBusiness?.recurringBookingsEnabled
-                                        ? currentDraft.recurrenceMode
-                                        : "none",
-                                      recurringEndDateKey: currentDraft.recurringEndDateKey || slotDateKey,
-                                      recurringWeekdayKeys: matchedBusiness?.recurringBookingsEnabled
-                                        ? currentDraft.recurringWeekdayKeys.length
-                                          ? currentDraft.recurringWeekdayKeys
-                                          : [getBusinessWeekdayKeyForDateKey(slotDateKey)]
-                                        : [],
-                                      slotDateKey,
-                                      slotTimeInput: matchedBusiness?.justAddToList ? "" : currentDraft.slotTimeInput,
-                                      };
-                                    });
+                                      recurrenceMode: "none",
+                                      recurringEndDateKey: currentDraft.slotDateKey,
+                                      recurringWeekdayKeys: [],
+                                      slotTimeInput: "",
+                                    }));
                                   }}
                                 />
                                 <datalist id={`apportion-draft-phone-options-${draft.id}`}>
@@ -5286,11 +5197,6 @@ export function AdminQuestionWorkspace({
                                   </select>
                                 </div>
                               ) : null}
-                            </div>
-                            <div className="field">
-                              <span className="muted-text">
-                                {selectedBusiness?.appointmentNotesPrompt || DEFAULT_APPOINTMENT_NOTES_PROMPT}
-                              </span>
                             </div>
                             <div className="apportion-card-grid">
                               {canUseRecurring ? (
@@ -5351,7 +5257,10 @@ export function AdminQuestionWorkspace({
                               ) : null}
                             </div>
                             <div className="field">
-                              <label htmlFor={`apportion-draft-notes-${draft.id}`}>Notes</label>
+                              <div className="apportion-notes-label-row">
+                                <label htmlFor={`apportion-draft-notes-${draft.id}`}>Notes</label>
+                                <span>{selectedBusiness?.appointmentNotesPrompt || DEFAULT_APPOINTMENT_NOTES_PROMPT}</span>
+                              </div>
                               <textarea
                                 id={`apportion-draft-notes-${draft.id}`}
                                 rows={3}
@@ -5395,14 +5304,6 @@ export function AdminQuestionWorkspace({
                           ? "Move in"
                           : "Pending"
                         : getApportionStatusLabel(appointment.currentStatus);
-                      const scheduleDetail = appointment.justAddToList && ownerHours && appointment.queuePosition
-                        ? `Estimated start: ${estimateApportionQueueStart({
-                            ownerHours,
-                            queuePosition: appointment.queuePosition,
-                            serviceDateKey: appointment.serviceDateKey,
-                          })}`
-                        : `Selected slot: ${formatShortDateTime(appointment.startsAt)}`;
-
                       return (
                         <div className={`notification-panel-item apportion-log-item ${isOwnerScope ? "is-owner-scope" : "is-requester-scope"}`} key={appointment.id}>
                           <div className="apportion-appointment-summary">
@@ -5425,7 +5326,6 @@ export function AdminQuestionWorkspace({
                                 {isOwnerScope ? ownerStatusLabel : requesterQueueStatus.label}
                               </span>
                             </div>
-                            <p className="muted-text apportion-appointment-notes">{scheduleDetail}</p>
                             {appointment.notes ? <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes}</p> : null}
                             {!isOwnerScope && requesterQueueStatus.helperText ? (
                               <p className="muted-text apportion-appointment-notes">{requesterQueueStatus.helperText}</p>
