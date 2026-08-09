@@ -30,7 +30,7 @@ import {
   type TestResult,
   type WorkspaceBranding,
 } from "@trapit/testing";
-import { type DragEvent, useEffect, useRef, useState } from "react";
+import { Fragment, type DragEvent, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime, formatShortDateTimeIst } from "../lib/date-format";
@@ -529,11 +529,30 @@ type ApportionBusinessLookup = {
   justAddToList: boolean;
   name: string;
   ownerIdentifier: string;
+  recurringBookingLimit: number | null;
   recurringBookingsEnabled: boolean;
   slotDurationMinutes: number | null;
   workingDays: string;
   workingHours: string;
   workingHoursSecondWindow: string;
+};
+
+type ApportionBusinessAvailabilityResponse = {
+  business: {
+    advanceBookingWeeks: number;
+    appointmentNotesPrompt: string;
+    appointmentsPerSlot: number;
+    justAddToList: boolean;
+    name: string;
+    ownerIdentifier: string;
+    recurringBookingLimit: number | null;
+    recurringBookingsEnabled: boolean;
+    slotDurationMinutes: number | null;
+    workingDays: string;
+    workingHours: string;
+    workingHoursSecondWindow: string;
+  };
+  slotCounts: Array<{ count: number; startsAt: string }>;
 };
 
 type ApportionOwnerOperatingHours = {
@@ -698,6 +717,7 @@ function createEmptyBranding(): WorkspaceBranding {
     instituteName: "",
     justAddToList: false,
     profileImageDataUrl: null,
+    recurringBookingLimit: null,
     recurringBookingsEnabled: false,
     showRemainingBookings: false,
     slotDurationMinutes: null,
@@ -732,6 +752,14 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
   const breakHours = branding?.breakHours.trim() ?? "";
   const justAddToList = branding?.justAddToList === true;
   const recurringBookingsEnabled = branding?.recurringBookingsEnabled === true;
+  const recurringBookingLimit = recurringBookingsEnabled
+    && Number.isInteger(branding?.recurringBookingLimit)
+    && (branding?.recurringBookingLimit ?? 0) >= 1
+    && (branding?.recurringBookingLimit ?? 0) <= 12
+    ? branding?.recurringBookingLimit ?? 6
+    : recurringBookingsEnabled
+      ? 6
+      : null;
   const workingDays = branding?.workingDays.trim() ?? "";
   const workingHours = branding?.workingHours.trim() ?? "";
   const workingHoursSecondWindow = branding?.workingHoursSecondWindow.trim() ?? "";
@@ -758,6 +786,7 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
     instituteName,
     justAddToList,
     profileImageDataUrl,
+    recurringBookingLimit,
     recurringBookingsEnabled,
     showRemainingBookings,
     slotDurationMinutes,
@@ -1522,6 +1551,8 @@ export function AdminQuestionWorkspace({
   const [groupName, setGroupName] = useState("");
   const [history, setHistory] = useState<TestHistoryEntry[]>([]);
   const [availableApportionBusinesses, setAvailableApportionBusinesses] = useState<ApportionBusinessLookup[]>([]);
+  const [apportionAvailabilityLoadingShareCode, setApportionAvailabilityLoadingShareCode] = useState<string | null>(null);
+  const [apportionSlotCountsByShareCode, setApportionSlotCountsByShareCode] = useState<Record<string, Record<string, number>>>({});
   const [apportionDraftCards, setApportionDraftCards] = useState<ApportionDraftCard[]>([]);
   const [ownerApportionAppointments, setOwnerApportionAppointments] = useState<ApportionAppointment[]>([]);
   const [ownerOperatingHoursByIdentifier, setOwnerOperatingHoursByIdentifier] = useState<Record<string, ApportionOwnerOperatingHours>>({});
@@ -1539,6 +1570,7 @@ export function AdminQuestionWorkspace({
   const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("1");
   const [businessAppointmentNotesPrompt, setBusinessAppointmentNotesPrompt] = useState(DEFAULT_APPOINTMENT_NOTES_PROMPT);
   const [businessBookingBehaviorMode, setBusinessBookingBehaviorMode] = useState<BookingBehaviorMode>("none");
+  const [businessRecurringBookingLimit, setBusinessRecurringBookingLimit] = useState("6");
   const [businessSlotDurationMinutes, setBusinessSlotDurationMinutes] = useState("");
   const [businessWorkingDays, setBusinessWorkingDays] = useState("");
   const [businessWorkingHours, setBusinessWorkingHours] = useState("");
@@ -1660,6 +1692,7 @@ export function AdminQuestionWorkspace({
     setBusinessAppointmentsPerSlot(String(Math.min(6, Math.max(1, branding?.appointmentsPerSlot ?? 1))));
     setBusinessAppointmentNotesPrompt(branding?.appointmentNotesPrompt ?? DEFAULT_APPOINTMENT_NOTES_PROMPT);
     setBusinessBookingBehaviorMode(getBookingBehaviorMode(branding));
+    setBusinessRecurringBookingLimit(String(branding?.recurringBookingLimit ?? 6));
     setBusinessSlotDurationMinutes(branding?.slotDurationMinutes ? String(branding.slotDurationMinutes) : "");
     setBusinessWorkingDays(branding?.workingDays ?? "");
     setBusinessWorkingHours(branding?.workingHours ?? "");
@@ -2119,6 +2152,46 @@ export function AdminQuestionWorkspace({
     setIsApportionAddAppointmentOpen(true);
   }
 
+  async function refreshApportionBusinessAvailability(business: ApportionBusinessLookup) {
+    setApportionAvailabilityLoadingShareCode(business.appointmentShareCode);
+
+    try {
+      const payload = await readJson<ApportionBusinessAvailabilityResponse>(
+        await fetch(`/api/apportion/${encodeURIComponent(business.appointmentShareCode)}`),
+      );
+
+      setAvailableApportionBusinesses((currentBusinesses) => currentBusinesses.map((currentBusiness) => (
+        currentBusiness.appointmentShareCode === business.appointmentShareCode
+          ? {
+              ...currentBusiness,
+              advanceBookingWeeks: payload.business.advanceBookingWeeks,
+              appointmentNotesPrompt: payload.business.appointmentNotesPrompt,
+              appointmentsPerSlot: payload.business.appointmentsPerSlot,
+              justAddToList: payload.business.justAddToList,
+              name: payload.business.name,
+              ownerIdentifier: payload.business.ownerIdentifier,
+              recurringBookingLimit: payload.business.recurringBookingLimit,
+              recurringBookingsEnabled: payload.business.recurringBookingsEnabled,
+              slotDurationMinutes: payload.business.slotDurationMinutes,
+              workingDays: payload.business.workingDays,
+              workingHours: payload.business.workingHours,
+              workingHoursSecondWindow: payload.business.workingHoursSecondWindow,
+            }
+          : currentBusiness
+      )));
+      setApportionSlotCountsByShareCode((currentCounts) => ({
+        ...currentCounts,
+        [business.appointmentShareCode]: Object.fromEntries(payload.slotCounts.map((entry) => [entry.startsAt, entry.count])),
+      }));
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to refresh business availability.");
+    } finally {
+      setApportionAvailabilityLoadingShareCode((currentShareCode) => (
+        currentShareCode === business.appointmentShareCode ? null : currentShareCode
+      ));
+    }
+  }
+
   function handleApportionDraftBusinessSelection(draftId: string, business: ApportionBusinessLookup) {
     updateApportionDraftCard(draftId, (draft) => {
       const workingDayKeys = parseBusinessDays(business.workingDays);
@@ -2142,6 +2215,7 @@ export function AdminQuestionWorkspace({
       slotTimeInput: "",
       };
     });
+    void refreshApportionBusinessAvailability(business);
   }
 
   async function submitApportionDraftCard(draft: ApportionDraftCard) {
@@ -3603,6 +3677,7 @@ export function AdminQuestionWorkspace({
       instituteName: brandingInstituteName,
       justAddToList: businessBookingBehaviorMode === "queue",
       profileImageDataUrl: brandingProfileImageDataUrl,
+      recurringBookingLimit: businessBookingBehaviorMode === "recurring" ? Number(businessRecurringBookingLimit) : null,
       recurringBookingsEnabled: businessBookingBehaviorMode === "recurring",
       showRemainingBookings: businessBookingBehaviorMode === "standard",
       slotDurationMinutes,
@@ -3693,6 +3768,7 @@ export function AdminQuestionWorkspace({
     setBusinessAppointmentsPerSlot("1");
     setBusinessAppointmentNotesPrompt(DEFAULT_APPOINTMENT_NOTES_PROMPT);
     setBusinessBookingBehaviorMode("none");
+    setBusinessRecurringBookingLimit("6");
     setBusinessSlotDurationMinutes("");
     setBusinessWorkingDays("");
     setBusinessWorkingHours("");
@@ -4277,6 +4353,7 @@ export function AdminQuestionWorkspace({
     instituteName: brandingInstituteName,
     justAddToList: businessBookingBehaviorMode === "queue",
     profileImageDataUrl: brandingProfileImageDataUrl,
+    recurringBookingLimit: businessBookingBehaviorMode === "recurring" ? Number.parseInt(businessRecurringBookingLimit, 10) : null,
     recurringBookingsEnabled: businessBookingBehaviorMode === "recurring",
     showRemainingBookings: businessBookingBehaviorMode === "standard",
     slotDurationMinutes: Number.parseInt(businessSlotDurationMinutes, 10),
@@ -4506,6 +4583,24 @@ export function AdminQuestionWorkspace({
           <option value="queue">Queue only</option>
           <option value="recurring">Recurring slots</option>
         </select>
+        {businessBookingBehaviorMode === "recurring" ? (
+          <>
+            <label htmlFor="business-recurring-booking-limit">Number of recurring bookings</label>
+            <select
+              className="select-field"
+              id="business-recurring-booking-limit"
+              value={businessRecurringBookingLimit}
+              onChange={(event) => {
+                markBrandingDraftDirty();
+                setBusinessRecurringBookingLimit(event.target.value);
+              }}
+            >
+              {Array.from({ length: 12 }, (_, index) => index + 1).map((count) => (
+                <option key={count} value={String(count)}>{count}</option>
+              ))}
+            </select>
+          </>
+        ) : null}
         <p className="muted-text">If opening and closing times are the same, the booking page treats the business as open for 24 hours starting from that time.</p>
       </div>
       <div className="field business-field-card">
@@ -4990,6 +5085,9 @@ export function AdminQuestionWorkspace({
           ) : openSection === "apportion" ? (
             <section className="panel workspace-card">
               <div className="apportion-section-actions">
+                <button className="button-secondary" type="button" onClick={() => addApportionDraftCard()}>
+                  Add Appointment
+                </button>
                 <button className="button-secondary" type="button" onClick={() => setIsApportionBusinessPanelOpen(true)}>
                   Business Panel
                 </button>
@@ -5027,9 +5125,6 @@ export function AdminQuestionWorkspace({
                   <strong>Appointment log</strong>
                   <div className="inline-actions apportion-log-head-actions">
                     <span className="status-chip">{combinedApportionAppointments.length}</span>
-                    <button className="button-secondary small-button" type="button" onClick={() => addApportionDraftCard()}>
-                      Add Appointment
-                    </button>
                   </div>
                 </div>
                 {isApportionAddAppointmentOpen || upcomingApportionAppointments.length ? (
@@ -5063,14 +5158,9 @@ export function AdminQuestionWorkspace({
                             workingDayKeys: selectedBusinessDayKeys,
                           })
                         : [];
+                      const isAvailabilityLoading = selectedBusiness?.appointmentShareCode === apportionAvailabilityLoadingShareCode;
                       const activeSlotCountsByIso = selectedBusiness
-                        ? ownerApportionAppointments
-                            .filter((appointment) => normalizeApportionIdentifier(appointment.ownerIdentifier) === normalizeApportionIdentifier(selectedBusiness.ownerIdentifier))
-                            .filter((appointment) => isActiveApportionStatus(appointment.currentStatus))
-                            .reduce<Record<string, number>>((counts, appointment) => {
-                              counts[appointment.startsAt] = (counts[appointment.startsAt] ?? 0) + 1;
-                              return counts;
-                            }, {})
+                        ? apportionSlotCountsByShareCode[selectedBusiness.appointmentShareCode] ?? {}
                         : {};
                       const draftSlotOptionsWithAvailability = draftSlotOptions.map((slotOption) => {
                         const startsAtIso = parseIstDateTimeInputToIso(slotOption.value);
@@ -5203,6 +5293,7 @@ export function AdminQuestionWorkspace({
                                   <label htmlFor={`apportion-draft-time-${draft.id}`}>Appointment time</label>
                                   <select
                                     className="select-field"
+                                    disabled={isAvailabilityLoading || !selectedBusiness}
                                     id={`apportion-draft-time-${draft.id}`}
                                     value={draft.slotTimeInput}
                                     onChange={(event) => updateApportionDraftCard(draft.id, (currentDraft) => ({
@@ -5210,12 +5301,12 @@ export function AdminQuestionWorkspace({
                                       slotTimeInput: event.target.value,
                                     }))}
                                   >
-                                    <option value="">Select a time</option>
-                                    {draftSlotOptionsWithAvailability.map((slotOption) => (
+                                    <option value="">{isAvailabilityLoading ? "Loading availability..." : "Select a time"}</option>
+                                    {!isAvailabilityLoading ? draftSlotOptionsWithAvailability.map((slotOption) => (
                                       <option disabled={!slotOption.isAvailable} key={slotOption.value} value={slotOption.value}>
                                         {slotOption.label} - {slotOption.isAvailable ? `Available (${slotOption.remainingCount} left)` : "Unavailable"}
                                       </option>
-                                    ))}
+                                    )) : null}
                                   </select>
                                 </div>
                               ) : null}
@@ -5308,6 +5399,22 @@ export function AdminQuestionWorkspace({
                         </div>
                       );
                     }) : null}
+                    {upcomingApportionAppointments.length ? (
+                      <div className="leaderboard-table-wrap apportion-upcoming-table-wrap">
+                        <table className="leaderboard-table apportion-upcoming-table">
+                          <thead>
+                            <tr>
+                              <th scope="col">S. No.</th>
+                              <th scope="col">Date and time (IST)</th>
+                              <th scope="col">Contact</th>
+                              <th scope="col">Phone</th>
+                              <th scope="col">Scope</th>
+                              <th scope="col">Status</th>
+                              <th scope="col">Notes</th>
+                              <th scope="col">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
                     {upcomingApportionAppointments.map((appointment) => {
                       const isOwnerScope = appointment.scope === "owner";
                       const isFutureAppointment = new Date(appointment.startsAt).getTime() > Date.now();
@@ -5330,32 +5437,28 @@ export function AdminQuestionWorkspace({
                           : "Pending"
                         : getApportionStatusLabel(appointment.currentStatus);
                       return (
-                        <div className={`notification-panel-item apportion-log-item ${isOwnerScope ? "is-owner-scope" : "is-requester-scope"}`} key={appointment.id}>
-                          <div className="apportion-appointment-summary">
-                            <div className="apportion-log-topline apportion-log-topline-card">
-                              <span className="status-chip apportion-serial-chip" aria-label={appointment.queuePosition ? `Serial number ${appointment.queuePosition}` : "No active serial number"}>
-                                {appointment.queuePosition ? `#${appointment.serialLabel}` : "--"}
-                              </span>
-                              <div className="apportion-log-card-copy">
-                                <strong>{formatShortDateTime(appointment.startsAt)}</strong>
-                                <span className="muted-text">
-                                  {isOwnerScope ? appointment.requesterName : appointment.ownerName ?? "Business"}
-                                </span>
-                                <span className="muted-text">
-                                  {isOwnerScope
-                                    ? formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier, { showFullPhoneNumber: true })
-                                    : formatPhoneNumberForDisplay(appointment.ownerIdentifier, { showFullPhoneNumber: true })}
-                                </span>
-                              </div>
+                        <Fragment key={appointment.id}>
+                          <tr className={isOwnerScope ? "is-owner-scope" : "is-requester-scope"}>
+                            <td>{appointment.queuePosition ? appointment.serialLabel : "--"}</td>
+                            <td>{formatShortDateTimeIst(appointment.startsAt)}</td>
+                            <td>{isOwnerScope ? appointment.requesterName : appointment.ownerName ?? "Business"}</td>
+                            <td>
+                              {isOwnerScope
+                                ? formatPhoneNumberForDisplay(appointment.requesterPhone ?? appointment.requesterIdentifier, { showFullPhoneNumber: true })
+                                : formatPhoneNumberForDisplay(appointment.ownerIdentifier, { showFullPhoneNumber: true })}
+                            </td>
+                            <td>{isOwnerScope ? "Received" : "Booked"}</td>
+                            <td>
                               <span className={`status-chip apportion-status-chip is-${appointment.currentStatus}`}>
                                 {isOwnerScope ? ownerStatusLabel : requesterQueueStatus.label}
                               </span>
-                            </div>
-                            {appointment.notes ? <p className="muted-text apportion-appointment-notes">Notes: {appointment.notes}</p> : null}
-                            {!isOwnerScope && requesterQueueStatus.helperText ? (
-                              <p className="muted-text apportion-appointment-notes">{requesterQueueStatus.helperText}</p>
-                            ) : null}
-                            <div className="inline-actions apportion-log-actions">
+                              {!isOwnerScope && requesterQueueStatus.helperText ? <span className="apportion-status-helper">{requesterQueueStatus.helperText}</span> : null}
+                            </td>
+                            <td>{appointment.notes || "-"}</td>
+                            <td>
+                              <details className="apportion-actions-menu">
+                                <summary className="button-secondary small-button">Actions</summary>
+                                <div className="apportion-actions-menu-list">
                               {isOwnerScope && isActiveApportionStatus(appointment.currentStatus) ? (
                                 <>
                                   <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "push-back")}>
@@ -5381,9 +5484,13 @@ export function AdminQuestionWorkspace({
                                   ) : null}
                                 </>
                               ) : null}
-                            </div>
+                                </div>
+                              </details>
+                            </td>
+                          </tr>
                             {!isOwnerScope && isRescheduling ? (
-                              <div className="apportion-inline-editor">
+                              <tr className="apportion-reschedule-row">
+                                <td colSpan={8}><div className="apportion-inline-editor">
                                 <label className="sr-only" htmlFor={`reschedule-date-${appointment.id}`}>New appointment date</label>
                                 <input
                                   className="date-time-input"
@@ -5418,12 +5525,16 @@ export function AdminQuestionWorkspace({
                                     Cancel
                                   </button>
                                 </div>
-                              </div>
+                                </div></td>
+                              </tr>
                             ) : null}
-                          </div>
-                        </div>
+                        </Fragment>
                       );
                     })}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <p className="muted-text">No upcoming appointments.</p>
@@ -5439,6 +5550,7 @@ export function AdminQuestionWorkspace({
                       <table className="leaderboard-table apportion-completed-table">
                         <thead>
                           <tr>
+                            <th scope="col">S. No.</th>
                             <th scope="col">Date and time (IST)</th>
                             <th scope="col">Contact</th>
                             <th scope="col">Phone</th>
@@ -5448,11 +5560,12 @@ export function AdminQuestionWorkspace({
                           </tr>
                         </thead>
                         <tbody>
-                          {completedApportionAppointments.map((appointment) => {
+                          {completedApportionAppointments.map((appointment, appointmentIndex) => {
                             const isOwnerScope = appointment.scope === "owner";
 
                             return (
                               <tr key={`completed-${appointment.id}`}>
+                                <td>{appointmentIndex + 1}</td>
                                 <td>{formatShortDateTimeIst(appointment.startsAt)}</td>
                                 <td>{isOwnerScope ? appointment.requesterName : appointment.ownerName ?? "Business"}</td>
                                 <td>

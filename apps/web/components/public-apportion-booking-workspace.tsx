@@ -21,6 +21,7 @@ type BookingPayload = {
     name: string;
     ownerIdentifier: string;
     profileImageDataUrl: string | null;
+    recurringBookingLimit: number | null;
     recurringBookingsEnabled: boolean;
     showRemainingBookings: boolean;
     slotDurationMinutes: number | null;

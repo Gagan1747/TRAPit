@@ -427,6 +427,7 @@ export async function listWorkspaceAppointmentBusinesses() {
         justAddToList: branding.justAddToList === true,
         name,
         ownerIdentifier,
+        recurringBookingLimit: branding.recurringBookingsEnabled === true ? branding.recurringBookingLimit ?? 6 : null,
         recurringBookingsEnabled: branding.recurringBookingsEnabled === true,
         slotDurationMinutes: branding.slotDurationMinutes ?? null,
         workingDays: branding.workingDays,
@@ -442,6 +443,7 @@ export async function listWorkspaceAppointmentBusinesses() {
       justAddToList: boolean;
       name: string;
       ownerIdentifier: string;
+      recurringBookingLimit: number | null;
       recurringBookingsEnabled: boolean;
       slotDurationMinutes: number | null;
       workingDays: string;

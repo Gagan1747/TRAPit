@@ -1195,8 +1195,14 @@ main {
 
 .apportion-section-actions {
   display: flex;
+  flex-wrap: nowrap;
+  gap: 10px;
   justify-content: flex-end;
   margin-bottom: 14px;
+}
+
+.apportion-section-actions .button-secondary {
+  flex: 0 0 auto;
 }
 
 .apportion-modal-overlay {
@@ -1262,6 +1268,70 @@ main {
 .apportion-completed-table td:last-child {
   min-width: 180px;
   white-space: normal;
+}
+
+.apportion-upcoming-table-wrap {
+  margin-top: 0;
+}
+
+.apportion-upcoming-table th:first-child,
+.apportion-upcoming-table td:first-child,
+.apportion-completed-table th:first-child,
+.apportion-completed-table td:first-child {
+  width: 72px;
+  min-width: 72px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.apportion-upcoming-table td:nth-child(2),
+.apportion-completed-table td:nth-child(2) {
+  min-width: 170px;
+  font-weight: 700;
+}
+
+.apportion-status-helper {
+  display: block;
+  max-width: 190px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.apportion-actions-menu {
+  position: relative;
+}
+
+.apportion-actions-menu summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.apportion-actions-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.apportion-actions-menu-list {
+  position: absolute;
+  right: 0;
+  z-index: 8;
+  display: grid;
+  gap: 6px;
+  min-width: 132px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  box-shadow: 0 14px 30px rgba(28, 20, 15, 0.16);
+}
+
+.apportion-actions-menu-list .button-secondary {
+  width: 100%;
+}
+
+.apportion-reschedule-row td {
+  background: var(--surface-soft);
 }
 
 .apportion-log-badges {

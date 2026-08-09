@@ -2,7 +2,7 @@ import { getSessionDisplayName, getSessionIdentifier } from "@trapit/auth";
 import { type WorkspaceBranding } from "@trapit/testing";
 import { NextResponse } from "next/server";
 
-import { createApportionAppointment, listApportionAppointmentsForOwner, listApportionSlotCounts } from "../../../../lib/apportion-store";
+import { createApportionAppointment, listApportionAppointmentsForOwner, listApportionAppointmentsForRequester, listApportionSlotCounts } from "../../../../lib/apportion-store";
 import { publishWorkspaceEvent } from "../../../../lib/realtime-events";
 import { getWebSession } from "../../../../lib/session";
 import { getWorkspaceBrandingByAppointmentShareCode } from "../../../../lib/testing-store";
@@ -316,6 +316,7 @@ export async function GET(
       name: business.branding.instituteName,
       ownerIdentifier: business.ownerIdentifier,
       profileImageDataUrl: business.branding.profileImageDataUrl,
+      recurringBookingLimit: business.branding.recurringBookingsEnabled === true ? business.branding.recurringBookingLimit ?? 6 : null,
       recurringBookingsEnabled: business.branding.recurringBookingsEnabled === true,
       showRemainingBookings: business.branding.showRemainingBookings,
       slotDurationMinutes: business.branding.slotDurationMinutes ?? null,
@@ -373,23 +374,47 @@ export async function POST(
     return NextResponse.json({ error: "Recurring bookings are disabled for this business." }, { status: 400 });
   }
 
+  const recurringBookingLimit = business.branding.recurringBookingLimit ?? 6;
   const slotDateKeys = recurrence
     ? buildRecurringDateKeys({
         endDateKey: recurrence.endDateKey,
         slotDateKey,
         weekdayKeys: recurrence.weekdayKeys,
-      })
+      }).slice(0, recurringBookingLimit)
     : [slotDateKey];
   const appointments = [] as Array<{ id: string }>;
   const cautionMessages = new Set<string>();
 
   try {
     validateBookingDate(business.branding, slotDateKey);
+    const [ownerAppointments, requesterAppointments] = await Promise.all([
+      listApportionAppointmentsForOwner(business.ownerIdentifier),
+      recurrence ? listApportionAppointmentsForRequester(requesterIdentifier) : Promise.resolve([]),
+    ]);
+    const activeOwnerAppointments = ownerAppointments.filter((appointment) =>
+      appointment.currentStatus === "pending"
+      || appointment.currentStatus === "present-in-person"
+      || appointment.currentStatus === "pushed-back",
+    );
+
+    if (recurrence) {
+      const conflictingDateKey = slotDateKeys.find((recurringDateKey) => requesterAppointments.some((appointment) =>
+        appointment.ownerIdentifier.trim().toLowerCase() === business.ownerIdentifier.trim().toLowerCase()
+        && appointment.serviceDateKey === recurringDateKey
+        && (appointment.currentStatus === "pending"
+          || appointment.currentStatus === "present-in-person"
+          || appointment.currentStatus === "pushed-back"),
+      ));
+
+      if (conflictingDateKey) {
+        throw new Error(`You already have an active appointment with this business on ${conflictingDateKey}.`);
+      }
+    }
+
+    const plannedAppointments: Array<{ justAddToList: boolean; serviceDateKey: string; startsAt: string }> = [];
 
     if (business.branding.justAddToList) {
-      const ownerAppointments = await listApportionAppointmentsForOwner(business.ownerIdentifier);
-      const activeCountsByDateKey = ownerAppointments
-        .filter((appointment) => appointment.currentStatus === "pending" || appointment.currentStatus === "present-in-person" || appointment.currentStatus === "pushed-back")
+      const activeCountsByDateKey = activeOwnerAppointments
         .reduce<Record<string, number>>((counts, appointment) => {
           counts[appointment.serviceDateKey] = (counts[appointment.serviceDateKey] ?? 0) + 1;
           return counts;
@@ -405,20 +430,11 @@ export async function POST(
           branding: business.branding,
           serviceDateKey: recurringDateKey,
         });
-        const appointment = await createApportionAppointment({
-          appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
+        plannedAppointments.push({
           justAddToList: true,
-          notes: body.notes,
-          ownerIdentifier: business.ownerIdentifier,
-          ownerName: business.branding.instituteName,
-          requesterIdentifier,
-          requesterName: getSessionDisplayName(session) ?? requesterIdentifier,
-          requesterPhone: session.phoneNumber ?? requesterIdentifier,
           serviceDateKey: recurringDateKey,
           startsAt: estimate.startsAt,
         });
-
-        appointments.push({ id: appointment.id });
         activeCountsByDateKey[recurringDateKey] = activeCount + 1;
 
         if (estimate.exceedsWorkingHours) {
@@ -439,6 +455,11 @@ export async function POST(
         throw new Error("Choose one of the available appointment slots.");
       }
 
+      const activeCountsBySlot = activeOwnerAppointments.reduce<Record<string, number>>((counts, appointment) => {
+        counts[appointment.startsAt] = (counts[appointment.startsAt] ?? 0) + 1;
+        return counts;
+      }, {});
+
       for (const recurringDateKey of slotDateKeys) {
         validateBookingDate(business.branding, recurringDateKey);
         const recurringStartsAt = createUtcSlotIso(recurringDateKey, selectedSlot.dayOffset, selectedSlot.minutesOfDay);
@@ -449,20 +470,36 @@ export async function POST(
 
         const recurringStartDate = new Date(recurringStartsAt);
         validateRequestedSlot(business.branding, recurringStartDate, recurringDateKey);
-        const appointment = await createApportionAppointment({
-          appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
-          notes: body.notes,
-          ownerIdentifier: business.ownerIdentifier,
-          ownerName: business.branding.instituteName,
-          requesterIdentifier,
-          requesterName: getSessionDisplayName(session) ?? requesterIdentifier,
-          requesterPhone: session.phoneNumber ?? requesterIdentifier,
+        const appointmentsPerSlot = business.branding.appointmentsPerSlot ?? 1;
+
+        if ((activeCountsBySlot[recurringStartsAt] ?? 0) >= appointmentsPerSlot) {
+          throw new Error(`The appointment slot on ${recurringDateKey} is already full.`);
+        }
+
+        plannedAppointments.push({
+          justAddToList: false,
           serviceDateKey: recurringDateKey,
           startsAt: recurringStartsAt,
         });
-
-        appointments.push({ id: appointment.id });
+        activeCountsBySlot[recurringStartsAt] = (activeCountsBySlot[recurringStartsAt] ?? 0) + 1;
       }
+    }
+
+    for (const plannedAppointment of plannedAppointments) {
+      const appointment = await createApportionAppointment({
+        appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
+        justAddToList: plannedAppointment.justAddToList,
+        notes: body.notes,
+        ownerIdentifier: business.ownerIdentifier,
+        ownerName: business.branding.instituteName,
+        requesterIdentifier,
+        requesterName: getSessionDisplayName(session) ?? requesterIdentifier,
+        requesterPhone: session.phoneNumber ?? requesterIdentifier,
+        serviceDateKey: plannedAppointment.serviceDateKey,
+        startsAt: plannedAppointment.startsAt,
+      });
+
+      appointments.push({ id: appointment.id });
     }
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to book appointment." }, { status: 400 });

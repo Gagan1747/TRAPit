@@ -72,6 +72,7 @@ export type WorkspaceBranding = {
   instituteName: string;
   justAddToList: boolean;
   profileImageDataUrl: string | null;
+  recurringBookingLimit?: number | null;
   recurringBookingsEnabled?: boolean;
   showRemainingBookings: boolean;
   slotDurationMinutes: number | null;
@@ -563,6 +564,14 @@ export function normalizeWorkspaceBranding(
   const breakHours = branding.breakHours?.trim() ?? "";
   const justAddToList = branding.justAddToList === true;
   const recurringBookingsEnabled = branding.recurringBookingsEnabled === true;
+  const recurringBookingLimit = recurringBookingsEnabled
+    && Number.isInteger(branding.recurringBookingLimit)
+    && (branding.recurringBookingLimit ?? 0) >= 1
+    && (branding.recurringBookingLimit ?? 0) <= 12
+    ? branding.recurringBookingLimit ?? 6
+    : recurringBookingsEnabled
+      ? 6
+      : null;
   const workingDays = branding.workingDays?.trim() ?? "";
   const workingHours = branding.workingHours?.trim() ?? "";
   const workingHoursSecondWindow = branding.workingHoursSecondWindow?.trim() ?? "";
@@ -589,6 +598,7 @@ export function normalizeWorkspaceBranding(
     instituteName,
     justAddToList,
     profileImageDataUrl,
+    recurringBookingLimit,
     recurringBookingsEnabled,
     showRemainingBookings,
     slotDurationMinutes,
