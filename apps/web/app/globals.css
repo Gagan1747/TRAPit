@@ -1455,7 +1455,8 @@ main {
     top: 8px;
     right: 8px;
     bottom: 8px;
-    width: calc(100vw - 16px);
+    width: 100%;
+    max-width: calc(100vw - 16px);
     padding: 18px;
     border-radius: 20px;
   }

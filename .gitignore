@@ -10,3 +10,4 @@ coverage
 renflair-sample/*
 !renflair-sample/.gitkeep
 review-assets/game-html/trapit.html
+*tsbuildinfo

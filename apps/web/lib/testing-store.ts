@@ -413,13 +413,15 @@ export async function listWorkspaceAppointmentBusinesses() {
       const appointmentShareCode = branding.appointmentShareCode?.trim()
         || state.workspaceAppointmentShareCodesByActor[ownerIdentifier]?.trim()
         || "";
-      const name = branding.instituteName.trim() || ownerIdentifier;
+      const name = branding.instituteName.trim();
+      const address = branding.address?.trim() ?? "";
 
-      if (!appointmentShareCode) {
+      if (!appointmentShareCode || !name || !address || !branding.workingDays?.trim() || !branding.workingHours?.trim()) {
         return null;
       }
 
       return {
+        address,
         advanceBookingWeeks: branding.advanceBookingWeeks ?? 4,
         appointmentNotesPrompt: branding.appointmentNotesPrompt,
         appointmentShareCode,
@@ -436,6 +438,7 @@ export async function listWorkspaceAppointmentBusinesses() {
       };
     })
     .filter((entry): entry is {
+      address: string;
       advanceBookingWeeks: number;
       appointmentNotesPrompt: string;
       appointmentShareCode: string;

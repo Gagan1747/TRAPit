@@ -522,6 +522,7 @@ type ApportionDashboardResponse = {
 };
 
 type ApportionBusinessLookup = {
+  address: string;
   advanceBookingWeeks: number;
   appointmentNotesPrompt: string;
   appointmentShareCode: string;
@@ -5202,7 +5203,7 @@ export function AdminQuestionWorkspace({
                                   value={draft.businessTitleQuery}
                                   onChange={(event) => {
                                     const nextValue = event.target.value;
-                                    const matchedBusiness = availableApportionBusinesses.find((business) => business.name === nextValue) ?? null;
+                                    const matchedBusiness = availableApportionBusinesses.find((business) => `${business.name} - ${business.address}` === nextValue) ?? null;
 
                                     if (matchedBusiness) {
                                       handleApportionDraftBusinessSelection(draft.id, matchedBusiness);
@@ -5223,7 +5224,7 @@ export function AdminQuestionWorkspace({
                                 />
                                 <datalist id={`apportion-draft-business-options-${draft.id}`}>
                                   {availableApportionBusinesses.map((business) => (
-                                    <option key={`${draft.id}-${business.appointmentShareCode}-name`} value={business.name}>{formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true })}</option>
+                                    <option key={`${draft.id}-${business.appointmentShareCode}-name`} value={`${business.name} - ${business.address}`}>{formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true })}</option>
                                   ))}
                                 </datalist>
                               </div>
