@@ -1423,6 +1423,11 @@ main {
   color: #9e2525;
 }
 
+.apportion-status-chip.is-missed {
+  background: rgba(107, 114, 128, 0.18);
+  color: #4b5563;
+}
+
 .apportion-serial-chip {
   min-width: 2.4rem;
   justify-content: center;

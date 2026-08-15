@@ -35,6 +35,7 @@ export type ApportionAppointmentStatus =
   | "done"
   | "pushed-back"
   | "rejected"
+  | "missed"
   | "cancelled";
 
 export type ApportionAppointmentHistoryAction =
@@ -43,6 +44,7 @@ export type ApportionAppointmentHistoryAction =
   | "done"
   | "pushed-back"
   | "rejected"
+  | "missed"
   | "cancelled"
   | "rescheduled";
 
@@ -83,6 +85,7 @@ function normalizeStatus(value: string | null | undefined, canceledAt: string | 
     || value === "done"
     || value === "pushed-back"
     || value === "rejected"
+    || value === "missed"
     || value === "cancelled") {
     return value;
   }
@@ -96,6 +99,7 @@ function normalizeHistoryAction(value: string | null | undefined): ApportionAppo
     || value === "done"
     || value === "pushed-back"
     || value === "rejected"
+    || value === "missed"
     || value === "cancelled"
     || value === "rescheduled") {
     return value;
@@ -143,6 +147,33 @@ function getOwnerDayKey(appointment: Pick<ApportionAppointment, "ownerIdentifier
 
 function isActiveStatus(status: ApportionAppointmentStatus) {
   return status === "pending" || status === "present-in-person" || status === "pushed-back";
+}
+
+function applyMissedTransitions(state: ApportionState) {
+  const todayDateKey = getAppointmentDayKey(new Date().toISOString());
+  const timestamp = new Date().toISOString();
+  let changed = false;
+
+  state.appointments.forEach((appointment) => {
+    const appointmentDateKey = getAppointmentDayKey(appointment.startsAt);
+
+    if (!isActiveStatus(appointment.currentStatus) || !appointmentDateKey || appointmentDateKey >= todayDateKey) {
+      return;
+    }
+
+    appointment.currentStatus = "missed";
+    appointment.presentInPersonAt = null;
+    appointment.statusUpdatedAt = timestamp;
+    appointment.history.push(createHistoryEntry({
+      action: "missed",
+      actorIdentifier: "system",
+      at: timestamp,
+      toStartsAt: appointment.startsAt,
+    }));
+    changed = true;
+  });
+
+  return changed;
 }
 
 function compareAppointments(left: Pick<ApportionAppointment, "createdAt" | "queueOrder" | "startsAt">, right: Pick<ApportionAppointment, "createdAt" | "queueOrder" | "startsAt">) {
@@ -309,7 +340,14 @@ async function ensureStoreDirectory() {
 async function readState(): Promise<ApportionState> {
   try {
     const rawValue = await readFile(STORE_PATH, "utf8");
-    return normalizeState(JSON.parse(rawValue) as Partial<ApportionState>);
+    const state = normalizeState(JSON.parse(rawValue) as Partial<ApportionState>);
+
+    if (applyMissedTransitions(state)) {
+      state.appointments = normalizeAppointments(state.appointments);
+      await writeState(state);
+    }
+
+    return state;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       const state = normalizeState({});

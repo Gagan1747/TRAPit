@@ -480,9 +480,9 @@ type ApportionAppointment = {
   canceledByIdentifier: string | null;
   bookedQueuePosition: number;
   createdAt: string;
-  currentStatus: "cancelled" | "done" | "pending" | "present-in-person" | "pushed-back" | "rejected";
+  currentStatus: "cancelled" | "done" | "missed" | "pending" | "present-in-person" | "pushed-back" | "rejected";
   history: Array<{
-    action: "booked" | "cancelled" | "done" | "present-in-person" | "pushed-back" | "rejected" | "rescheduled";
+    action: "booked" | "cancelled" | "done" | "missed" | "present-in-person" | "pushed-back" | "rejected" | "rescheduled";
     actorIdentifier: string;
     at: string;
     fromStartsAt: string | null;
@@ -992,7 +992,9 @@ function getApportionStatusLabel(status: ApportionAppointment["currentStatus"]) 
     case "pushed-back":
       return "Pending";
     case "rejected":
-      return "Rejected";
+      return "Absent";
+    case "missed":
+      return "Missed";
     case "cancelled":
       return "Cancelled";
     default:
@@ -2091,7 +2093,7 @@ export function AdminQuestionWorkspace({
     options?: { nextStartsAt?: string; requiresConfirmation?: boolean },
   ) {
     if (options?.requiresConfirmation && !window.confirm(action === "reject"
-      ? "Reject this appointment? It will remain in the appointment log."
+      ? "Mark this appointment absent? It will remain in the appointment log."
       : "Proceed with this appointment update?")) {
       return;
     }
@@ -5464,13 +5466,13 @@ export function AdminQuestionWorkspace({
                               {isOwnerScope && isActiveApportionStatus(appointment.currentStatus) ? (
                                 <>
                                   <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "push-back")}>
-                                    Absent
+                                    Unavailable
                                   </button>
                                   <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "done")}>
                                     Done
                                   </button>
                                   <button className="button-secondary small-button" type="button" onClick={() => void handleApportionAction(appointment.id, "reject", { requiresConfirmation: true })}>
-                                    Reject
+                                    Absent
                                   </button>
                                 </>
                               ) : null}
