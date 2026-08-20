@@ -347,6 +347,35 @@ main {
   justify-content: center;
 }
 
+.dashboard-top-nav-count {
+  display: inline-grid;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0 5px;
+  place-items: center;
+  border-radius: 999px;
+  background: #6246a3;
+  color: #fff;
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.workspace-result-table-group {
+  display: grid;
+  gap: 10px;
+}
+
+.workspace-result-table-group h3 {
+  margin: 0;
+  color: var(--ink-strong);
+  font-size: 1rem;
+}
+
+.workspace-result-table-group td:last-child,
+.workspace-result-table-group th:last-child {
+  white-space: nowrap;
+}
+
 .dashboard-top-nav-item.is-active,
 .admin-menu-item.is-active {
   border-color: rgba(98, 70, 163, 0.45);

@@ -1847,11 +1847,14 @@ export function AdminQuestionWorkspace({
 
       setIsApportionAddAppointmentOpen(false);
       setIsApportionBusinessPanelOpen(false);
+      if (openSection === "schedule" || openSection === "poll-schedule") {
+        setOpenSection("history");
+      }
     }
 
     document.addEventListener("keydown", handleEscape);
     return () => document.removeEventListener("keydown", handleEscape);
-  }, []);
+  }, [openSection]);
 
   useEffect(() => {
     return () => {
@@ -2931,6 +2934,10 @@ export function AdminQuestionWorkspace({
   }
 
   function getActiveTopLevelSection(): "apportion" | "poll" | "reports" | "test" {
+    if (openSection === "history") {
+      return resultsMode === "polls" ? "poll" : "test";
+    }
+
     if (openSection === "poll-questions" || openSection === "poll-schedule") {
       return "poll";
     }
@@ -2951,13 +2958,15 @@ export function AdminQuestionWorkspace({
 
     if (section === "test") {
       setIsTestAddQuestionOpen(false);
-      setOpenSection("schedule");
+      setResultsMode("tests");
+      setOpenSection("history");
       return;
     }
 
     if (section === "poll") {
       setIsPollAddQuestionOpen(false);
-      setOpenSection("poll-schedule");
+      setResultsMode("polls");
+      setOpenSection("history");
       return;
     }
 
@@ -4265,21 +4274,26 @@ export function AdminQuestionWorkspace({
       : ([{ label: "Join", section: "join-groups" }] satisfies Array<{ label: string; section: AdminWorkspaceSection }>)),
   ];
   const activeTopLevelSection = getActiveTopLevelSection();
-  const topLevelNavigationItems: Array<{
+  function getTopLevelNavigationItems(): Array<{
+    count: number;
     label: string;
     section: "apportion" | "poll" | "reports" | "test";
-  }> = [
-    {
-      label: "Test",
-      section: "test",
-    },
-    { label: "R....", section: "reports" },
-    { label: "Apportion", section: "apportion" },
-    {
-      label: "Poll",
-      section: "poll",
-    },
-  ];
+  }> {
+    return [
+      {
+        count: testToggleLiveCount + testToggleUpcomingCount,
+        label: "Test",
+        section: "test",
+      },
+      { count: 0, label: "R....", section: "reports" },
+      { count: apportionNavigationCount, label: "Apportion", section: "apportion" },
+      {
+        count: pollToggleLiveCount + pollToggleUpcomingCount,
+        label: "Poll",
+        section: "poll",
+      },
+    ];
+  }
   const isComingSoonSection = openSection === "reports-coming-soon" || openSection === "analytics-coming-soon";
   const sortedScheduledPolls = [...scheduledPolls].sort((leftPoll, rightPoll) => {
     const priorityDifference =
@@ -4346,6 +4360,19 @@ export function AdminQuestionWorkspace({
   const testToggleUpcomingCount = filteredMergedTests.filter((test) => test.status === "scheduled").length;
   const pollToggleLiveCount = filteredMergedPolls.filter((poll) => poll.status === "live").length;
   const pollToggleUpcomingCount = filteredMergedPolls.filter((poll) => poll.status === "scheduled").length;
+  const upcomingMergedTests = filteredMergedTests.filter((test) => test.status !== "completed");
+  const completedMergedTests = filteredMergedTests.filter((test) => test.status === "completed");
+  const upcomingMergedPolls = filteredMergedPolls.filter((poll) => poll.status !== "completed");
+  const completedMergedPolls = filteredMergedPolls.filter((poll) => poll.status === "completed");
+  const apportionNavigationCount = Array.from(
+    new Map(
+      [...ownerApportionAppointments, ...requesterApportionAppointments].map((appointment) => [appointment.id, appointment]),
+    ).values(),
+  ).filter((appointment) =>
+    appointment.currentStatus === "pending"
+    || appointment.currentStatus === "present-in-person"
+    || appointment.currentStatus === "pushed-back",
+  ).length;
   const brandingPreview = normalizeBrandingInput({
     address: brandingAddress,
     advanceBookingWeeks: 4,
@@ -4961,7 +4988,7 @@ export function AdminQuestionWorkspace({
       <div className="workspace-toolbar">
         <div className="dashboard-top-nav panel workspace-card">
           <div className="dashboard-top-nav-row" role="tablist" aria-label="Workspace navigation">
-            {topLevelNavigationItems.map((item) => (
+            {getTopLevelNavigationItems().map((item) => (
               <div
                 key={item.section}
                 className={`dashboard-top-nav-item-shell${activeTopLevelSection === item.section ? " is-active" : ""}`}
@@ -4974,6 +5001,7 @@ export function AdminQuestionWorkspace({
                   onClick={() => handleTopLevelSelection(item.section)}
                 >
                   {item.label}
+                  {item.count > 0 ? <span className="dashboard-top-nav-count">{item.count}</span> : null}
                 </button>
               </div>
             ))}
@@ -6004,13 +6032,15 @@ export function AdminQuestionWorkspace({
         </div>
       </CollapsibleWorkspaceSection>
 
-      <CollapsibleWorkspaceSection
-        eyebrow=""
-        isOpen={openSection === "question-bank"}
-        sectionId="admin-question-bank"
-        title="Question Pools"
-        onToggle={() => toggleSection("question-bank")}
-      >
+      {openSection === "question-bank" ? (
+        <div className="apportion-modal-overlay" role="presentation" onClick={() => setOpenSection("history")}>
+          <div aria-labelledby="test-questions-drawer-title" className="apportion-floating-drawer panel" role="dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="workspace-overflow-head">
+              <h2 id="test-questions-drawer-title">Add Test Questions</h2>
+              <button className="button-secondary small-button" type="button" onClick={() => setOpenSection("history")}>
+                Close
+              </button>
+            </div>
         {isLoading ? (
           <div className="empty-state">
             <p className="muted-text">Loading the shared admin bank...</p>
@@ -6432,7 +6462,9 @@ export function AdminQuestionWorkspace({
             </p>
           </div>
         )}
-      </CollapsibleWorkspaceSection>
+          </div>
+        </div>
+      ) : null}
 
       <CollapsibleWorkspaceSection
         eyebrow=""
@@ -6797,13 +6829,15 @@ export function AdminQuestionWorkspace({
         </div>
       </CollapsibleWorkspaceSection>
 
-      <CollapsibleWorkspaceSection
-        eyebrow=""
-        isOpen={openSection === "schedule"}
-        sectionId="admin-schedule-tests"
-        title="Schedule Test"
-        onToggle={() => toggleSection("schedule")}
-      >
+      {openSection === "schedule" ? (
+        <div className="apportion-modal-overlay" role="presentation" onClick={() => setOpenSection("history")}>
+          <div aria-labelledby="schedule-test-drawer-title" className="apportion-floating-drawer panel" role="dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="workspace-overflow-head">
+              <h2 id="schedule-test-drawer-title">{editingScheduledTestId ? "Edit Test" : "Schedule Test"}</h2>
+              <button className="button-secondary small-button" type="button" onClick={() => setOpenSection("history")}>
+                Close
+              </button>
+            </div>
         <div className="form-stack">
           <CollapsibleWorkspaceSection
             eyebrow=""
@@ -7141,15 +7175,19 @@ export function AdminQuestionWorkspace({
             ) : null}
           </div>
         </div>
-      </CollapsibleWorkspaceSection>
+          </div>
+        </div>
+      ) : null}
 
-      <CollapsibleWorkspaceSection
-        eyebrow=""
-        isOpen={openSection === "poll-questions"}
-        sectionId="admin-poll-questions"
-        title="Add Poll Question"
-        onToggle={() => toggleSection("poll-questions")}
-      >
+      {openSection === "poll-questions" ? (
+        <div className="apportion-modal-overlay" role="presentation" onClick={() => setOpenSection("history")}>
+          <div aria-labelledby="poll-questions-drawer-title" className="apportion-floating-drawer panel" role="dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="workspace-overflow-head">
+              <h2 id="poll-questions-drawer-title">Add Poll Questions</h2>
+              <button className="button-secondary small-button" type="button" onClick={() => setOpenSection("history")}>
+                Close
+              </button>
+            </div>
         <div className="form-stack">
           <div className="question-bank-summary">
             <div>
@@ -7430,15 +7468,19 @@ export function AdminQuestionWorkspace({
             </div>
           ) : null}
         </div>
-      </CollapsibleWorkspaceSection>
+          </div>
+        </div>
+      ) : null}
 
-      <CollapsibleWorkspaceSection
-        eyebrow=""
-        isOpen={openSection === "poll-schedule"}
-        sectionId="admin-schedule-polls"
-        title="Schedule Poll"
-        onToggle={() => toggleSection("poll-schedule")}
-      >
+      {openSection === "poll-schedule" ? (
+        <div className="apportion-modal-overlay" role="presentation" onClick={() => setOpenSection("history")}>
+          <div aria-labelledby="schedule-poll-drawer-title" className="apportion-floating-drawer panel" role="dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="workspace-overflow-head">
+              <h2 id="schedule-poll-drawer-title">{editingScheduledPollId ? "Edit Poll" : "Schedule Poll"}</h2>
+              <button className="button-secondary small-button" type="button" onClick={() => setOpenSection("history")}>
+                Close
+              </button>
+            </div>
         <div className="form-stack">
           <CollapsibleWorkspaceSection
             eyebrow=""
@@ -7983,14 +8025,58 @@ export function AdminQuestionWorkspace({
             </div>
           )}
         </div>
-      </CollapsibleWorkspaceSection>
+          </div>
+        </div>
+      ) : null}
 
       <CollapsibleWorkspaceSection
         eyebrow=""
         isOpen={openSection === "history"}
         sectionId="admin-test-history"
-        title="Results"
+        title={resultsMode === "tests" ? "Tests" : "Polls"}
         onToggle={() => toggleSection("history")}
+        action={
+          <>
+            <button
+              className="button-secondary small-button"
+              type="button"
+              onClick={() => {
+                const section = resultsMode === "tests" ? "question-bank" : "poll-questions";
+                const lockedPrompt = currentActorRole === "user" && currentUserCategory
+                  ? getSectionUpgradePrompt(section, currentUserCategory)
+                  : null;
+
+                if (lockedPrompt) {
+                  openUpgradePanel(lockedPrompt);
+                  return;
+                }
+
+                handleMenuSectionSelection(section);
+              }}
+            >
+              + Add Questions
+            </button>
+            <button
+              className="button-secondary small-button"
+              type="button"
+              onClick={() => {
+                const section = resultsMode === "tests" ? "schedule" : "poll-schedule";
+                const lockedPrompt = currentActorRole === "user" && currentUserCategory
+                  ? getSectionUpgradePrompt(section, currentUserCategory)
+                  : null;
+
+                if (lockedPrompt) {
+                  openUpgradePanel(lockedPrompt);
+                  return;
+                }
+
+                handleMenuSectionSelection(section);
+              }}
+            >
+              {resultsMode === "tests" ? "Schedule Test" : "Schedule Poll"}
+            </button>
+          </>
+        }
       >
         <div className="form-stack">
           {activeParticipantTest ? (
@@ -8091,35 +8177,6 @@ export function AdminQuestionWorkspace({
             </div>
           ) : null}
 
-          <div aria-label="Results mode" className="segmented-control" role="group">
-            <button
-              aria-label={`Show tests. ${testToggleLiveCount} live, ${testToggleUpcomingCount} upcoming.`}
-              aria-pressed={resultsMode === "tests"}
-              className={`segmented-control-item has-counts${resultsMode === "tests" ? " is-active" : ""}`}
-              type="button"
-              onClick={() => setResultsMode("tests")}
-            >
-              <span className="segmented-control-label">Test</span>
-              <span className="segmented-counts" aria-hidden="true">
-                <span className="segmented-count-badge">Live {testToggleLiveCount}</span>
-                <span className="segmented-count-badge">Upcoming {testToggleUpcomingCount}</span>
-              </span>
-            </button>
-            <button
-              aria-label={`Show polls. ${pollToggleLiveCount} live, ${pollToggleUpcomingCount} upcoming.`}
-              aria-pressed={resultsMode === "polls"}
-              className={`segmented-control-item has-counts${resultsMode === "polls" ? " is-active" : ""}`}
-              type="button"
-              onClick={() => setResultsMode("polls")}
-            >
-              <span className="segmented-control-label">Poll</span>
-              <span className="segmented-counts" aria-hidden="true">
-                <span className="segmented-count-badge">Live {pollToggleLiveCount}</span>
-                <span className="segmented-count-badge">Upcoming {pollToggleUpcomingCount}</span>
-              </span>
-            </button>
-          </div>
-
           {participantResult ? (
             <section className="result-panel">
               <h3>Latest result</h3>
@@ -8142,6 +8199,75 @@ export function AdminQuestionWorkspace({
 
           {!activeParticipantTest && resultsMode === "tests" ? (
             filteredMergedTests.length ? (
+              <div className="form-stack">
+                <div className="workspace-result-table-group">
+                  <h3>Upcoming</h3>
+                  {upcomingMergedTests.length ? (
+                    <div className="leaderboard-table-wrap">
+                      <table className="leaderboard-table">
+                        <thead>
+                          <tr>
+                            <th>Test</th>
+                            <th>Starts</th>
+                            <th>Questions</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {upcomingMergedTests.map((test) => (
+                            <tr key={`upcoming-test-${test.id}`}>
+                              <td>{test.title}</td>
+                              <td>{formatShortDateTime(test.startsAt)}</td>
+                              <td>{test.questionCount}</td>
+                              <td><span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>{test.status}</span></td>
+                              <td>
+                                <button className="button-secondary small-button" type="button" onClick={() => toggleTestResultCollapse(test.id)}>
+                                  View details
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : <p className="muted-text">No upcoming tests.</p>}
+                </div>
+
+                <div className="workspace-result-table-group">
+                  <h3>Completed</h3>
+                  {completedMergedTests.length ? (
+                    <div className="leaderboard-table-wrap">
+                      <table className="leaderboard-table">
+                        <thead>
+                          <tr>
+                            <th>Test</th>
+                            <th>Completed</th>
+                            <th>Questions</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {completedMergedTests.map((test) => (
+                            <tr key={`completed-test-${test.id}`}>
+                              <td>{test.title}</td>
+                              <td>{formatShortDateTime(test.startsAt)}</td>
+                              <td>{test.questionCount}</td>
+                              <td><span className="status-chip success">Completed</span></td>
+                              <td>
+                                <button className="button-secondary small-button" type="button" onClick={() => toggleTestResultCollapse(test.id)}>
+                                  View results
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : <p className="muted-text">No completed tests.</p>}
+                </div>
+
               <div className="question-list">
                 {filteredMergedTests.map((test) => {
                 const scheduledTest = test.scheduledTest;
@@ -8635,12 +8761,78 @@ export function AdminQuestionWorkspace({
                 );
               })}
               </div>
+              </div>
             ) : (
               <div className="empty-state">
                 <p className="muted-text">No tests match this view yet.</p>
               </div>
             )
           ) : !activeParticipantTest && filteredMergedPolls.length ? (
+            <div className="form-stack">
+              <div className="workspace-result-table-group">
+                <h3>Upcoming</h3>
+                {upcomingMergedPolls.length ? (
+                  <div className="leaderboard-table-wrap">
+                    <table className="leaderboard-table">
+                      <thead>
+                        <tr>
+                          <th>Poll</th>
+                          <th>Starts</th>
+                          <th>Status</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {upcomingMergedPolls.map((poll) => (
+                          <tr key={`upcoming-poll-${poll.id}`}>
+                            <td>{poll.title}</td>
+                            <td>{formatShortDateTime(poll.startsAt)}</td>
+                            <td><span className={`status-chip ${poll.status === "live" ? "success" : "warning"}`}>{poll.status}</span></td>
+                            <td>
+                              <button className="button-secondary small-button" type="button" onClick={() => toggleOpenPollResultDetails(poll.id)}>
+                                View details
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : <p className="muted-text">No upcoming polls.</p>}
+              </div>
+
+              <div className="workspace-result-table-group">
+                <h3>Completed</h3>
+                {completedMergedPolls.length ? (
+                  <div className="leaderboard-table-wrap">
+                    <table className="leaderboard-table">
+                      <thead>
+                        <tr>
+                          <th>Poll</th>
+                          <th>Ended</th>
+                          <th>Status</th>
+                          <th>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {completedMergedPolls.map((poll) => (
+                          <tr key={`completed-poll-${poll.id}`}>
+                            <td>{poll.title}</td>
+                            <td>{formatShortDateTime(poll.startsAt)}</td>
+                            <td><span className="status-chip success">Completed</span></td>
+                            <td>
+                              <button className="button-secondary small-button" type="button" onClick={() => toggleOpenPollResultDetails(poll.id)}>
+                                View results
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : <p className="muted-text">No completed polls.</p>}
+              </div>
+
             <div className="question-list">
               {filteredMergedPolls.map((poll) => {
                 const resolvedPoll = poll.scheduledPoll ?? poll.participantPoll;
@@ -8849,6 +9041,7 @@ export function AdminQuestionWorkspace({
                   </details>
                 );
               })}
+            </div>
             </div>
           ) : (
             <div className="empty-state">

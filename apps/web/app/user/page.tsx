@@ -1,7 +1,6 @@
 import { getSessionDisplayName, getSessionIdentifier } from "@trapit/auth";
 
 import { AdminQuestionWorkspace } from "../../components/admin-question-workspace";
-import { UserTestWorkspace } from "../../components/user-test-workspace";
 import { isWebAuthConfigured } from "../../lib/auth-config";
 import { getPreviousWebSignIn, requireWebSession } from "../../lib/session";
 import { isSuperAdminIdentifier } from "../../lib/workspace-actor";
@@ -17,9 +16,7 @@ export default async function UserPage({
   const displayName = getSessionDisplayName(session) ?? "User";
   const isSuperAdmin = isSuperAdminIdentifier(session.phoneNumber ?? sessionIdentifier);
   const previousSignInAt = authConfigured ? await getPreviousWebSignIn(session) : null;
-  const openTestsView = searchParams?.view === "tests";
   const openApportionView = searchParams?.tab === "apportion";
-  const showWorkspace = !openTestsView && (session.role === "user" || (isSuperAdmin && openApportionView));
 
   return (
     <main className="page-shell">
@@ -34,21 +31,14 @@ export default async function UserPage({
             <p className="hero-kicker">TRAPit workspace</p>
           </div>
         </div>
-        {showWorkspace ? (
-          <AdminQuestionWorkspace
-            currentActorRole={session.role === "admin" ? "admin" : "user"}
-            currentAdminIdentifier={sessionIdentifier}
-            currentUserCategory={session.userCategory}
-            initialOpenSection={openApportionView ? "apportion" : undefined}
-            isSuperAdmin={isSuperAdmin}
-            previousSignInAt={previousSignInAt}
-          />
-        ) : (
-          <UserTestWorkspace
-            authConfigured={authConfigured}
-            defaultParticipantIdentifier={sessionIdentifier}
-          />
-        )}
+        <AdminQuestionWorkspace
+          currentActorRole={session.role === "admin" ? "admin" : "user"}
+          currentAdminIdentifier={sessionIdentifier}
+          currentUserCategory={session.userCategory}
+          initialOpenSection={openApportionView ? "apportion" : undefined}
+          isSuperAdmin={isSuperAdmin}
+          previousSignInAt={previousSignInAt}
+        />
       </section>
     </main>
   );
