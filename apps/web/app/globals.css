@@ -314,6 +314,13 @@ main {
   flex: 1;
 }
 
+.dashboard-top-nav.panel {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .dashboard-top-nav-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -323,6 +330,7 @@ main {
 
 .dashboard-top-nav-item-shell {
   position: relative;
+  min-width: 0;
 }
 
 .dashboard-top-nav-item,
@@ -345,6 +353,21 @@ main {
 
 .dashboard-top-nav-item {
   justify-content: center;
+  box-shadow: 0 8px 18px rgba(66, 46, 112, 0.08);
+}
+
+.workspace-primary-action {
+  border-color: rgba(83, 48, 132, 0.45);
+  background: linear-gradient(0deg, #6e3f96 0%, #a879c7 58%, #cfabe3 100%);
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(86, 48, 123, 0.24);
+}
+
+.workspace-primary-action:hover,
+.workspace-primary-action:focus-visible {
+  border-color: rgba(68, 34, 111, 0.72);
+  background: linear-gradient(0deg, #5d3284 0%, #9868ba 58%, #c69fdd 100%);
+  color: #fff;
 }
 
 .dashboard-top-nav-count {
@@ -560,6 +583,12 @@ main {
   display: grid;
   gap: 16px;
   min-width: 0;
+}
+
+.workspace-overflow-sign-out {
+  margin-top: 4px;
+  border-top: 1px solid rgba(98, 70, 163, 0.2);
+  padding-top: 16px;
 }
 
 .workspace-overflow-panel .field,
@@ -1357,6 +1386,21 @@ main {
 
 .apportion-actions-menu-list .button-secondary {
   width: 100%;
+}
+
+.workspace-result-actions-menu .apportion-actions-menu-list {
+  position: static;
+  margin-top: 6px;
+  min-width: 220px;
+}
+
+.workspace-result-table-wrap .leaderboard-table {
+  min-width: 1060px;
+}
+
+.workspace-result-table-wrap td,
+.workspace-result-table-wrap th {
+  vertical-align: middle;
 }
 
 .apportion-reschedule-row td {
@@ -2659,7 +2703,16 @@ button:disabled {
 
 .membership-upgrade-table th:not(:first-child),
 .membership-upgrade-table td {
-  width: calc(82% / 5);
+  width: auto;
+}
+
+.membership-upgrade-section-row th {
+  padding-top: 14px;
+  background: rgba(98, 70, 163, 0.1);
+  color: var(--accent-deep);
+  font-size: 0.76rem;
+  text-align: left;
+  text-transform: uppercase;
 }
 
 .membership-upgrade-column {
@@ -2782,4 +2835,12 @@ button:disabled {
   .test-runner-timer strong {
     font-size: 1.8rem;
   }
+}
+
+.apportion-floating-drawer.is-question-authoring > .form-stack > :not(.collapsible-section) {
+  display: none;
+}
+
+.apportion-floating-drawer.is-question-authoring .collapsible-header {
+  display: none;
 }

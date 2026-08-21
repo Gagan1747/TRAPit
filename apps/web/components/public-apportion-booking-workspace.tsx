@@ -630,7 +630,6 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                 </button>
               );
             })}
-            <p className="muted-text apportion-calendar-note">Available dates are highlighted for the next {payload.business.advanceBookingWeeks} week{payload.business.advanceBookingWeeks === 1 ? "" : "s"}.</p>
           </div>
           <div className="form-stack apportion-booking-form">
             {payload.business.justAddToList ? (
@@ -663,7 +662,11 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                     </option>
                   ))}
                 </select>
-                <p className="muted-text">{selectedSlot ? `${selectedSlot.label} selected${payload.business.showRemainingBookings ? `, ${selectedSlot.remainingCount} booking${selectedSlot.remainingCount === 1 ? "" : "s"} left` : ""}` : "Filled slots are greyed out in the list."}</p>
+                {selectedSlot ? (
+                  <p className="muted-text">
+                    {selectedSlot.label} selected{payload.business.showRemainingBookings ? `, ${selectedSlot.remainingCount} booking${selectedSlot.remainingCount === 1 ? "" : "s"} left` : ""}
+                  </p>
+                ) : null}
               </div>
             )}
             {payload.business.recurringBookingsEnabled ? (

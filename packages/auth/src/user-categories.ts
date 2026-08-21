@@ -1,6 +1,5 @@
 export const NORMAL_USER_CATEGORIES = [
   "trapit-normal",
-  "trapit-pro-limited",
   "trapit-pro",
   "trapit-pro-max",
 ] as const;
@@ -37,34 +36,12 @@ export const defaultNormalUserCategory: NormalUserCategory = "trapit-normal";
 export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUserCategoryDefinition> = {
   "trapit-normal": {
     group: {
-      create: false,
-      join: true,
-      manage: false,
-    },
-    home: true,
-    label: "TRAPit normal users",
-    poll: {
-      addQuestion: false,
-      schedule: false,
-      shareOpenToAll: false,
-      shareWithGroups: false,
-    },
-    test: {
-      addQuestion: true,
-      maxQuestionsPerPool: 200,
-      maxQuestionPools: 5,
-      maxScheduledTestsPerMonth: 2,
-      maxSelfTestsPerMonth: 0,
-    },
-  },
-  "trapit-pro-limited": {
-    group: {
       create: true,
       join: true,
       manage: true,
     },
     home: true,
-    label: "TRAPit Pro limited users",
+    label: "TRAPit normal users",
     poll: {
       addQuestion: true,
       schedule: true,
@@ -73,9 +50,9 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
     },
     test: {
       addQuestion: true,
-      maxQuestionsPerPool: 400,
-      maxQuestionPools: 10,
-      maxScheduledTestsPerMonth: 10,
+      maxQuestionsPerPool: 200,
+      maxQuestionPools: 5,
+      maxScheduledTestsPerMonth: 2,
       maxSelfTestsPerMonth: 0,
     },
   },
@@ -130,6 +107,10 @@ export const normalUserCategoryLabels: Record<NormalUserCategory, string> = Obje
 ) as Record<NormalUserCategory, string>;
 
 export function resolveNormalUserCategory(value: unknown, fallback: NormalUserCategory = defaultNormalUserCategory): NormalUserCategory {
+  if (value === "trapit-pro-limited") {
+    return "trapit-pro";
+  }
+
   return typeof value === "string" && NORMAL_USER_CATEGORIES.includes(value as NormalUserCategory)
     ? (value as NormalUserCategory)
     : fallback;

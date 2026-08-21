@@ -132,13 +132,14 @@ async function scanAllItems<T>(tableName: string): Promise<T[]> {
   return items;
 }
 
-function hydrateScheduledPolls(polls: ScheduledPoll[]) {
+function hydrateScheduledPolls(polls: ScheduledPoll[], attempts?: PollAttempt[]) {
   return polls.map((poll) => ({
     ...poll,
     branding: normalizeWorkspaceBranding(poll.branding),
     creatorDisplayName: poll.creatorDisplayName ?? null,
     creatorIdentifier: poll.creatorIdentifier ?? null,
     status: resolveScheduledPollStatus(poll),
+    ...(attempts ? { totalResponses: attempts.filter((attempt) => attempt.pollId === poll.id).length } : {}),
   }));
 }
 
@@ -394,8 +395,12 @@ export async function deletePollQuestionFromBackend(questionId: string, actorId:
 }
 
 export async function listScheduledPollsFromBackend(actorId: string | null = null) {
+  const [storedPolls, attempts] = await Promise.all([
+    scanAllItems<ScheduledPoll>(getPollTables().scheduledPolls),
+    scanAllItems<PollAttempt>(getPollTables().attempts),
+  ]);
   const polls = sortScheduledPolls(
-    hydrateScheduledPolls(await scanAllItems<ScheduledPoll>(getPollTables().scheduledPolls)),
+    hydrateScheduledPolls(storedPolls, attempts),
   );
 
   if (!actorId) {
@@ -406,8 +411,13 @@ export async function listScheduledPollsFromBackend(actorId: string | null = nul
 }
 
 export async function listAllScheduledPollsFromBackend() {
+  const [storedPolls, attempts] = await Promise.all([
+    scanAllItems<ScheduledPoll>(getPollTables().scheduledPolls),
+    scanAllItems<PollAttempt>(getPollTables().attempts),
+  ]);
+
   return sortScheduledPolls(
-    hydrateScheduledPolls(await scanAllItems<ScheduledPoll>(getPollTables().scheduledPolls)),
+    hydrateScheduledPolls(storedPolls, attempts),
   );
 }
 

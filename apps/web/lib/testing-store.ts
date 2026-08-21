@@ -416,7 +416,7 @@ export async function listWorkspaceAppointmentBusinesses() {
       const name = branding.instituteName.trim();
       const address = branding.address?.trim() ?? "";
 
-      if (!appointmentShareCode || !name || !address || !branding.workingDays?.trim() || !branding.workingHours?.trim()) {
+      if (!appointmentShareCode) {
         return null;
       }
 
@@ -427,7 +427,7 @@ export async function listWorkspaceAppointmentBusinesses() {
         appointmentShareCode,
         appointmentsPerSlot: branding.appointmentsPerSlot ?? null,
         justAddToList: branding.justAddToList === true,
-        name,
+        name: name || "Business",
         ownerIdentifier,
         recurringBookingLimit: branding.recurringBookingsEnabled === true ? branding.recurringBookingLimit ?? 6 : null,
         recurringBookingsEnabled: branding.recurringBookingsEnabled === true,
@@ -943,6 +943,7 @@ function hydrateScheduledPolls(state: TestingWorkspaceState) {
   return state.scheduledPolls.map((poll) => ({
     ...poll,
     status: resolveScheduledPollStatus(poll),
+    totalResponses: state.pollAttempts.filter((attempt) => attempt.pollId === poll.id).length,
   }));
 }
 

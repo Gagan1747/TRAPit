@@ -98,6 +98,7 @@ export type ScheduledPoll = {
   startsAt: string;
   status: ScheduledTestStatus;
   title: string;
+  totalResponses?: number;
   updatedAt: string;
 };
 

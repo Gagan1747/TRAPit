@@ -193,6 +193,15 @@ function parseIstDateTimeInputToIso(value: string) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function getIstDateKey(value: Date) {
+  const shifted = new Date(value.getTime() + (IST_OFFSET_MINUTES * 60 * 1000));
+  const year = shifted.getUTCFullYear();
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(shifted.getUTCDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
 function formatBusinessDays(selectedDayKeys: string[]) {
   return BUSINESS_WEEK_DAYS
     .filter((day) => selectedDayKeys.includes(day.key))
@@ -1005,11 +1014,24 @@ function getApportionStatusLabel(status: ApportionAppointment["currentStatus"]) 
 function getRequesterQueueStatusLabel(input: {
   currentStatus: ApportionAppointment["currentStatus"];
   queuePosition: number | null;
+  serviceDateKey: string;
+  startsAt: string;
 }) {
   if (!isActiveApportionStatus(input.currentStatus)) {
     return {
       helperText: null,
       label: getApportionStatusLabel(input.currentStatus),
+    };
+  }
+
+  const now = new Date();
+  const startsAt = new Date(input.startsAt);
+  const serviceDateKey = input.serviceDateKey || (Number.isNaN(startsAt.getTime()) ? "" : getIstDateKey(startsAt));
+
+  if (serviceDateKey !== getIstDateKey(now) || Number.isNaN(startsAt.getTime()) || startsAt.getTime() > now.getTime()) {
+    return {
+      helperText: null,
+      label: "Scheduled",
     };
   }
 
@@ -2545,6 +2567,15 @@ export function AdminQuestionWorkspace({
     }
   }
 
+  function openAdminReview(testId: string) {
+    if (reviewByTestId[testId]) {
+      setVisibleReviewTestIds((currentIds) => [...new Set([...currentIds, testId])]);
+      return;
+    }
+
+    void handleLoadReview(testId);
+  }
+
   function getReviewEditKey(testId: string, questionId: string) {
     return `${testId}:${questionId}`;
   }
@@ -2658,6 +2689,15 @@ export function AdminQuestionWorkspace({
         [testId]: false,
       }));
     }
+  }
+
+  function openParticipantReview(testId: string) {
+    if (participantReviewByTestId[testId]) {
+      setVisibleParticipantReviewTestIds((currentIds) => [...new Set([...currentIds, testId])]);
+      return;
+    }
+
+    void handleLoadParticipantReview(testId);
   }
 
   async function handleReportReviewQuestion(testId: string, questionId: string) {
@@ -3919,8 +3959,16 @@ export function AdminQuestionWorkspace({
     setExpandedOpenPollResultIds((currentIds) => toggleArrayValue(currentIds, pollId));
   }
 
+  function openPollResultDetails(pollId: string) {
+    setExpandedOpenPollResultIds((currentIds) => [...new Set([...currentIds, pollId])]);
+  }
+
   function toggleTestResultCollapse(testId: string) {
     setCollapsedTestResultIds((currentIds) => toggleArrayValue(currentIds, testId));
+  }
+
+  function openTestResultDetails(testId: string) {
+    setCollapsedTestResultIds((currentIds) => [...new Set([...currentIds, testId])]);
   }
 
   function handleStartEditingGroup(group: ParticipantGroup) {
@@ -5061,12 +5109,12 @@ export function AdminQuestionWorkspace({
                       User details
                     </button>
                   ) : null}
-                  <SignOutButton
-                    className="workspace-overflow-action"
-                    onSignedOut={() => setIsOverflowMenuOpen(false)}
-                  />
                   <p className="eyebrow">Groups</p>
                   {groupMenuItems.map((item) => renderOverflowSectionItem(item.label, item.section))}
+                  <SignOutButton
+                    className="workspace-overflow-action workspace-overflow-sign-out"
+                    onSignedOut={() => setIsOverflowMenuOpen(false)}
+                  />
                 </div>
               ) : null}
 
@@ -5117,10 +5165,10 @@ export function AdminQuestionWorkspace({
           ) : openSection === "apportion" ? (
             <section className="panel workspace-card">
               <div className="apportion-section-actions">
-                <button className="button-secondary" type="button" onClick={() => addApportionDraftCard()}>
+                <button className="button-secondary workspace-primary-action" type="button" onClick={() => addApportionDraftCard()}>
                   Add Appointment
                 </button>
-                <button className="button-secondary" type="button" onClick={() => setIsApportionBusinessPanelOpen(true)}>
+                <button className="button-secondary workspace-primary-action" type="button" onClick={() => setIsApportionBusinessPanelOpen(true)}>
                   Business Panel
                 </button>
               </div>
@@ -5223,6 +5271,17 @@ export function AdminQuestionWorkspace({
                             <p className="muted-text apportion-business-hours-context">
                               Working hours: {selectedBusiness ? `${formatOwnerOperatingHours(draftOwnerHours)} (IST)` : "Select a business to view IST operating hours."}
                             </p>
+                            {selectedBusiness ? (
+                              <a
+                                className="button-secondary small-button apportion-open-booking-link"
+                                href={getApportionAccessUrl(selectedBusiness.appointmentShareCode)}
+                                rel="noopener noreferrer"
+                                target="_blank"
+                              >
+                                <ApportionOpenIcon />
+                                Open booking page
+                              </a>
+                            ) : null}
                             <div className="apportion-card-grid">
                               <div className="field">
                                 <label htmlFor={`apportion-draft-business-${draft.id}`}>Business title</label>
@@ -5233,7 +5292,9 @@ export function AdminQuestionWorkspace({
                                   value={draft.businessTitleQuery}
                                   onChange={(event) => {
                                     const nextValue = event.target.value;
-                                    const matchedBusiness = availableApportionBusinesses.find((business) => `${business.name} - ${business.address}` === nextValue) ?? null;
+                                    const matchedBusiness = availableApportionBusinesses.find((business) => (
+                                      `${business.name} - ${business.address || "Address not provided"} - ${formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true })}` === nextValue
+                                    )) ?? null;
 
                                     if (matchedBusiness) {
                                       handleApportionDraftBusinessSelection(draft.id, matchedBusiness);
@@ -5254,7 +5315,10 @@ export function AdminQuestionWorkspace({
                                 />
                                 <datalist id={`apportion-draft-business-options-${draft.id}`}>
                                   {availableApportionBusinesses.map((business) => (
-                                    <option key={`${draft.id}-${business.appointmentShareCode}-name`} value={`${business.name} - ${business.address}`}>{formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true })}</option>
+                                    <option
+                                      key={`${draft.id}-${business.appointmentShareCode}-name`}
+                                      value={`${business.name} - ${business.address || "Address not provided"} - ${formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true })}`}
+                                    />
                                   ))}
                                 </datalist>
                               </div>
@@ -5462,11 +5526,15 @@ export function AdminQuestionWorkspace({
                       const requesterQueueStatus = getRequesterQueueStatusLabel({
                         currentStatus: appointment.currentStatus,
                         queuePosition: appointment.queuePosition,
+                        serviceDateKey: appointment.serviceDateKey,
+                        startsAt: appointment.startsAt,
                       });
                       const ownerStatusLabel = isActiveApportionStatus(appointment.currentStatus)
-                        ? appointment.queuePosition === 1
-                          ? "Move in"
-                          : "Pending"
+                        ? requesterQueueStatus.label === "Scheduled"
+                          ? "Scheduled"
+                          : appointment.queuePosition === 1
+                            ? "Move in"
+                            : "Pending"
                         : getApportionStatusLabel(appointment.currentStatus);
                       return (
                         <Fragment key={appointment.id}>
@@ -5668,6 +5736,9 @@ export function AdminQuestionWorkspace({
                           </tr>
                         </thead>
                         <tbody>
+                          <tr className="membership-upgrade-section-row">
+                            <th colSpan={membershipUpgradePlans.length + 1} scope="rowgroup">Test</th>
+                          </tr>
                           <tr>
                             <th scope="row">Pools</th>
                             {membershipUpgradePlans.map((plan) => (
@@ -6036,7 +6107,7 @@ export function AdminQuestionWorkspace({
         <div className="apportion-modal-overlay" role="presentation" onClick={() => setOpenSection("history")}>
           <div aria-labelledby="test-questions-drawer-title" className="apportion-floating-drawer panel" role="dialog" onClick={(event) => event.stopPropagation()}>
             <div className="workspace-overflow-head">
-              <h2 id="test-questions-drawer-title">Add Test Questions</h2>
+              <h2 id="test-questions-drawer-title">Question Pool</h2>
               <button className="button-secondary small-button" type="button" onClick={() => setOpenSection("history")}>
                 Close
               </button>
@@ -6831,9 +6902,9 @@ export function AdminQuestionWorkspace({
 
       {openSection === "schedule" ? (
         <div className="apportion-modal-overlay" role="presentation" onClick={() => setOpenSection("history")}>
-          <div aria-labelledby="schedule-test-drawer-title" className="apportion-floating-drawer panel" role="dialog" onClick={(event) => event.stopPropagation()}>
+          <div aria-labelledby="schedule-test-drawer-title" className={`apportion-floating-drawer panel${isTestAddQuestionOpen ? " is-question-authoring" : ""}`} role="dialog" onClick={(event) => event.stopPropagation()}>
             <div className="workspace-overflow-head">
-              <h2 id="schedule-test-drawer-title">{editingScheduledTestId ? "Edit Test" : "Schedule Test"}</h2>
+              <h2 id="schedule-test-drawer-title">{isTestAddQuestionOpen ? "Add Question" : editingScheduledTestId ? "Edit Test" : "Schedule Test"}</h2>
               <button className="button-secondary small-button" type="button" onClick={() => setOpenSection("history")}>
                 Close
               </button>
@@ -7474,9 +7545,9 @@ export function AdminQuestionWorkspace({
 
       {openSection === "poll-schedule" ? (
         <div className="apportion-modal-overlay" role="presentation" onClick={() => setOpenSection("history")}>
-          <div aria-labelledby="schedule-poll-drawer-title" className="apportion-floating-drawer panel" role="dialog" onClick={(event) => event.stopPropagation()}>
+          <div aria-labelledby="schedule-poll-drawer-title" className={`apportion-floating-drawer panel${isPollAddQuestionOpen ? " is-question-authoring" : ""}`} role="dialog" onClick={(event) => event.stopPropagation()}>
             <div className="workspace-overflow-head">
-              <h2 id="schedule-poll-drawer-title">{editingScheduledPollId ? "Edit Poll" : "Schedule Poll"}</h2>
+              <h2 id="schedule-poll-drawer-title">{isPollAddQuestionOpen ? "Add Question" : editingScheduledPollId ? "Edit Poll" : "Schedule Poll"}</h2>
               <button className="button-secondary small-button" type="button" onClick={() => setOpenSection("history")}>
                 Close
               </button>
@@ -8037,27 +8108,29 @@ export function AdminQuestionWorkspace({
         onToggle={() => toggleSection("history")}
         action={
           <>
-            <button
-              className="button-secondary small-button"
-              type="button"
-              onClick={() => {
-                const section = resultsMode === "tests" ? "question-bank" : "poll-questions";
-                const lockedPrompt = currentActorRole === "user" && currentUserCategory
-                  ? getSectionUpgradePrompt(section, currentUserCategory)
-                  : null;
+            {resultsMode === "tests" ? (
+              <button
+                className="button-secondary small-button workspace-primary-action"
+                type="button"
+                onClick={() => {
+                  const section = "question-bank";
+                  const lockedPrompt = currentActorRole === "user" && currentUserCategory
+                    ? getSectionUpgradePrompt(section, currentUserCategory)
+                    : null;
 
-                if (lockedPrompt) {
-                  openUpgradePanel(lockedPrompt);
-                  return;
-                }
+                  if (lockedPrompt) {
+                    openUpgradePanel(lockedPrompt);
+                    return;
+                  }
 
-                handleMenuSectionSelection(section);
-              }}
-            >
-              + Add Questions
-            </button>
+                  handleMenuSectionSelection(section);
+                }}
+              >
+                Question Pool
+              </button>
+            ) : null}
             <button
-              className="button-secondary small-button"
+              className="button-secondary small-button workspace-primary-action"
               type="button"
               onClick={() => {
                 const section = resultsMode === "tests" ? "schedule" : "poll-schedule";
@@ -8070,6 +8143,35 @@ export function AdminQuestionWorkspace({
                   return;
                 }
 
+                if (resultsMode === "tests") {
+                  setIsTestAddQuestionOpen(true);
+                } else {
+                  setIsPollAddQuestionOpen(true);
+                }
+                handleMenuSectionSelection(section);
+              }}
+            >
+              Add Question
+            </button>
+            <button
+              className="button-secondary small-button workspace-primary-action"
+              type="button"
+              onClick={() => {
+                const section = resultsMode === "tests" ? "schedule" : "poll-schedule";
+                const lockedPrompt = currentActorRole === "user" && currentUserCategory
+                  ? getSectionUpgradePrompt(section, currentUserCategory)
+                  : null;
+
+                if (lockedPrompt) {
+                  openUpgradePanel(lockedPrompt);
+                  return;
+                }
+
+                if (resultsMode === "tests") {
+                  setIsTestAddQuestionOpen(false);
+                } else {
+                  setIsPollAddQuestionOpen(false);
+                }
                 handleMenuSectionSelection(section);
               }}
             >
@@ -8203,31 +8305,58 @@ export function AdminQuestionWorkspace({
                 <div className="workspace-result-table-group">
                   <h3>Upcoming</h3>
                   {upcomingMergedTests.length ? (
-                    <div className="leaderboard-table-wrap">
+                    <div className="leaderboard-table-wrap workspace-result-table-wrap">
                       <table className="leaderboard-table">
                         <thead>
                           <tr>
                             <th>Test</th>
-                            <th>Starts</th>
+                            <th>Scheduled</th>
+                            <th>Duration</th>
+                            <th>Completed</th>
                             <th>Questions</th>
+                            <th>Question Pool</th>
+                            <th>Groups</th>
+                            <th>Submitted Responses</th>
                             <th>Status</th>
-                            <th>Actions</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {upcomingMergedTests.map((test) => (
-                            <tr key={`upcoming-test-${test.id}`}>
-                              <td>{test.title}</td>
-                              <td>{formatShortDateTime(test.startsAt)}</td>
-                              <td>{test.questionCount}</td>
-                              <td><span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>{test.status}</span></td>
-                              <td>
-                                <button className="button-secondary small-button" type="button" onClick={() => toggleTestResultCollapse(test.id)}>
-                                  View details
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
+                          {upcomingMergedTests.map((test) => {
+                            const scheduledTest = test.scheduledTest;
+                            const leaderboard = scheduledTest ? leaderboards.find((entry) => entry.testId === scheduledTest.id) : null;
+                            const groupIds = scheduledTest?.participantGroupIds ?? test.participantTest?.participantGroupIds ?? [];
+                            const groupsLabel = groupIds.length
+                              ? groupIds.map((groupId) => participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group").join(", ")
+                              : "None";
+                            const livePath = scheduledTest?.shareCode
+                              ? getTestAccessUrl(scheduledTest.shareCode)
+                              : test.participantTest
+                                ? `/user/test/${encodeURIComponent(test.id)}`
+                                : null;
+                            const completedAt = scheduledTest
+                              ? getScheduledTestEndTime(scheduledTest)
+                              : new Date(new Date(test.startsAt).getTime() + (test.durationMinutes * 60 * 1000)).toISOString();
+
+                            return (
+                              <tr key={`upcoming-test-${test.id}`}>
+                                <td>{test.title}</td>
+                                <td>{formatShortDateTime(test.startsAt)}</td>
+                                <td>{test.durationMinutes} min</td>
+                                <td>{formatShortDateTime(completedAt)}</td>
+                                <td>{test.questionCount}</td>
+                                <td>{pools.find((pool) => pool.id === test.poolId)?.name ?? "Unknown pool"}</td>
+                                <td>{groupsLabel}</td>
+                                <td>{scheduledTest ? `${leaderboard?.submittedCount ?? 0}/${leaderboard?.assignedParticipantCount ?? scheduledTest.resolvedParticipantIdentifiers.length}` : test.participantHistoryEntry ? "1/1" : "0/1"}</td>
+                                <td>
+                                  {test.status === "live" && livePath ? (
+                                    <a className="status-chip success" href={livePath}>Live</a>
+                                  ) : (
+                                    <span className="status-chip warning">Upcoming</span>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -8237,31 +8366,73 @@ export function AdminQuestionWorkspace({
                 <div className="workspace-result-table-group">
                   <h3>Completed</h3>
                   {completedMergedTests.length ? (
-                    <div className="leaderboard-table-wrap">
+                    <div className="leaderboard-table-wrap workspace-result-table-wrap">
                       <table className="leaderboard-table">
                         <thead>
                           <tr>
                             <th>Test</th>
+                            <th>Scheduled</th>
+                            <th>Duration</th>
                             <th>Completed</th>
                             <th>Questions</th>
-                            <th>Status</th>
+                            <th>Question Pool</th>
+                            <th>Groups</th>
+                            <th>Submitted Responses</th>
                             <th>Actions</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {completedMergedTests.map((test) => (
-                            <tr key={`completed-test-${test.id}`}>
-                              <td>{test.title}</td>
-                              <td>{formatShortDateTime(test.startsAt)}</td>
-                              <td>{test.questionCount}</td>
-                              <td><span className="status-chip success">Completed</span></td>
-                              <td>
-                                <button className="button-secondary small-button" type="button" onClick={() => toggleTestResultCollapse(test.id)}>
-                                  View results
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
+                          {completedMergedTests.map((test) => {
+                            const scheduledTest = test.scheduledTest;
+                            const leaderboard = scheduledTest ? leaderboards.find((entry) => entry.testId === scheduledTest.id) : null;
+                            const groupIds = scheduledTest?.participantGroupIds ?? test.participantTest?.participantGroupIds ?? [];
+                            const groupsLabel = groupIds.length
+                              ? groupIds.map((groupId) => participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group").join(", ")
+                              : "None";
+                            const completedAt = test.participantHistoryEntry?.completedAt
+                              ?? (scheduledTest ? getScheduledTestEndTime(scheduledTest) : test.startsAt);
+
+                            return (
+                              <tr key={`completed-test-${test.id}`}>
+                                <td>{test.title}</td>
+                                <td>{formatShortDateTime(test.startsAt)}</td>
+                                <td>{test.durationMinutes} min</td>
+                                <td>{formatShortDateTime(completedAt)}</td>
+                                <td>{test.questionCount}</td>
+                                <td>{pools.find((pool) => pool.id === test.poolId)?.name ?? "Unknown pool"}</td>
+                                <td>{groupsLabel}</td>
+                                <td>{scheduledTest ? `${leaderboard?.submittedCount ?? 0}/${leaderboard?.assignedParticipantCount ?? scheduledTest.resolvedParticipantIdentifiers.length}` : test.participantHistoryEntry ? "1/1" : "0/1"}</td>
+                                <td>
+                                  <details className="apportion-actions-menu workspace-result-actions-menu">
+                                    <summary className="button-secondary small-button">Actions</summary>
+                                    <div className="apportion-actions-menu-list">
+                                      {test.hasAdminScope && scheduledTest ? (
+                                        <button className="button-secondary small-button" type="button" onClick={() => {
+                                          openTestResultDetails(test.id);
+                                          openAdminReview(scheduledTest.id);
+                                        }}>
+                                          Review Questions (as Admin)
+                                        </button>
+                                      ) : null}
+                                      {test.hasParticipantScope && test.participantHistoryEntry && test.participantTest ? (
+                                        <button className="button-secondary small-button" type="button" onClick={() => {
+                                          openTestResultDetails(test.id);
+                                          openParticipantReview(test.participantTest!.id);
+                                        }}>
+                                          Review Questions (as Participant)
+                                        </button>
+                                      ) : null}
+                                      {(leaderboard || test.participantHistoryEntry) ? (
+                                        <button className="button-secondary small-button" type="button" onClick={() => openTestResultDetails(test.id)}>
+                                          Test Results
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                  </details>
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -8772,29 +8943,48 @@ export function AdminQuestionWorkspace({
               <div className="workspace-result-table-group">
                 <h3>Upcoming</h3>
                 {upcomingMergedPolls.length ? (
-                  <div className="leaderboard-table-wrap">
+                  <div className="leaderboard-table-wrap workspace-result-table-wrap">
                     <table className="leaderboard-table">
                       <thead>
                         <tr>
                           <th>Poll</th>
-                          <th>Starts</th>
+                          <th>Started</th>
+                          <th>Ended</th>
+                          <th>Questions</th>
+                          <th>Response Mode</th>
+                          <th>Responses So Far</th>
+                          <th>Poll Scheduled By</th>
                           <th>Status</th>
-                          <th>Actions</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {upcomingMergedPolls.map((poll) => (
-                          <tr key={`upcoming-poll-${poll.id}`}>
-                            <td>{poll.title}</td>
-                            <td>{formatShortDateTime(poll.startsAt)}</td>
-                            <td><span className={`status-chip ${poll.status === "live" ? "success" : "warning"}`}>{poll.status}</span></td>
-                            <td>
-                              <button className="button-secondary small-button" type="button" onClick={() => toggleOpenPollResultDetails(poll.id)}>
-                                View details
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
+                        {upcomingMergedPolls.map((poll) => {
+                          const resolvedPoll = poll.scheduledPoll ?? poll.participantPoll;
+                          const pollPath = resolvedPoll?.participantType === "registered"
+                            ? getRegisteredPollPath(resolvedPoll.id)
+                            : resolvedPoll?.shareCode
+                              ? getPollAccessUrl(resolvedPoll.shareCode)
+                              : null;
+
+                          return (
+                            <tr key={`upcoming-poll-${poll.id}`}>
+                              <td>{poll.title}</td>
+                              <td>{resolvedPoll ? formatShortDateTime(resolvedPoll.startsAt) : "-"}</td>
+                              <td>{resolvedPoll ? formatShortDateTime(resolvedPoll.endsAt) : "-"}</td>
+                              <td>{resolvedPoll?.questionIds.length ?? 0}</td>
+                              <td>{resolvedPoll ? `${resolvedPoll.participantType === "open" ? "Open" : "Groups"} / ${resolvedPoll.anonymous ? "Anonymous" : "Named"}` : "-"}</td>
+                              <td>{resolvedPoll?.totalResponses ?? 0}</td>
+                              <td>{resolvedPoll?.creatorDisplayName ?? formatPhoneNumberForDisplay(resolvedPoll?.creatorIdentifier ?? resolvedPoll?.createdBy, { showFullPhoneNumber: isSuperAdmin })}</td>
+                              <td>
+                                {poll.status === "live" && pollPath ? (
+                                  <a className="status-chip success" href={pollPath}>Live</a>
+                                ) : (
+                                  <span className="status-chip warning">Upcoming</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -8804,29 +8994,41 @@ export function AdminQuestionWorkspace({
               <div className="workspace-result-table-group">
                 <h3>Completed</h3>
                 {completedMergedPolls.length ? (
-                  <div className="leaderboard-table-wrap">
+                  <div className="leaderboard-table-wrap workspace-result-table-wrap">
                     <table className="leaderboard-table">
                       <thead>
                         <tr>
                           <th>Poll</th>
+                          <th>Started</th>
                           <th>Ended</th>
-                          <th>Status</th>
+                          <th>Questions</th>
+                          <th>Response Mode</th>
+                          <th>Responses So Far</th>
+                          <th>Poll Scheduled By</th>
                           <th>Actions</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {completedMergedPolls.map((poll) => (
-                          <tr key={`completed-poll-${poll.id}`}>
-                            <td>{poll.title}</td>
-                            <td>{formatShortDateTime(poll.startsAt)}</td>
-                            <td><span className="status-chip success">Completed</span></td>
-                            <td>
-                              <button className="button-secondary small-button" type="button" onClick={() => toggleOpenPollResultDetails(poll.id)}>
-                                View results
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
+                        {completedMergedPolls.map((poll) => {
+                          const resolvedPoll = poll.scheduledPoll ?? poll.participantPoll;
+
+                          return (
+                            <tr key={`completed-poll-${poll.id}`}>
+                              <td>{poll.title}</td>
+                              <td>{resolvedPoll ? formatShortDateTime(resolvedPoll.startsAt) : "-"}</td>
+                              <td>{resolvedPoll ? formatShortDateTime(resolvedPoll.endsAt) : "-"}</td>
+                              <td>{resolvedPoll?.questionIds.length ?? 0}</td>
+                              <td>{resolvedPoll ? `${resolvedPoll.participantType === "open" ? "Open" : "Groups"} / ${resolvedPoll.anonymous ? "Anonymous" : "Named"}` : "-"}</td>
+                              <td>{resolvedPoll?.totalResponses ?? 0}</td>
+                              <td>{resolvedPoll?.creatorDisplayName ?? formatPhoneNumberForDisplay(resolvedPoll?.creatorIdentifier ?? resolvedPoll?.createdBy, { showFullPhoneNumber: isSuperAdmin })}</td>
+                              <td>
+                                <button className="button-secondary small-button" type="button" onClick={() => openPollResultDetails(poll.id)}>
+                                  View Results
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
