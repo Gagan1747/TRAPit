@@ -2,6 +2,7 @@
 
 import {
   formatElapsedTime,
+  type GameLeaderboardEntry,
   type GroupJoinRequest,
   type ParticipantGroup,
   type ScheduledPoll,
@@ -32,12 +33,27 @@ type AvailableTest = {
 };
 
 type DashboardResponse = {
+  availableGames: AvailableGameSummary[];
   availablePolls: ScheduledPoll[];
   availableTests: AvailableTest[];
   groupJoinRequests: GroupJoinRequest[];
   history: TestHistoryEntry[];
   identifier: string;
+  overallGamePoints: number;
   usingFallbackIdentifier: boolean;
+};
+
+type AvailableGameSummary = {
+  acceptedCount: number;
+  completedAt: string | null;
+  creatorIdentifier: string;
+  id: string;
+  leaderboard: GameLeaderboardEntry[];
+  participantCount: number;
+  participants: Array<{ accepted: boolean; identifier: string; label: string }>;
+  startedAt: string | null;
+  status: "completed" | "ongoing" | "upcoming";
+  title: string;
 };
 
 type GroupSearchResponse = {
@@ -109,6 +125,7 @@ export function RestrictedUserDashboardWorkspace({
   previousSignInAt,
 }: RestrictedUserDashboardWorkspaceProps) {
   const [availablePolls, setAvailablePolls] = useState<ScheduledPoll[]>([]);
+  const [availableGames, setAvailableGames] = useState<AvailableGameSummary[]>([]);
   const [availableTests, setAvailableTests] = useState<AvailableTest[]>([]);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [groupJoinRequests, setGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
@@ -239,6 +256,7 @@ export function RestrictedUserDashboardWorkspace({
       );
 
       setAvailablePolls(payload.availablePolls);
+      setAvailableGames(payload.availableGames);
       setAvailableTests(payload.availableTests);
       setGroupJoinRequests(payload.groupJoinRequests);
       setHistory(payload.history);
@@ -256,6 +274,30 @@ export function RestrictedUserDashboardWorkspace({
       void loadDashboard(defaultParticipantIdentifier);
     }
   }, [authConfigured, defaultParticipantIdentifier]);
+
+  useEffect(() => {
+    const source = new EventSource("/api/internal/events");
+
+    source.onmessage = (event) => {
+      const payload = JSON.parse(event.data) as { scope?: string };
+
+      if (payload.scope === "all" || payload.scope === "game") {
+        void loadDashboard(identifier);
+      }
+    };
+
+    return () => source.close();
+  }, [identifier]);
+
+  async function handleAcceptGame(gameId: string) {
+    try {
+      const query = !authConfigured ? `?participantId=${encodeURIComponent(identifier)}` : "";
+      await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/accept${query}`, { method: "POST" }));
+      await loadDashboard(identifier);
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to accept the game.");
+    }
+  }
 
   function toggleSection(section: UserDashboardSection) {
     setOpenSection((currentSection) => {
@@ -551,8 +593,40 @@ export function RestrictedUserDashboardWorkspace({
               </div>
 
               {resultsMode === "tests" ? (
-                sortedAvailableTests.length ? (
+                sortedAvailableTests.length || availableGames.length ? (
                   <div className="question-list">
+                    {availableGames.map((game) => {
+                      const participant = game.participants.find((entry) => entry.identifier.toLowerCase() === identifier.toLowerCase());
+                      const ownResult = game.leaderboard.find((entry) => entry.participantIdentifier.toLowerCase() === identifier.toLowerCase());
+
+                      return (
+                        <article className="question-card" key={game.id}>
+                          <div className="question-head">
+                            <strong>{game.title}</strong>
+                            <div className="inline-actions">
+                              <span className="status-chip success">Game</span>
+                              <span className={`status-chip ${game.status === "ongoing" ? "success" : "warning"}`}>
+                                {game.status === "ongoing" ? "Ongoing" : game.status === "completed" ? "Completed" : "Upcoming"}
+                              </span>
+                            </div>
+                          </div>
+                          <p className="muted-text">Accepted: {game.acceptedCount}/{game.participantCount}</p>
+                          {game.status === "completed" && ownResult ? (
+                            <p className="muted-text">Your result: Rank {ownResult.rank}, {ownResult.points} points</p>
+                          ) : null}
+                          <div className="inline-actions">
+                            {game.status === "upcoming" && !participant?.accepted ? (
+                              <button className="button-secondary small-button" type="button" onClick={() => void handleAcceptGame(game.id)}>Accept</button>
+                            ) : null}
+                            {(game.status === "ongoing" && participant?.accepted) || game.status === "completed" ? (
+                              <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`}>
+                                {game.status === "completed" ? "Game results" : "Open game"}
+                              </a>
+                            ) : null}
+                          </div>
+                        </article>
+                      );
+                    })}
                     {sortedAvailableTests.map((test) => {
                       const historyEntry = historyByTestId.get(test.id);
                       const isCompleted = test.status === "completed";

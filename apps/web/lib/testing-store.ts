@@ -1,6 +1,7 @@
 import "server-only";
 
 import {
+  buildGameLeaderboard,
   buildTestLeaderboards,
   compareTestResults,
   createGroupJoinRequest as createStoredGroupJoinRequest,
@@ -10,6 +11,10 @@ import {
   createParticipantProfile,
   createPersistentPollQuestion,
   createPersistentQuestion,
+  GAME_QUESTION_COUNT,
+  getGameQuestionIndex,
+  getGameQuestionPoints,
+  getGameStatus,
   getIncorrectCount,
   getScheduledTestEndTime,
   normalizeWorkspaceBranding,
@@ -25,6 +30,7 @@ import {
   summarizeTestHistory,
   type BulkImportPreview,
   type GroupJoinRequest,
+  type GameLeaderboardEntry,
   type ObjectiveQuestion,
   type PollAttempt,
   type PollBulkImportPreview,
@@ -37,6 +43,7 @@ import {
   type QuestionImportSource,
   type QuestionPool,
   type ScheduledPoll,
+  type ScheduledGame,
   type ScheduledTest,
   type TestAttempt,
   type TestQuestionReport,
@@ -90,6 +97,7 @@ const STORE_PATH = resolveStorePath();
 
 type CriticalDataSummary = {
   attempts: number;
+  games: number;
   groups: number;
   participants: number;
   pollAttempts: number;
@@ -110,6 +118,7 @@ function isMissingStoreFileError(error: unknown) {
 function summarizeCriticalData(state: TestingWorkspaceState): CriticalDataSummary {
   return {
     attempts: state.attempts.length,
+    games: state.games.length,
     groups: state.participantGroups.length,
     participants: state.participants.length,
     pollAttempts: state.pollAttempts.length,
@@ -133,7 +142,7 @@ function isDangerousDataReduction(currentSummary: CriticalDataSummary, nextSumma
     return false;
   }
 
-  const importantCollections = ["groups", "pools", "tests", "attempts", "questions"] as const;
+  const importantCollections = ["games", "groups", "pools", "tests", "attempts", "questions"] as const;
   const wipedImportantCollectionCount = importantCollections.filter((collection) =>
     currentSummary[collection] > 0 && nextSummary[collection] === 0,
   ).length;
@@ -286,6 +295,20 @@ function normalizeWorkspaceAppointmentShareCodesByActor(
 function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspaceState {
   return {
     attempts: parsed.attempts ?? [],
+    games: (parsed.games ?? []).map((game) => ({
+      ...game,
+      answers: game.answers ?? [],
+      completedAt: game.completedAt ?? null,
+      participants: (game.participants ?? []).map((participant) => ({
+        ...participant,
+        acceptedAt: participant.acceptedAt ?? null,
+        identifier: normalizeParticipantIdentifier(participant.identifier),
+        label: participant.label?.trim() || participant.identifier,
+      })),
+      questionIds: dedupe(game.questionIds ?? []).slice(0, GAME_QUESTION_COUNT),
+      startedAt: game.startedAt ?? null,
+      title: game.title?.trim() || "Game",
+    })),
     groupJoinRequests: (parsed.groupJoinRequests ?? []).map((request) => ({
       ...request,
       adminLabel: request.adminLabel?.trim() || request.adminIdentifier?.trim() || "Unknown admin",
@@ -1039,6 +1062,22 @@ async function writeStore(state: TestingWorkspaceState) {
 
   await writeFile(temporaryStorePath, JSON.stringify(state, null, 2), "utf8");
   await rename(temporaryStorePath, STORE_PATH);
+}
+
+let gameMutationQueue = Promise.resolve();
+
+function withSerializedGameMutation<T>(
+  mutate: (state: TestingWorkspaceState) => Promise<T> | T,
+) {
+  const operation = gameMutationQueue.then(async () => {
+    const state = await readStore();
+    const result = await mutate(state);
+    await writeStore(state);
+    return result;
+  });
+
+  gameMutationQueue = operation.then(() => undefined, () => undefined);
+  return operation;
 }
 
 async function assignUnownedGroupsToOwner(ownerIdentifier: string) {
@@ -2417,6 +2456,7 @@ export async function resolveGroupJoinRequest(input: {
   await writeStore(state);
 
   return {
+    games: state.games.map((game) => hydrateGame(game)),
     groupJoinRequests: state.groupJoinRequests,
     participantGroups: state.participantGroups,
     participants: state.participants,
@@ -4103,6 +4143,7 @@ export async function getWorkspaceData() {
     scheduledTests,
     summary: {
       attempts: state.attempts.length,
+      games: state.games.length,
       groups: state.participantGroups.length,
       participants: state.participants.length,
       pools: state.pools.length,
@@ -4110,4 +4151,269 @@ export async function getWorkspaceData() {
       scheduledTests: state.scheduledTests.length,
     },
   };
+}
+
+function findGameParticipant(game: ScheduledGame, participantIdentifier: string) {
+  return game.participants.find((participant) =>
+    identifiersMatch(participant.identifier, participantIdentifier),
+  );
+}
+
+function finalizeGameIfExpired(game: ScheduledGame, now: Date) {
+  if (!game.completedAt && getGameStatus(game, now.getTime()) === "completed") {
+    game.completedAt = now.toISOString();
+    game.updatedAt = game.completedAt;
+  }
+}
+
+export type AvailableGame = ScheduledGame & {
+  acceptedCount: number;
+  currentQuestionIndex: number | null;
+  leaderboard: GameLeaderboardEntry[];
+  status: ReturnType<typeof getGameStatus>;
+};
+
+function hydrateGame(game: ScheduledGame, nowMs = Date.now()): AvailableGame {
+  return {
+    ...game,
+    acceptedCount: game.participants.filter((participant) => participant.acceptedAt).length,
+    currentQuestionIndex: getGameQuestionIndex(game, nowMs),
+    leaderboard: buildGameLeaderboard(game),
+    status: getGameStatus(game, nowMs),
+  };
+}
+
+export async function createScheduledGame(input: {
+  actorIdentifier: string;
+  actorLabel?: string | null;
+  createdBy: string | null;
+  participantGroupId: string;
+  poolId: string;
+  title?: string | null;
+}) {
+  return withSerializedGameMutation((state) => {
+    const actorIdentifier = normalizeParticipantIdentifier(input.actorIdentifier);
+    const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy, actorIdentifier);
+    const group = state.participantGroups.find((entry) => entry.id === input.participantGroupId);
+
+    if (!actorIdentifier) {
+      throw new Error("A signed-in identifier is required to create a game.");
+    }
+
+    if (!group || !isGroupOwnedBy(group, actorIdentifier)) {
+      throw new Error("Choose a group you manage.");
+    }
+
+    const participantMap = getParticipantMap(state);
+    const groupParticipants = group.participantIds.flatMap((participantId) => {
+      const participant = participantMap.get(participantId);
+      return participant ? [participant] : [];
+    });
+    const uniqueGroupIdentifiers = dedupe(
+      groupParticipants.map((participant) => normalizeParticipantIdentifier(participant.identifier)),
+    );
+
+    if (uniqueGroupIdentifiers.length < 4) {
+      throw new Error("Games require a selected group with at least 4 participants.");
+    }
+
+    const availableQuestionIds = dedupe(pool.questionIds).filter((questionId) =>
+      state.questions.some((question) => question.id === questionId),
+    );
+
+    if (availableQuestionIds.length < GAME_QUESTION_COUNT) {
+      throw new Error(`Games require a question pool with at least ${GAME_QUESTION_COUNT} questions.`);
+    }
+
+    const timestamp = new Date().toISOString();
+    const participants = uniqueGroupIdentifiers.map((identifier) => {
+      const participant = groupParticipants.find((entry) =>
+        identifiersMatch(entry.identifier, identifier),
+      );
+
+      return {
+        acceptedAt: null,
+        identifier,
+        label: participant?.label?.trim() || participant?.identifier || identifier,
+      };
+    });
+
+    if (!participants.some((participant) => identifiersMatch(participant.identifier, actorIdentifier))) {
+      participants.push({
+        acceptedAt: null,
+        identifier: actorIdentifier,
+        label: input.actorLabel?.trim() || input.actorIdentifier,
+      });
+    }
+
+    const game: ScheduledGame = {
+      answers: [],
+      completedAt: null,
+      createdAt: timestamp,
+      createdBy: input.createdBy,
+      creatorIdentifier: actorIdentifier,
+      id: createEntityId("game"),
+      participantGroupId: group.id,
+      participants,
+      poolId: pool.id,
+      questionIds: selectQuestionIdsForScheduledTest(
+        availableQuestionIds,
+        GAME_QUESTION_COUNT,
+        `${actorIdentifier}:${timestamp}:game`,
+      ),
+      startedAt: null,
+      title: input.title?.trim() || `${group.name} game`,
+      updatedAt: timestamp,
+    };
+
+    state.games = [game, ...state.games];
+    return hydrateGame(game);
+  });
+}
+
+export async function listGamesForParticipant(participantIdentifier: string) {
+  return withSerializedGameMutation((state) => {
+    const normalizedIdentifier = normalizeParticipantIdentifier(participantIdentifier);
+    const now = new Date();
+
+    for (const game of state.games) {
+      finalizeGameIfExpired(game, now);
+    }
+
+    return state.games
+      .filter((game) => findGameParticipant(game, normalizedIdentifier))
+      .map((game) => hydrateGame(game, now.getTime()));
+  });
+}
+
+export async function getGameForParticipant(gameId: string, participantIdentifier: string) {
+  const games = await listGamesForParticipant(participantIdentifier);
+  return games.find((game) => game.id === gameId) ?? null;
+}
+
+export async function acceptGame(gameId: string, participantIdentifier: string) {
+  return withSerializedGameMutation((state) => {
+    const game = state.games.find((entry) => entry.id === gameId);
+
+    if (!game) {
+      throw new Error("Game not found.");
+    }
+
+    const participant = findGameParticipant(game, participantIdentifier);
+
+    if (!participant) {
+      throw new Error("You are not invited to this game.");
+    }
+
+    if (game.startedAt) {
+      throw new Error("This game has already started.");
+    }
+
+    if (!participant.acceptedAt) {
+      participant.acceptedAt = new Date().toISOString();
+      game.updatedAt = participant.acceptedAt;
+    }
+
+    return hydrateGame(game);
+  });
+}
+
+export async function startGame(gameId: string, creatorIdentifier: string) {
+  return withSerializedGameMutation((state) => {
+    const game = state.games.find((entry) => entry.id === gameId);
+
+    if (!game) {
+      throw new Error("Game not found.");
+    }
+
+    if (!identifiersMatch(game.creatorIdentifier, creatorIdentifier)) {
+      throw new Error("Only the game creator can start this game.");
+    }
+
+    if (game.participants.filter((participant) => participant.acceptedAt).length < 4) {
+      throw new Error("At least 4 participants must accept before the game can start.");
+    }
+
+    if (!game.startedAt) {
+      game.startedAt = new Date().toISOString();
+      game.updatedAt = game.startedAt;
+    }
+
+    return hydrateGame(game);
+  });
+}
+
+export async function recordGameAnswer(input: {
+  gameId: string;
+  optionIndex: number;
+  participantIdentifier: string;
+  questionIndex: number;
+}) {
+  return withSerializedGameMutation((state) => {
+    const now = new Date();
+    const game = state.games.find((entry) => entry.id === input.gameId);
+
+    if (!game) {
+      throw new Error("Game not found.");
+    }
+
+    finalizeGameIfExpired(game, now);
+    const participant = findGameParticipant(game, input.participantIdentifier);
+
+    if (!participant?.acceptedAt) {
+      throw new Error("Accept the game invitation before playing.");
+    }
+
+    const currentQuestionIndex = getGameQuestionIndex(game, now.getTime());
+
+    if (currentQuestionIndex === null || currentQuestionIndex !== input.questionIndex) {
+      throw new Error("This question is no longer accepting answers.");
+    }
+
+    if (game.answers.some((answer) =>
+      answer.questionIndex === currentQuestionIndex
+      && identifiersMatch(answer.participantIdentifier, participant.identifier),
+    )) {
+      throw new Error("You already answered this question.");
+    }
+
+    const questionId = game.questionIds[currentQuestionIndex];
+    const question = state.questions.find((entry) => entry.id === questionId);
+
+    if (!question || input.optionIndex < 0 || input.optionIndex >= question.options.length) {
+      throw new Error("Choose a valid answer.");
+    }
+
+    const isCorrect = input.optionIndex === question.correctOptionIndex;
+    const correctPosition = isCorrect
+      ? game.answers.filter((answer) => answer.questionIndex === currentQuestionIndex && answer.isCorrect).length
+      : null;
+    const answer = {
+      answeredAt: now.toISOString(),
+      isCorrect,
+      optionIndex: input.optionIndex,
+      participantIdentifier: participant.identifier,
+      points: getGameQuestionPoints(correctPosition),
+      questionIndex: currentQuestionIndex,
+    };
+
+    game.answers.push(answer);
+    game.updatedAt = answer.answeredAt;
+
+    return { answer, game: hydrateGame(game, now.getTime()) };
+  });
+}
+
+export async function getOverallGamePoints(participantIdentifier: string) {
+  const games = await listGamesForParticipant(participantIdentifier);
+
+  return games
+    .filter((game) => game.status === "completed")
+    .reduce((total, game) => {
+      const entry = game.leaderboard.find((candidate) =>
+        identifiersMatch(candidate.participantIdentifier, participantIdentifier),
+      );
+
+      return total + (entry?.points ?? 0);
+    }, 0);
 }

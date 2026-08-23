@@ -1,5 +1,9 @@
 export const MIN_OPTION_COUNT = 4;
 export const MAX_OPTION_COUNT = 5;
+export const GAME_QUESTION_COUNT = 20;
+export const GAME_QUESTION_DURATION_MS = 15_000;
+export const GAME_CORRECT_POINTS = [50, 30, 10, 5, 5] as const;
+export const GAME_INCORRECT_POINTS = -5;
 
 export type ObjectiveQuestion = {
   correctOptionIndex: number;
@@ -176,6 +180,46 @@ export type ScheduledTest = {
   updatedAt: string;
 };
 
+export type ScheduledGameStatus = "upcoming" | "ongoing" | "completed";
+
+export type GameParticipant = {
+  acceptedAt: string | null;
+  identifier: string;
+  label: string;
+};
+
+export type GameAnswer = {
+  answeredAt: string;
+  isCorrect: boolean;
+  optionIndex: number;
+  participantIdentifier: string;
+  points: number;
+  questionIndex: number;
+};
+
+export type ScheduledGame = {
+  answers: GameAnswer[];
+  completedAt: string | null;
+  createdAt: string;
+  createdBy: string | null;
+  creatorIdentifier: string;
+  id: string;
+  participantGroupId: string;
+  participants: GameParticipant[];
+  poolId: string;
+  questionIds: string[];
+  startedAt: string | null;
+  title: string;
+  updatedAt: string;
+};
+
+export type GameLeaderboardEntry = {
+  participantIdentifier: string;
+  participantLabel: string;
+  points: number;
+  rank: number;
+};
+
 export type TestAttempt = {
   answers: Record<string, number | undefined>;
   completedAt: string;
@@ -238,6 +282,7 @@ export type TestLeaderboard = {
 
 export type TestingWorkspaceState = {
   attempts: TestAttempt[];
+  games: ScheduledGame[];
   groupJoinRequests: GroupJoinRequest[];
   pollAttempts: PollAttempt[];
   participantGroups: ParticipantGroup[];
@@ -252,6 +297,78 @@ export type TestingWorkspaceState = {
   workspaceBranding: WorkspaceBranding | null;
   workspaceBrandingByActor: Record<string, WorkspaceBranding>;
 };
+
+export function getGameQuestionPoints(correctPosition: number | null) {
+  if (correctPosition === null) {
+    return GAME_INCORRECT_POINTS;
+  }
+
+  return GAME_CORRECT_POINTS[correctPosition] ?? 0;
+}
+
+export function getGameStatus(
+  game: Pick<ScheduledGame, "completedAt" | "startedAt">,
+  nowMs = Date.now(),
+): ScheduledGameStatus {
+  if (game.completedAt) {
+    return "completed";
+  }
+
+  if (!game.startedAt) {
+    return "upcoming";
+  }
+
+  const endsAt = new Date(game.startedAt).getTime()
+    + GAME_QUESTION_COUNT * GAME_QUESTION_DURATION_MS;
+
+  return nowMs >= endsAt ? "completed" : "ongoing";
+}
+
+export function getGameQuestionIndex(
+  game: Pick<ScheduledGame, "completedAt" | "startedAt">,
+  nowMs = Date.now(),
+) {
+  if (!game.startedAt || getGameStatus(game, nowMs) !== "ongoing") {
+    return null;
+  }
+
+  return Math.min(
+    GAME_QUESTION_COUNT - 1,
+    Math.floor((nowMs - new Date(game.startedAt).getTime()) / GAME_QUESTION_DURATION_MS),
+  );
+}
+
+export function buildGameLeaderboard(
+  game: Pick<ScheduledGame, "answers" | "participants">,
+): GameLeaderboardEntry[] {
+  const pointsByParticipant = new Map<string, number>();
+
+  for (const answer of game.answers) {
+    pointsByParticipant.set(
+      answer.participantIdentifier,
+      (pointsByParticipant.get(answer.participantIdentifier) ?? 0) + answer.points,
+    );
+  }
+
+  return game.participants
+    .filter((participant) => participant.acceptedAt)
+    .map((participant) => ({
+      participantIdentifier: participant.identifier,
+      participantLabel: participant.label,
+      points: pointsByParticipant.get(participant.identifier) ?? 0,
+      rank: 0,
+    }))
+    .sort((left, right) =>
+      right.points - left.points
+      || left.participantLabel.localeCompare(right.participantLabel),
+    )
+    .map((entry, index, entries) => ({
+      ...entry,
+      rank: index > 0 && entries[index - 1].points === entry.points
+        ? entries[index - 1].rank
+        : index + 1,
+    }));
+}
 
 export type ImportIssue = {
   code:
@@ -869,6 +986,7 @@ export function formatElapsedTime(elapsedMs: number) {
 export function createEmptyTestingWorkspaceState(): TestingWorkspaceState {
   return {
     attempts: [],
+    games: [],
     groupJoinRequests: [],
     pollAttempts: [],
     participantGroups: [],

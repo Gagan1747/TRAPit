@@ -3,7 +3,7 @@ import "server-only";
 import { EventEmitter } from "node:events";
 
 type WorkspaceEvent = {
-  scope: "all" | "apportion" | "poll" | "test";
+  scope: "all" | "apportion" | "game" | "poll" | "test";
   timestamp: string;
 };
 

@@ -11,6 +11,7 @@ import {
   formatElapsedTime,
   getScheduledTestEndTime,
   type GroupJoinRequest,
+  type GameLeaderboardEntry,
   type ObjectiveQuestion,
   type PollBulkImportPreview,
   type PollQuestionDraft,
@@ -433,6 +434,7 @@ type GroupSearchResponse = {
 };
 
 type UserDashboardResponse = {
+  availableGames: AvailableGameSummary[];
   availablePolls: ScheduledPoll[];
   availableTests: Array<{
     branding?: WorkspaceBranding | null;
@@ -456,6 +458,28 @@ type UserDashboardResponse = {
   groupJoinRequests: GroupJoinRequest[];
   history: TestHistoryEntry[];
   identifier: string;
+  overallGamePoints: number;
+};
+
+type AvailableGameSummary = {
+  acceptedCount: number;
+  completedAt: string | null;
+  createdAt: string;
+  creatorIdentifier: string;
+  id: string;
+  leaderboard: GameLeaderboardEntry[];
+  participantCount: number;
+  participantGroupId: string;
+  participants: Array<{
+    accepted: boolean;
+    identifier: string;
+    label: string;
+  }>;
+  poolId: string;
+  startedAt: string | null;
+  status: "completed" | "ongoing" | "upcoming";
+  title: string;
+  updatedAt: string;
 };
 
 type ScheduledTestsResponse = {
@@ -1619,6 +1643,7 @@ export function AdminQuestionWorkspace({
   const [openSection, setOpenSection] = useState<AdminWorkspaceSection | null>(initialOpenSection ?? "history");
   const [outgoingGroupJoinRequests, setOutgoingGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
   const [participantPolls, setParticipantPolls] = useState<ScheduledPoll[]>([]);
+  const [availableGames, setAvailableGames] = useState<AvailableGameSummary[]>([]);
   const [activeParticipantName, setActiveParticipantName] = useState("");
   const [activeParticipantTestId, setActiveParticipantTestId] = useState<string | null>(null);
   const [currentParticipantQuestionIndex, setCurrentParticipantQuestionIndex] = useState(0);
@@ -1679,6 +1704,8 @@ export function AdminQuestionWorkspace({
   const [scheduleDurationMinutes, setScheduleDurationMinutes] = useState("30");
   const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
   const [scheduleGenerateInviteLink, setScheduleGenerateInviteLink] = useState(false);
+  const [isGameMode, setIsGameMode] = useState(false);
+  const [overallGamePoints, setOverallGamePoints] = useState(0);
   const [scheduleParticipantGroupIds, setScheduleParticipantGroupIds] = useState<string[]>([]);
   const [scheduleParticipantIds, setScheduleParticipantIds] = useState<string[]>([]);
   const [schedulePoolId, setSchedulePoolId] = useState("");
@@ -1753,9 +1780,11 @@ export function AdminQuestionWorkspace({
         ]);
 
       setOutgoingGroupJoinRequests(userDashboardPayload.groupJoinRequests);
+      setAvailableGames(userDashboardPayload.availableGames);
       setParticipantPolls(userDashboardPayload.availablePolls);
       setParticipantTests(userDashboardPayload.availableTests);
       setParticipantTestHistory(userDashboardPayload.history);
+      setOverallGamePoints(userDashboardPayload.overallGamePoints);
       setWorkspaceBranding(brandingPayload.branding);
       setBusinessAppointmentShareCode(apportionPayload.appointmentShareCode ?? brandingPayload.branding?.appointmentShareCode ?? null);
       setAvailableApportionBusinesses(apportionPayload.availableBusinesses ?? []);
@@ -2378,6 +2407,7 @@ export function AdminQuestionWorkspace({
     setSchedulePoolId("");
     setScheduleDurationMinutes("30");
     setScheduleGenerateInviteLink(false);
+    setIsGameMode(false);
     setScheduleParticipantGroupIds([]);
     setScheduleParticipantIds([]);
     setScheduleQuestionCount("1");
@@ -4062,6 +4092,33 @@ export function AdminQuestionWorkspace({
       return;
     }
 
+    if (isGameMode) {
+      if (selectedScheduleGroupIds.length !== 1 || isScheduleSelfTestSelected) {
+        setScheduleFeedback("Select exactly one group for the game.");
+        return;
+      }
+
+      void mutateWorkspace(async () => {
+        await readJson<{ game: AvailableGameSummary }>(
+          await fetch("/api/admin/games", {
+            body: JSON.stringify({
+              participantGroupId: selectedScheduleGroupIds[0],
+              poolId: schedulePoolId,
+              title: scheduleTitle.trim(),
+            }),
+            headers: { "Content-Type": "application/json" },
+            method: "POST",
+          }),
+        );
+
+        setScheduleFeedback("Game created. Invited participants can now accept it.");
+        resetScheduledTestForm();
+      }).catch((error) => {
+        handleWorkspaceActionError(error, "Unable to create the game.", setScheduleFeedback);
+      });
+      return;
+    }
+
     const durationMinutes = Number(scheduleDurationMinutes);
     const questionCount = Number(scheduleQuestionCount);
 
@@ -4133,6 +4190,20 @@ export function AdminQuestionWorkspace({
     }).catch((error) => {
       handleWorkspaceActionError(error, "Unable to save the test.", setScheduleFeedback);
     });
+  }
+
+  function handleAcceptGame(gameId: string) {
+    void mutateWorkspace(async () => {
+      await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/accept`, { method: "POST" }));
+      setFeedback("Game accepted.");
+    }).catch((error) => handleWorkspaceActionError(error, "Unable to accept the game.", setFeedback));
+  }
+
+  function handleStartGame(gameId: string) {
+    void mutateWorkspace(async () => {
+      await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/start`, { method: "POST" }));
+      window.open(`/user/game/${encodeURIComponent(gameId)}`, "_blank", "noopener,noreferrer");
+    }).catch((error) => handleWorkspaceActionError(error, "Unable to start the game.", setFeedback));
   }
 
   const selectedPool = pools.find((pool) => pool.id === schedulePoolId) ?? null;
@@ -4410,6 +4481,8 @@ export function AdminQuestionWorkspace({
   const pollToggleUpcomingCount = filteredMergedPolls.filter((poll) => poll.status === "scheduled").length;
   const upcomingMergedTests = filteredMergedTests.filter((test) => test.status !== "completed");
   const completedMergedTests = filteredMergedTests.filter((test) => test.status === "completed");
+  const upcomingGames = availableGames.filter((game) => game.status !== "completed");
+  const completedGames = availableGames.filter((game) => game.status === "completed");
   const upcomingMergedPolls = filteredMergedPolls.filter((poll) => poll.status !== "completed");
   const completedMergedPolls = filteredMergedPolls.filter((poll) => poll.status === "completed");
   const apportionNavigationCount = Array.from(
@@ -7086,7 +7159,30 @@ export function AdminQuestionWorkspace({
             />
           </div>
 
-          <div className="field-row">
+          {!editingScheduledTestId ? (
+            <div className="field">
+              <label className="role-option" htmlFor="schedule-game-mode">
+                <input
+                  checked={isGameMode}
+                  id="schedule-game-mode"
+                  type="checkbox"
+                  onChange={(event) => {
+                    const enabled = event.target.checked;
+                    setIsGameMode(enabled);
+                    setScheduleQuestionCount(enabled ? "20" : "1");
+                    setScheduleParticipantGroupIds([]);
+                    setScheduleParticipantIds([]);
+                    setScheduleGenerateInviteLink(false);
+                    setScheduleRepeatMode("none");
+                  }}
+                />
+                <span>Start Games</span>
+              </label>
+              <p className="muted-text">Overall Points: <strong>{overallGamePoints}</strong></p>
+            </div>
+          ) : null}
+
+          {!isGameMode ? <><div className="field-row">
             <div className="field">
               <label htmlFor="schedule-starts-at">Test date and time</label>
               <input
@@ -7145,7 +7241,9 @@ export function AdminQuestionWorkspace({
                 </ol>
               </div>
             ) : null}
-          </div>
+          </div></> : (
+            <p className="muted-text">Games start when the creator chooses Start after at least 4 participants accept.</p>
+          )}
 
           <div className="field-row">
             <div className="field grow-field">
@@ -7167,10 +7265,11 @@ export function AdminQuestionWorkspace({
             <div className="field">
               <label htmlFor="schedule-count">Number of questions</label>
               <input
+                disabled={isGameMode}
                 id="schedule-count"
                 min={1}
                 type="number"
-                value={scheduleQuestionCount}
+                value={isGameMode ? "20" : scheduleQuestionCount}
                 onChange={(event) => setScheduleQuestionCount(event.target.value)}
               />
             </div>
@@ -7185,7 +7284,7 @@ export function AdminQuestionWorkspace({
           <div className="field">
             <label>Select groups or classes</label>
             <div className="selection-grid">
-              <label className="role-option" key="schedule-group-self-test">
+              {!isGameMode ? <label className="role-option" key="schedule-group-self-test">
                 <input
                   checked={isScheduleSelfTestSelected}
                   type="checkbox"
@@ -7195,7 +7294,7 @@ export function AdminQuestionWorkspace({
                   }}
                 />
                 <span>Self Test</span>
-              </label>
+              </label> : null}
               {participantGroups.map((group) => (
                 <label className="role-option" key={`schedule-group-${group.id}`}>
                   <input
@@ -7203,7 +7302,9 @@ export function AdminQuestionWorkspace({
                     type="checkbox"
                     onChange={() => {
                       setScheduleParticipantGroupIds((current) =>
-                        toggleArrayValue(
+                        isGameMode
+                          ? current.includes(group.id) ? [] : [group.id]
+                          : toggleArrayValue(
                           current.filter((groupId) => groupId !== SELF_TEST_GROUP_OPTION_ID),
                           group.id,
                         ),
@@ -7219,7 +7320,7 @@ export function AdminQuestionWorkspace({
             ) : null}
           </div>
 
-          {!isScheduleSelfTestSelected ? (
+          {!isGameMode && !isScheduleSelfTestSelected ? (
             <ParticipantSearchPicker
               emptyMessage="No individual participants selected for this test yet."
               inputId="schedule-participant-search"
@@ -7232,12 +7333,12 @@ export function AdminQuestionWorkspace({
             />
           ) : null}
 
-          <p className="muted-text">To share tests with new people, share the group link. Users can request or receive group access from that link, then respond to upcoming scheduled tests.</p>
+          <p className="muted-text">{isGameMode ? "The selected group must contain at least 4 participants." : "To share tests with new people, share the group link. Users can request or receive group access from that link, then respond to upcoming scheduled tests."}</p>
 
           {scheduleFeedback ? <p className="muted-text">{scheduleFeedback}</p> : null}
           <div className="inline-actions">
             <button className="button" disabled={isMutating} type="button" onClick={handleScheduleTest}>
-              {editingScheduledTestId ? "Update test" : scheduleRepeatMode === "none" ? "Schedule test" : "Schedule 6 tests"}
+              {isGameMode ? "Create game" : editingScheduledTestId ? "Update test" : scheduleRepeatMode === "none" ? "Schedule test" : "Schedule 6 tests"}
             </button>
             {editingScheduledTestId ? (
               <button className="button-secondary" disabled={isMutating} type="button" onClick={resetScheduledTestForm}>
@@ -8300,11 +8401,11 @@ export function AdminQuestionWorkspace({
           ) : null}
 
           {!activeParticipantTest && resultsMode === "tests" ? (
-            filteredMergedTests.length ? (
+            filteredMergedTests.length || availableGames.length ? (
               <div className="form-stack">
                 <div className="workspace-result-table-group">
                   <h3>Upcoming</h3>
-                  {upcomingMergedTests.length ? (
+                  {upcomingMergedTests.length || upcomingGames.length ? (
                     <div className="leaderboard-table-wrap workspace-result-table-wrap">
                       <table className="leaderboard-table">
                         <thead>
@@ -8357,6 +8458,44 @@ export function AdminQuestionWorkspace({
                               </tr>
                             );
                           })}
+                          {upcomingGames.map((game) => {
+                            const isCreator = Boolean(currentAdminIdentifier && participantIdentifiersMatch(game.creatorIdentifier, currentAdminIdentifier));
+                            const isAccepted = Boolean(currentAdminIdentifier && game.participants.some((participant) =>
+                              participant.accepted && participantIdentifiersMatch(participant.identifier, currentAdminIdentifier),
+                            ));
+                            const completedAt = game.startedAt
+                              ? new Date(new Date(game.startedAt).getTime() + 20 * 15 * 1000).toISOString()
+                              : null;
+
+                            return (
+                              <tr key={`upcoming-game-${game.id}`}>
+                                <td><span className="status-chip success">Game</span> {game.title}</td>
+                                <td>Manual start</td>
+                                <td>5 min</td>
+                                <td>{completedAt ? formatShortDateTime(completedAt) : "-"}</td>
+                                <td>20</td>
+                                <td>{pools.find((pool) => pool.id === game.poolId)?.name ?? "Unknown pool"}</td>
+                                <td>{participantGroups.find((group) => group.id === game.participantGroupId)?.name ?? "Unknown group"}</td>
+                                <td>{game.acceptedCount}/{game.participantCount} accepted</td>
+                                <td>
+                                  <div className="inline-actions">
+                                    <span className={`status-chip ${game.status === "ongoing" ? "success" : "warning"}`}>
+                                      {game.status === "ongoing" ? "Ongoing" : "Upcoming"}
+                                    </span>
+                                    {!isAccepted && game.status === "upcoming" ? (
+                                      <button className="button-secondary small-button" type="button" onClick={() => handleAcceptGame(game.id)}>Accept</button>
+                                    ) : null}
+                                    {isCreator && game.status === "upcoming" ? (
+                                      <button className="button small-button" disabled={game.acceptedCount < 4} type="button" onClick={() => handleStartGame(game.id)}>Start</button>
+                                    ) : null}
+                                    {game.status === "ongoing" && isAccepted ? (
+                                      <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`}>Open</a>
+                                    ) : null}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -8365,7 +8504,7 @@ export function AdminQuestionWorkspace({
 
                 <div className="workspace-result-table-group">
                   <h3>Completed</h3>
-                  {completedMergedTests.length ? (
+                  {completedMergedTests.length || completedGames.length ? (
                     <div className="leaderboard-table-wrap workspace-result-table-wrap">
                       <table className="leaderboard-table">
                         <thead>
@@ -8429,6 +8568,29 @@ export function AdminQuestionWorkspace({
                                       ) : null}
                                     </div>
                                   </details>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {completedGames.map((game) => {
+                            const ownResult = currentAdminIdentifier
+                              ? game.leaderboard.find((entry) => participantIdentifiersMatch(entry.participantIdentifier, currentAdminIdentifier))
+                              : null;
+
+                            return (
+                              <tr key={`completed-game-${game.id}`}>
+                                <td><span className="status-chip success">Game</span> {game.title}</td>
+                                <td>{game.startedAt ? formatShortDateTime(game.startedAt) : "-"}</td>
+                                <td>5 min</td>
+                                <td>{game.completedAt ? formatShortDateTime(game.completedAt) : "Completed"}</td>
+                                <td>20</td>
+                                <td>{pools.find((pool) => pool.id === game.poolId)?.name ?? "Unknown pool"}</td>
+                                <td>{participantGroups.find((group) => group.id === game.participantGroupId)?.name ?? "Unknown group"}</td>
+                                <td>{game.acceptedCount}/{game.participantCount}</td>
+                                <td>
+                                  <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`}>
+                                    {ownResult ? `Rank ${ownResult.rank} · ${ownResult.points} pts` : "Game results"}
+                                  </a>
                                 </td>
                               </tr>
                             );
