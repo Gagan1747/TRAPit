@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { validateAppointmentLocationSlot } from "../../../../lib/appointment-locations";
 import { cancelApportionAppointment, listApportionAppointmentsForOwner, listApportionAppointmentsForRequester, updateApportionAppointment } from "../../../../lib/apportion-store";
 import { publishWorkspaceEvent } from "../../../../lib/realtime-events";
 import { getOrCreateWorkspaceAppointmentShareCode, getWorkspaceBranding, listWorkspaceAppointmentBusinesses } from "../../../../lib/testing-store";
@@ -8,6 +9,10 @@ import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 type OwnerOperatingHours = {
   appointmentsPerSlot: number | null;
   justAddToList: boolean;
+  locations: Record<string, {
+    workingHours: string;
+    workingHoursSecondWindow: string;
+  }>;
   slotDurationMinutes: number | null;
   workingHours: string;
   workingHoursSecondWindow: string;
@@ -43,6 +48,13 @@ async function buildApportionDashboardPayload(actorIdentifier: string) {
       {
         appointmentsPerSlot: ownerBranding?.appointmentsPerSlot ?? null,
         justAddToList: ownerBranding?.justAddToList === true,
+        locations: Object.fromEntries((ownerBranding?.appointmentLocations ?? []).map((location) => [
+          location.id,
+          {
+            workingHours: location.workingHours,
+            workingHoursSecondWindow: location.workingHoursSecondWindow,
+          },
+        ])),
         slotDurationMinutes: ownerBranding?.slotDurationMinutes ?? null,
         workingHours: ownerBranding?.workingHours ?? "",
         workingHoursSecondWindow: ownerBranding?.workingHoursSecondWindow ?? "",
@@ -102,6 +114,7 @@ export async function PATCH(request: Request) {
   const body = (await request.json()) as {
     action?: "done" | "present-in-person" | "push-back" | "reject" | "reschedule";
     appointmentId?: string;
+    nextServiceDateKey?: string;
     nextStartsAt?: string;
     notes?: string | null;
   };
@@ -111,10 +124,38 @@ export async function PATCH(request: Request) {
   }
 
   try {
+    let appointmentsPerSlot: number | undefined;
+
+    if (body.action === "reschedule") {
+      const requesterAppointments = await listApportionAppointmentsForRequester(actor.identifier);
+      const appointment = requesterAppointments.find((entry) => entry.id === body.appointmentId);
+
+      if (!appointment) {
+        throw new Error("Appointment not found.");
+      }
+
+      const ownerBranding = await getWorkspaceBranding(appointment.ownerIdentifier);
+      const location = ownerBranding?.appointmentLocations?.find((location) => location.id === appointment.locationId);
+
+      if (!location) {
+        throw new Error("This appointment location is no longer available for rescheduling.");
+      }
+
+      validateAppointmentLocationSlot({
+        location,
+        serviceDateKey: body.nextServiceDateKey ?? "",
+        slotDurationMinutes: ownerBranding?.slotDurationMinutes ?? 30,
+        startsAt: body.nextStartsAt ?? "",
+      });
+      appointmentsPerSlot = ownerBranding?.appointmentsPerSlot ?? 1;
+    }
+
     const result = await updateApportionAppointment({
       action: body.action,
       actorIdentifier: actor.identifier,
+      appointmentsPerSlot,
       appointmentId: body.appointmentId ?? "",
+      nextServiceDateKey: body.nextServiceDateKey,
       nextStartsAt: body.nextStartsAt,
       notes: body.notes,
     });

@@ -65,10 +65,20 @@ export type PersistentPollQuestion = PollQuestionDraft & {
 
 export type PollParticipantType = "open" | "registered";
 
+export type AppointmentLocation = {
+  address: string;
+  id: string;
+  name: string;
+  workingHours: string;
+  workingHoursSecondWindow: string;
+  workingDays: string;
+};
+
 export type WorkspaceBranding = {
   address: string;
   advanceBookingWeeks: number | null;
   appointmentShareCode: string | null;
+  appointmentLocations?: AppointmentLocation[];
   appointmentNotesPrompt: string;
   appointmentsPerSlot: number | null;
   breakHours: string;
@@ -693,6 +703,28 @@ export function normalizeWorkspaceBranding(
   const workingDays = branding.workingDays?.trim() ?? "";
   const workingHours = branding.workingHours?.trim() ?? "";
   const workingHoursSecondWindow = branding.workingHoursSecondWindow?.trim() ?? "";
+  const appointmentLocations = (branding.appointmentLocations?.length
+    ? branding.appointmentLocations
+    : address || workingDays || workingHours || workingHoursSecondWindow
+      ? [{
+        address,
+        id: "location-1",
+        name: "Location 1",
+        workingDays,
+        workingHours,
+        workingHoursSecondWindow,
+      }]
+      : [])
+    .slice(0, 2)
+    .map((location, index) => ({
+      address: location.address?.trim() ?? "",
+      id: location.id?.trim() || `location-${index + 1}`,
+      name: location.name?.trim() || `Location ${index + 1}`,
+      workingDays: location.workingDays?.trim() ?? "",
+      workingHours: location.workingHours?.trim() ?? "",
+      workingHoursSecondWindow: location.workingHoursSecondWindow?.trim() ?? "",
+    }));
+  const primaryLocation = appointmentLocations[0];
   const showRemainingBookings = branding.showRemainingBookings === true;
   const appointmentsPerSlot = Number.isFinite(branding.appointmentsPerSlot) && branding.appointmentsPerSlot && branding.appointmentsPerSlot > 0
     ? Math.floor(branding.appointmentsPerSlot)
@@ -701,13 +733,14 @@ export function normalizeWorkspaceBranding(
     ? branding.slotDurationMinutes
     : null;
 
-  if (!instituteName && !address && !imageDataUrl && !profileImageDataUrl && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null && !justAddToList && !recurringBookingsEnabled) {
+  if (!instituteName && !address && !imageDataUrl && !profileImageDataUrl && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && !appointmentLocations.length && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null && !justAddToList && !recurringBookingsEnabled) {
     return null;
   }
 
   return {
-    address,
+    address: primaryLocation?.address ?? address,
     advanceBookingWeeks,
+		appointmentLocations,
     appointmentShareCode,
     appointmentNotesPrompt,
     appointmentsPerSlot,
@@ -720,9 +753,9 @@ export function normalizeWorkspaceBranding(
     recurringBookingsEnabled,
     showRemainingBookings,
     slotDurationMinutes,
-    workingHoursSecondWindow,
-    workingDays,
-    workingHours,
+    workingHoursSecondWindow: primaryLocation?.workingHoursSecondWindow ?? workingHoursSecondWindow,
+    workingDays: primaryLocation?.workingDays ?? workingDays,
+    workingHours: primaryLocation?.workingHours ?? workingHours,
   };
 }
 

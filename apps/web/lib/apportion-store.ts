@@ -16,6 +16,9 @@ export type ApportionAppointment = {
   history: ApportionAppointmentHistoryEntry[];
   id: string;
   justAddToList: boolean;
+  locationAddress: string;
+  locationId: string;
+  locationName: string;
   notes: string | null;
   ownerIdentifier: string;
   ownerName: string | null;
@@ -141,8 +144,8 @@ function getAppointmentDayKey(startsAt: string) {
   return `${year}-${month}-${day}`;
 }
 
-function getOwnerDayKey(appointment: Pick<ApportionAppointment, "ownerIdentifier" | "serviceDateKey" | "startsAt">) {
-  return `${normalizeIdentifier(appointment.ownerIdentifier)}::${appointment.serviceDateKey || getAppointmentDayKey(appointment.startsAt)}`;
+function getOwnerDayKey(appointment: Pick<ApportionAppointment, "locationId" | "ownerIdentifier" | "serviceDateKey" | "startsAt">) {
+  return `${normalizeIdentifier(appointment.ownerIdentifier)}::${appointment.locationId || "location-1"}::${appointment.serviceDateKey || getAppointmentDayKey(appointment.startsAt)}`;
 }
 
 function isActiveStatus(status: ApportionAppointmentStatus) {
@@ -311,6 +314,9 @@ function normalizeState(parsed: Partial<ApportionState>): ApportionState {
             history: [],
             id: appointment.id ?? createEntityId("appointment"),
             justAddToList: appointment.justAddToList === true,
+            locationAddress: appointment.locationAddress?.trim() || "",
+            locationId: appointment.locationId?.trim() || "location-1",
+            locationName: appointment.locationName?.trim() || "Location 1",
             notes: appointment.notes?.trim() || null,
             ownerIdentifier,
             ownerName: appointment.ownerName?.trim() || null,
@@ -382,22 +388,28 @@ export async function listApportionAppointmentsForRequester(requesterIdentifier:
     .sort(compareAppointments);
 }
 
-export async function listApportionSlotCounts(ownerIdentifier: string) {
+export async function listApportionSlotCounts(ownerIdentifier: string, locationId?: string) {
   const appointments = (await listApportionAppointmentsForOwner(ownerIdentifier))
-    .filter((appointment) => isActiveStatus(appointment.currentStatus));
+    .filter((appointment) => isActiveStatus(appointment.currentStatus))
+    .filter((appointment) => !locationId || appointment.locationId === locationId);
 
-  return Object.entries(
-    appointments.reduce<Record<string, number>>((counts, appointment) => {
-      counts[appointment.startsAt] = (counts[appointment.startsAt] ?? 0) + 1;
+  return Object.values(
+    appointments.reduce<Record<string, { count: number; locationId: string; startsAt: string }>>((counts, appointment) => {
+      const key = `${appointment.locationId}::${appointment.startsAt}`;
+      counts[key] = counts[key] ?? { count: 0, locationId: appointment.locationId, startsAt: appointment.startsAt };
+      counts[key].count += 1;
       return counts;
     }, {}),
-  ).map(([startsAt, count]) => ({ count, startsAt }));
+  );
 }
 
 export async function createApportionAppointment(input: {
   appointmentsPerSlot: number;
   bookedQueuePosition?: number;
   justAddToList?: boolean;
+  locationAddress?: string;
+  locationId: string;
+  locationName: string;
   notes?: string | null;
   ownerIdentifier: string;
   ownerName?: string | null;
@@ -419,14 +431,16 @@ export async function createApportionAppointment(input: {
 
   const ownerIdentifier = input.ownerIdentifier.trim();
   const requesterIdentifier = input.requesterIdentifier.trim();
+  const locationId = input.locationId.trim();
 
-  if (!ownerIdentifier || !requesterIdentifier) {
-    throw new Error("Appointment owner and requester are required.");
+  if (!ownerIdentifier || !requesterIdentifier || !locationId) {
+    throw new Error("Appointment owner, requester, and location are required.");
   }
 
   const state = await readState();
   const slotCount = state.appointments.filter((appointment) =>
     normalizeIdentifier(appointment.ownerIdentifier) === normalizeIdentifier(ownerIdentifier)
+    && appointment.locationId === locationId
     && isActiveStatus(appointment.currentStatus)
     && appointment.startsAt === startsAt.toISOString(),
   ).length;
@@ -435,8 +449,8 @@ export async function createApportionAppointment(input: {
     throw new Error("This appointment slot is already full.");
   }
 
-  const serviceDateKey = getAppointmentDayKey(startsAt.toISOString());
-  const ownerDayKey = `${normalizeIdentifier(ownerIdentifier)}::${serviceDateKey}`;
+  const serviceDateKey = input.serviceDateKey?.trim() || getAppointmentDayKey(startsAt.toISOString());
+  const ownerDayKey = `${normalizeIdentifier(ownerIdentifier)}::${locationId}::${serviceDateKey}`;
   const ownerDayAppointments = state.appointments.filter((appointment) => getOwnerDayKey(appointment) === ownerDayKey);
   const activeOwnerDayAppointments = ownerDayAppointments.filter((appointment) => isActiveStatus(appointment.currentStatus));
   const createdAt = new Date().toISOString();
@@ -458,6 +472,9 @@ export async function createApportionAppointment(input: {
     })],
     id: createEntityId("appointment"),
     justAddToList: input.justAddToList === true,
+    locationAddress: input.locationAddress?.trim() || "",
+    locationId,
+    locationName: input.locationName.trim() || "Location",
     notes: input.notes?.trim() || null,
     ownerIdentifier,
     ownerName: input.ownerName?.trim() || null,
@@ -478,8 +495,8 @@ export async function createApportionAppointment(input: {
   return appointment;
 }
 
-function getLatestInPersonAppointment(state: ApportionState, ownerIdentifier: string, startsAt: string, excludedAppointmentId?: string) {
-  const ownerDayKey = `${normalizeIdentifier(ownerIdentifier)}::${getAppointmentDayKey(startsAt)}`;
+function getLatestInPersonAppointment(state: ApportionState, ownerIdentifier: string, locationId: string, serviceDateKey: string, excludedAppointmentId?: string) {
+  const ownerDayKey = `${normalizeIdentifier(ownerIdentifier)}::${locationId}::${serviceDateKey}`;
 
   return state.appointments
     .filter((appointment) => getOwnerDayKey(appointment) === ownerDayKey)
@@ -488,8 +505,8 @@ function getLatestInPersonAppointment(state: ApportionState, ownerIdentifier: st
     .sort(compareQueueOrder)[0] ?? null;
 }
 
-function reindexOwnerDayQueue(state: ApportionState, ownerIdentifier: string, startsAt: string) {
-  const ownerDayKey = `${normalizeIdentifier(ownerIdentifier)}::${getAppointmentDayKey(startsAt)}`;
+function reindexOwnerDayQueue(state: ApportionState, ownerIdentifier: string, locationId: string, serviceDateKey: string) {
+  const ownerDayKey = `${normalizeIdentifier(ownerIdentifier)}::${locationId}::${serviceDateKey}`;
 
   state.appointments
     .filter((appointment) => getOwnerDayKey(appointment) === ownerDayKey)
@@ -503,7 +520,9 @@ function reindexOwnerDayQueue(state: ApportionState, ownerIdentifier: string, st
 export async function updateApportionAppointment(input: {
   action: "cancel" | "done" | "present-in-person" | "push-back" | "reject" | "reschedule";
   actorIdentifier: string;
+  appointmentsPerSlot?: number;
   appointmentId: string;
+  nextServiceDateKey?: string;
   nextStartsAt?: string;
   notes?: string | null;
   requesterOnly?: boolean;
@@ -664,9 +683,21 @@ export async function updateApportionAppointment(input: {
       throw new Error("Choose a valid future appointment time.");
     }
 
+    const slotCount = state.appointments.filter((entry) =>
+      entry.id !== appointment.id
+      && normalizeIdentifier(entry.ownerIdentifier) === normalizeIdentifier(appointment.ownerIdentifier)
+      && entry.locationId === appointment.locationId
+      && isActiveStatus(entry.currentStatus)
+      && entry.startsAt === nextStartsAt.toISOString(),
+    ).length;
+
+    if (slotCount >= Math.max(1, input.appointmentsPerSlot ?? 1)) {
+      throw new Error("This appointment slot is already full.");
+    }
+
     const previousStartsAt = appointment.startsAt;
     appointment.startsAt = nextStartsAt.toISOString();
-    appointment.serviceDateKey = getAppointmentDayKey(appointment.startsAt);
+    appointment.serviceDateKey = input.nextServiceDateKey?.trim() || getAppointmentDayKey(appointment.startsAt);
     appointment.currentStatus = "pending";
     appointment.presentInPersonAt = null;
     appointment.statusUpdatedAt = timestamp;
@@ -688,14 +719,14 @@ export async function updateApportionAppointment(input: {
     appointment.queueOrder = sameDayAppointments.length + 1;
   }
 
-  reindexOwnerDayQueue(state, appointment.ownerIdentifier, appointment.startsAt);
+  reindexOwnerDayQueue(state, appointment.ownerIdentifier, appointment.locationId, appointment.serviceDateKey);
   state.appointments = normalizeAppointments(state.appointments);
   await writeState(state);
 
   return {
     appointment,
     nextInPersonAppointment: (input.action === "done" || input.action === "push-back")
-      ? getLatestInPersonAppointment(state, appointment.ownerIdentifier, appointment.startsAt, appointment.id)
+      ? getLatestInPersonAppointment(state, appointment.ownerIdentifier, appointment.locationId, appointment.serviceDateKey, appointment.id)
       : null,
   };
 }

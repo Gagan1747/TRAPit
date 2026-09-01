@@ -1,6 +1,7 @@
 import { type WorkspaceBranding } from "@trapit/testing";
 import { NextResponse } from "next/server";
 
+import { validateAppointmentLocations } from "../../../../lib/appointment-locations";
 import { getWorkspaceBranding, updateWorkspaceBranding } from "../../../../lib/testing-store";
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 
@@ -23,6 +24,15 @@ export async function POST(request: Request) {
   }
 
   const body = (await request.json()) as { branding?: WorkspaceBranding | null };
-  const branding = await updateWorkspaceBranding(body.branding ?? null, actor.identifier ?? actor.sub);
-  return NextResponse.json({ branding });
+
+  try {
+    if (body.branding) {
+      validateAppointmentLocations(body.branding.appointmentLocations);
+    }
+
+    const branding = await updateWorkspaceBranding(body.branding ?? null, actor.identifier ?? actor.sub);
+    return NextResponse.json({ branding });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to save business locations." }, { status: 400 });
+  }
 }

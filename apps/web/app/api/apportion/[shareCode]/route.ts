@@ -300,10 +300,14 @@ export async function GET(
     ownerAppointments
       .filter((appointment) => appointment.currentStatus === "pending" || appointment.currentStatus === "present-in-person" || appointment.currentStatus === "pushed-back")
       .reduce<Record<string, number>>((counts, appointment) => {
-        counts[appointment.serviceDateKey] = (counts[appointment.serviceDateKey] ?? 0) + 1;
+        const key = `${appointment.locationId}::${appointment.serviceDateKey}`;
+        counts[key] = (counts[key] ?? 0) + 1;
         return counts;
       }, {}),
-  ).map(([dateKey, count]) => ({ count, dateKey }));
+  ).map(([key, count]) => {
+    const [locationId, dateKey] = key.split("::");
+    return { count, dateKey, locationId };
+  });
 
   return NextResponse.json({
     business: {
@@ -313,6 +317,7 @@ export async function GET(
       appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
       imageDataUrl: business.branding.imageDataUrl,
       justAddToList: business.branding.justAddToList === true,
+      locations: business.branding.appointmentLocations ?? [],
       name: business.branding.instituteName,
       ownerIdentifier: business.ownerIdentifier,
       profileImageDataUrl: business.branding.profileImageDataUrl,
@@ -353,6 +358,7 @@ export async function POST(
   }
 
   const body = (await request.json()) as {
+    locationId?: string;
     notes?: string | null;
     recurrence?: {
       endDateKey?: string;
@@ -361,6 +367,20 @@ export async function POST(
     } | null;
     slotDateKey?: string;
     startsAt?: string;
+  };
+  const locationId = body.locationId?.trim() ?? "";
+  const location = business.branding.appointmentLocations?.find((entry) => entry.id === locationId);
+
+  if (!locationId || !location) {
+    return NextResponse.json({ error: "Choose a business location before booking." }, { status: 400 });
+  }
+
+  const locationBranding: WorkspaceBranding = {
+    ...business.branding,
+    address: location.address,
+    workingDays: location.workingDays,
+    workingHours: location.workingHours,
+    workingHoursSecondWindow: location.workingHoursSecondWindow,
   };
   const slotDateKey = body.slotDateKey?.trim() || getIstDateKey(new Date());
   const recurrence = body.recurrence?.mode === "weekly"
@@ -386,20 +406,22 @@ export async function POST(
   const cautionMessages = new Set<string>();
 
   try {
-    validateBookingDate(business.branding, slotDateKey);
+    validateBookingDate(locationBranding, slotDateKey);
     const [ownerAppointments, requesterAppointments] = await Promise.all([
       listApportionAppointmentsForOwner(business.ownerIdentifier),
       recurrence ? listApportionAppointmentsForRequester(requesterIdentifier) : Promise.resolve([]),
     ]);
     const activeOwnerAppointments = ownerAppointments.filter((appointment) =>
-      appointment.currentStatus === "pending"
-      || appointment.currentStatus === "present-in-person"
-      || appointment.currentStatus === "pushed-back",
+      appointment.locationId === location.id
+      && (appointment.currentStatus === "pending"
+        || appointment.currentStatus === "present-in-person"
+        || appointment.currentStatus === "pushed-back"),
     );
 
     if (recurrence) {
       const conflictingDateKey = slotDateKeys.find((recurringDateKey) => requesterAppointments.some((appointment) =>
         appointment.ownerIdentifier.trim().toLowerCase() === business.ownerIdentifier.trim().toLowerCase()
+        && appointment.locationId === location.id
         && appointment.serviceDateKey === recurringDateKey
         && (appointment.currentStatus === "pending"
           || appointment.currentStatus === "present-in-person"
@@ -421,13 +443,13 @@ export async function POST(
         }, {});
 
       for (const recurringDateKey of slotDateKeys) {
-        validateBookingDate(business.branding, recurringDateKey);
+        validateBookingDate(locationBranding, recurringDateKey);
 
         const activeCount = activeCountsByDateKey[recurringDateKey] ?? 0;
         const estimate = estimateQueueStart({
           activeCount,
           appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
-          branding: business.branding,
+          branding: locationBranding,
           serviceDateKey: recurringDateKey,
         });
         plannedAppointments.push({
@@ -448,8 +470,8 @@ export async function POST(
         throw new Error("Choose a valid appointment date and time.");
       }
 
-      validateRequestedSlot(business.branding, requestedStart, slotDateKey);
-      const selectedSlot = buildSlotStartsForDate(business.branding, slotDateKey).find((slot) => slot.startsAt === requestedStart.toISOString());
+      validateRequestedSlot(locationBranding, requestedStart, slotDateKey);
+      const selectedSlot = buildSlotStartsForDate(locationBranding, slotDateKey).find((slot) => slot.startsAt === requestedStart.toISOString());
 
       if (!selectedSlot) {
         throw new Error("Choose one of the available appointment slots.");
@@ -461,7 +483,7 @@ export async function POST(
       }, {});
 
       for (const recurringDateKey of slotDateKeys) {
-        validateBookingDate(business.branding, recurringDateKey);
+        validateBookingDate(locationBranding, recurringDateKey);
         const recurringStartsAt = createUtcSlotIso(recurringDateKey, selectedSlot.dayOffset, selectedSlot.minutesOfDay);
 
         if (!recurringStartsAt) {
@@ -469,7 +491,7 @@ export async function POST(
         }
 
         const recurringStartDate = new Date(recurringStartsAt);
-        validateRequestedSlot(business.branding, recurringStartDate, recurringDateKey);
+        validateRequestedSlot(locationBranding, recurringStartDate, recurringDateKey);
         const appointmentsPerSlot = business.branding.appointmentsPerSlot ?? 1;
 
         if ((activeCountsBySlot[recurringStartsAt] ?? 0) >= appointmentsPerSlot) {
@@ -489,6 +511,9 @@ export async function POST(
       const appointment = await createApportionAppointment({
         appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
         justAddToList: plannedAppointment.justAddToList,
+        locationAddress: location.address,
+        locationId: location.id,
+        locationName: location.name,
         notes: body.notes,
         ownerIdentifier: business.ownerIdentifier,
         ownerName: business.branding.instituteName,

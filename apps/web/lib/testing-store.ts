@@ -450,6 +450,7 @@ export async function listWorkspaceAppointmentBusinesses() {
         appointmentShareCode,
         appointmentsPerSlot: branding.appointmentsPerSlot ?? null,
         justAddToList: branding.justAddToList === true,
+        locations: branding.appointmentLocations ?? [],
         name: name || "Business",
         ownerIdentifier,
         recurringBookingLimit: branding.recurringBookingsEnabled === true ? branding.recurringBookingLimit ?? 6 : null,
@@ -467,6 +468,7 @@ export async function listWorkspaceAppointmentBusinesses() {
       appointmentShareCode: string;
       appointmentsPerSlot: number | null;
       justAddToList: boolean;
+      locations: NonNullable<WorkspaceBranding["appointmentLocations"]>;
       name: string;
       ownerIdentifier: string;
       recurringBookingLimit: number | null;
