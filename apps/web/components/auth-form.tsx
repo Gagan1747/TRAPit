@@ -8,6 +8,7 @@ import {
   PHONE_COUNTRIES,
   sanitizeNationalPhoneInput,
 } from "@trapit/auth";
+import { Eye, EyeOff } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
@@ -76,6 +77,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
+  const [isConfirmPasswordVisible, setIsConfirmPasswordVisible] = useState(false);
   const [selectedCountryCode, setSelectedCountryCode] = useState(DEFAULT_PHONE_COUNTRY_CODE);
   const [phoneNumber, setPhoneNumber] = useState("");
   const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
@@ -91,9 +93,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const infoMessage =
     mode !== "sign-in"
       ? null
-      : searchParams.get("error") === "session"
-        ? "Your session is missing or expired. Sign in to open the requested page."
-        : searchParams.get("reset")
+      : searchParams.get("reset")
         ? "Password updated. Sign in with the new password."
         : searchParams.get("confirmed")
           ? "Account confirmed. You can sign in now."
@@ -117,6 +117,7 @@ export function AuthForm({ mode }: AuthFormProps) {
     setPassword("");
     setConfirmPassword("");
     setIsPasswordVisible(false);
+    setIsConfirmPasswordVisible(false);
     setConfirmationCode("");
     setSignUpState(null);
     setErrorMessage(null);
@@ -132,6 +133,7 @@ export function AuthForm({ mode }: AuthFormProps) {
     setPassword("");
     setConfirmPassword("");
     setIsPasswordVisible(false);
+    setIsConfirmPasswordVisible(false);
     setConfirmationCode("");
     setSignUpState(null);
     setErrorMessage(null);
@@ -419,7 +421,7 @@ export function AuthForm({ mode }: AuthFormProps) {
       {mode === "sign-in" || mode === "sign-up" ? (
         <div className="field">
           <label htmlFor="password">Password</label>
-          <div className="field-row auth-password-row">
+          <div className="auth-password-control">
             <input
               id="password"
               type={isPasswordVisible ? "text" : "password"}
@@ -429,12 +431,14 @@ export function AuthForm({ mode }: AuthFormProps) {
               onChange={(event) => setPassword(event.target.value)}
             />
             <button
-              className="button-secondary small-button"
+              aria-label={isPasswordVisible ? "Hide password" : "Show password"}
+              aria-pressed={isPasswordVisible}
+              className="auth-password-toggle"
               disabled={!authConfigured}
               type="button"
               onClick={() => setIsPasswordVisible((currentValue) => !currentValue)}
             >
-              {isPasswordVisible ? "Hide" : "Show"}
+              {isPasswordVisible ? <EyeOff aria-hidden="true" size={20} /> : <Eye aria-hidden="true" size={20} />}
             </button>
           </div>
         </div>
@@ -443,14 +447,26 @@ export function AuthForm({ mode }: AuthFormProps) {
       {mode === "sign-up" ? (
         <div className="field">
           <label htmlFor="confirm-password">Confirm password</label>
-          <input
-            id="confirm-password"
-            type={isPasswordVisible ? "text" : "password"}
-            placeholder="Re-enter your password"
-            disabled={!authConfigured}
-            value={confirmPassword}
-            onChange={(event) => setConfirmPassword(event.target.value)}
-          />
+          <div className="auth-password-control">
+            <input
+              id="confirm-password"
+              type={isConfirmPasswordVisible ? "text" : "password"}
+              placeholder="Re-enter your password"
+              disabled={!authConfigured}
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+            />
+            <button
+              aria-label={isConfirmPasswordVisible ? "Hide confirmed password" : "Show confirmed password"}
+              aria-pressed={isConfirmPasswordVisible}
+              className="auth-password-toggle"
+              disabled={!authConfigured}
+              type="button"
+              onClick={() => setIsConfirmPasswordVisible((currentValue) => !currentValue)}
+            >
+              {isConfirmPasswordVisible ? <EyeOff aria-hidden="true" size={20} /> : <Eye aria-hidden="true" size={20} />}
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -531,18 +547,14 @@ export function AuthForm({ mode }: AuthFormProps) {
       ) : null}
 
       {mode === "sign-in" ? (
-        <a className="button-secondary" href="/reset-password">
-          Reset password
-        </a>
+        <nav aria-label="Sign-in help" className="auth-footer-links">
+          <a href="/reset-password">Reset password</a>
+          <span aria-hidden="true" className="auth-footer-divider" />
+          <a href={`/sign-up${redirectQuery}`}>New user? Sign up</a>
+        </nav>
       ) : null}
 
-      {mode === "sign-in" ? (
-        <a className="button-secondary" href={`/sign-up${redirectQuery}`}>
-          New user? Sign up
-        </a>
-      ) : null}
-
-      {mode === "sign-up" ? <a className="button-secondary" href={`/sign-in${redirectQuery}`}>Already have an account? Sign in</a> : null}
+      {mode === "sign-up" ? <a className="auth-footer-link" href={`/sign-in${redirectQuery}`}>Already have an account? Sign in</a> : null}
     </form>
   );
 }

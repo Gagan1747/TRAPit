@@ -5,6 +5,7 @@ type CollapsibleWorkspaceSectionProps = {
   children: ReactNode;
   description?: ReactNode;
   eyebrow?: string;
+  hideToggle?: boolean;
   isOpen: boolean;
   onToggle: () => void;
   sectionId: string;
@@ -16,14 +17,19 @@ export function CollapsibleWorkspaceSection({
   children,
   description,
   eyebrow,
+  hideToggle = false,
   isOpen,
   onToggle,
   sectionId,
   title,
 }: CollapsibleWorkspaceSectionProps) {
+  if (hideToggle && !isOpen) {
+    return null;
+  }
+
   return (
     <section className={`panel workspace-card collapsible-section${isOpen ? " is-open" : ""}`}>
-      <div className="collapsible-header">
+      {!hideToggle ? <div className="collapsible-header">
         <button
           aria-controls={sectionId}
           aria-expanded={isOpen}
@@ -38,7 +44,7 @@ export function CollapsibleWorkspaceSection({
         <div className="collapsible-actions">
           {action}
         </div>
-      </div>
+      </div> : null}
 
       {isOpen ? (
         <div className="collapsible-body" id={sectionId}>

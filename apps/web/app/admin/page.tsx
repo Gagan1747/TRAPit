@@ -28,6 +28,7 @@ export default async function AdminPage() {
           currentActorRole="admin"
           currentAdminIdentifier={sessionIdentifier}
           currentUserCategory={null}
+          initialOpenSection="apportion"
           isSuperAdmin={isSuperAdmin}
           previousSignInAt={previousSignInAt}
         />

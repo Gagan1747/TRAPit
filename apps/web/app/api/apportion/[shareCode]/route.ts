@@ -11,6 +11,10 @@ const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "
 const WEEKDAY_KEYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
+function supportsRecurringAppointments() {
+  return false;
+}
+
 function parseTimeToMinutes(value: string) {
   const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
 
@@ -252,28 +256,41 @@ function estimateQueueStart(input: {
   serviceDateKey: string;
 }) {
   const slotDurationMinutes = input.branding.slotDurationMinutes ?? 30;
-  const slotStarts = buildSlotStartsForDate(input.branding, input.serviceDateKey);
-  const slotIndex = Math.floor(input.activeCount / Math.max(1, input.appointmentsPerSlot));
+  const ranges = [input.branding.workingHours, input.branding.workingHoursSecondWindow]
+    .map((range) => parseTimeRange(range))
+    .filter((range): range is { durationMinutes: number; startMinutes: number } => Boolean(range))
+    .map((range) => ({ endMinutes: range.startMinutes + range.durationMinutes, startMinutes: range.startMinutes }))
+    .sort((left, right) => left.startMinutes - right.startMinutes);
 
-  if (!slotStarts.length) {
-    const fallbackDate = createDateFromKey(input.serviceDateKey) ?? new Date();
-    fallbackDate.setHours(10, 0, 0, 0);
-    fallbackDate.setMinutes(fallbackDate.getMinutes() + (slotIndex * slotDurationMinutes));
-
-    return { exceedsWorkingHours: slotIndex > 0, startsAt: fallbackDate.toISOString() };
+  if (!ranges.length) {
+    return null;
   }
 
-  if (slotIndex < slotStarts.length) {
-    return { exceedsWorkingHours: false, startsAt: slotStarts[slotIndex].startsAt };
+  const now = new Date();
+  const nowIst = new Date(now.getTime() + (IST_OFFSET_MINUTES * 60 * 1000));
+  const nowMinutes = nowIst.getUTCHours() * 60 + nowIst.getUTCMinutes() + (nowIst.getUTCSeconds() / 60);
+  let estimateMinutes = Math.max(ranges[0].startMinutes, nowMinutes);
+  let remainingServiceMinutes = Math.floor(input.activeCount / Math.max(1, input.appointmentsPerSlot)) * slotDurationMinutes;
+
+  for (const range of ranges) {
+    if (estimateMinutes >= range.endMinutes) {
+      continue;
+    }
+
+    estimateMinutes = Math.max(estimateMinutes, range.startMinutes);
+    const availableMinutes = range.endMinutes - estimateMinutes;
+
+    if (remainingServiceMinutes < availableMinutes) {
+      estimateMinutes += remainingServiceMinutes;
+      const startsAt = createUtcSlotIso(input.serviceDateKey, Math.floor(estimateMinutes / (24 * 60)), Math.floor(estimateMinutes % (24 * 60)));
+      return startsAt ? { exceedsWorkingHours: false, startsAt } : null;
+    }
+
+    remainingServiceMinutes -= availableMinutes;
+    estimateMinutes = range.endMinutes;
   }
 
-  const overflowSlot = new Date(slotStarts[slotStarts.length - 1].startsAt);
-  overflowSlot.setMinutes(overflowSlot.getMinutes() + ((slotIndex - (slotStarts.length - 1)) * slotDurationMinutes));
-
-  return {
-    exceedsWorkingHours: true,
-    startsAt: overflowSlot.toISOString(),
-  };
+  return null;
 }
 
 export async function GET(
@@ -321,8 +338,9 @@ export async function GET(
       name: business.branding.instituteName,
       ownerIdentifier: business.ownerIdentifier,
       profileImageDataUrl: business.branding.profileImageDataUrl,
-      recurringBookingLimit: business.branding.recurringBookingsEnabled === true ? business.branding.recurringBookingLimit ?? 6 : null,
-      recurringBookingsEnabled: business.branding.recurringBookingsEnabled === true,
+      promotionalImageDataUrls: business.branding.promotionalImageDataUrls ?? [],
+      recurringBookingLimit: null,
+      recurringBookingsEnabled: false,
       showRemainingBookings: business.branding.showRemainingBookings,
       slotDurationMinutes: business.branding.slotDurationMinutes ?? null,
       workingDays: business.branding.workingDays,
@@ -390,8 +408,8 @@ export async function POST(
       }
     : null;
 
-  if (recurrence && business.branding.recurringBookingsEnabled !== true) {
-    return NextResponse.json({ error: "Recurring bookings are disabled for this business." }, { status: 400 });
+  if (recurrence && !supportsRecurringAppointments()) {
+    return NextResponse.json({ error: "Recurring appointments are no longer supported." }, { status: 400 });
   }
 
   const recurringBookingLimit = business.branding.recurringBookingLimit ?? 6;
@@ -436,6 +454,12 @@ export async function POST(
     const plannedAppointments: Array<{ justAddToList: boolean; serviceDateKey: string; startsAt: string }> = [];
 
     if (business.branding.justAddToList) {
+      const todayIstDateKey = getIstDateKey(new Date());
+
+      if (slotDateKey !== todayIstDateKey) {
+        throw new Error("Queue appointments can only be booked for today.");
+      }
+
       const activeCountsByDateKey = activeOwnerAppointments
         .reduce<Record<string, number>>((counts, appointment) => {
           counts[appointment.serviceDateKey] = (counts[appointment.serviceDateKey] ?? 0) + 1;
@@ -452,6 +476,11 @@ export async function POST(
           branding: locationBranding,
           serviceDateKey: recurringDateKey,
         });
+
+        if (!estimate) {
+          throw new Error("Queue booking is closed for today.");
+        }
+
         plannedAppointments.push({
           justAddToList: true,
           serviceDateKey: recurringDateKey,
@@ -459,9 +488,6 @@ export async function POST(
         });
         activeCountsByDateKey[recurringDateKey] = activeCount + 1;
 
-        if (estimate.exceedsWorkingHours) {
-          cautionMessages.add("Estimated latest availability is beyond the configured working hours for at least one booked day.");
-        }
       }
     } else {
       const requestedStart = new Date(body.startsAt ?? "");

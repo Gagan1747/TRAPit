@@ -347,6 +347,59 @@ TRAPIT_ALLOW_DANGEROUS_RESTORE=1 TRAPIT_ALLOW_EMPTY_DATA_FILE=1 ./infra/ec2/rest
 
 Do not use the bypass during normal production recovery.
 
+## Selectively recovering missing question pools
+
+Do not restore the whole workspace when only some users' pools or questions are missing. A whole-file restore can remove newer tests, attempts, polls, groups, and other production records.
+
+First take a fresh validated backup and identify the newest historical backup that still contains the affected pools:
+
+```bash
+cd /var/www/trapit
+./infra/ec2/backup-data.sh
+./infra/ec2/validate-testing-data.sh /var/backups/trapit/testing-workspace-YYYYMMDD-HHMMSS.json /var/lib/trapit/testing-workspace.json
+```
+
+Run the selective recovery utility without `--apply`. Dry-run is the default. It writes a staged preview but does not change the live file:
+
+```bash
+node infra/ec2/recover-question-pools.cjs \
+   --live /var/lib/trapit/testing-workspace.json \
+   --backup /var/backups/trapit/testing-workspace-YYYYMMDD-HHMMSS.json \
+   --output /tmp/testing-workspace-pool-recovery-preview.json
+
+./infra/ec2/validate-testing-data.sh \
+   /tmp/testing-workspace-pool-recovery-preview.json \
+   /var/lib/trapit/testing-workspace.json
+```
+
+Review `restoredPoolsByOwner`, `restoredQuestionsByOwner`, and `unresolvedQuestionIds` in the report. Existing live IDs always win, and only missing pools plus their referenced missing questions are added. All other live collections remain unchanged.
+
+If Cognito users were recreated and their `sub` identifiers changed, prepare a reviewed JSON mapping. Do not infer this mapping from names alone:
+
+```json
+{
+   "old-cognito-sub": "current-cognito-sub"
+}
+```
+
+Repeat the dry run with `--ownership-map /secure/path/ownership-map.json`. Compare the staged records and verify each mapping with Cognito and the affected account owner before applying it.
+
+After review and approval, run the same command with `--apply`. The utility refuses unresolved question references, creates a timestamped pre-merge copy beside the live file, and atomically replaces the live JSON:
+
+```bash
+node infra/ec2/recover-question-pools.cjs \
+   --live /var/lib/trapit/testing-workspace.json \
+   --backup /var/backups/trapit/testing-workspace-YYYYMMDD-HHMMSS.json \
+   --ownership-map /secure/path/ownership-map.json \
+   --output /tmp/testing-workspace-pool-recovery-approved.json \
+   --apply
+
+pm2 restart trapit-web --update-env
+pm2 logs trapit-web --lines 100
+```
+
+Sign in as every affected user and verify pool and question counts, then verify the super-admin view. Retain the pre-merge copy until all accounts are confirmed. Do not use `TRAPIT_ALLOW_DANGEROUS_RESTORE` for this selective recovery.
+
 ## Recurring production backups
 
 Add a cron job so backups happen even when no deployment is running:

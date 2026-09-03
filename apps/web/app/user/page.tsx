@@ -16,7 +16,6 @@ export default async function UserPage({
   const displayName = getSessionDisplayName(session) ?? "User";
   const isSuperAdmin = isSuperAdminIdentifier(session.phoneNumber ?? sessionIdentifier);
   const previousSignInAt = authConfigured ? await getPreviousWebSignIn(session) : null;
-  const openApportionView = searchParams?.tab === "apportion";
 
   return (
     <main className="page-shell">
@@ -35,7 +34,7 @@ export default async function UserPage({
           currentActorRole={session.role === "admin" ? "admin" : "user"}
           currentAdminIdentifier={sessionIdentifier}
           currentUserCategory={session.userCategory}
-          initialOpenSection={openApportionView ? "apportion" : undefined}
+          initialOpenSection="apportion"
           isSuperAdmin={isSuperAdmin}
           previousSignInAt={previousSignInAt}
         />

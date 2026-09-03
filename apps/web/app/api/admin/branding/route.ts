@@ -5,6 +5,21 @@ import { validateAppointmentLocations } from "../../../../lib/appointment-locati
 import { getWorkspaceBranding, updateWorkspaceBranding } from "../../../../lib/testing-store";
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 
+const MAX_PROMOTIONAL_IMAGES = 4;
+const MAX_PROMOTIONAL_IMAGE_DATA_URL_LENGTH = 2_800_000;
+
+function validatePromotionalImages(values: string[] | undefined) {
+  const images = values ?? [];
+
+  if (images.length > MAX_PROMOTIONAL_IMAGES) {
+    throw new Error("Upload no more than 4 promotional images.");
+  }
+
+  if (images.some((value) => !value.startsWith("data:image/") || value.length > MAX_PROMOTIONAL_IMAGE_DATA_URL_LENGTH)) {
+    throw new Error("Each promotional image must be a valid image up to 2 MB.");
+  }
+}
+
 export async function GET() {
   const actor = await getWorkspaceActor();
 
@@ -28,6 +43,7 @@ export async function POST(request: Request) {
   try {
     if (body.branding) {
       validateAppointmentLocations(body.branding.appointmentLocations);
+      validatePromotionalImages(body.branding.promotionalImageDataUrls);
     }
 
     const branding = await updateWorkspaceBranding(body.branding ?? null, actor.identifier ?? actor.sub);

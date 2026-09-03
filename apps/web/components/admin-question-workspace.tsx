@@ -38,6 +38,7 @@ import { formatShortDate, formatShortDateTime, formatShortDateTimeIst } from "..
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
+import { FloatingWindowCloseButton } from "./floating-window-close-button";
 import { SignOutButton } from "./sign-out-button";
 
 const AI_OCR_EXAMPLE = `Question: 5+3?
@@ -47,6 +48,9 @@ Option C: 9
 Option D: 8
 Option E: 7
 Answer: 8`;
+
+const MAX_PROMOTIONAL_IMAGES = 4;
+const MAX_PROMOTIONAL_IMAGE_BYTES = 2 * 1024 * 1024;
 
 const AI_OCR_PROMPT = `convert the image/text to questions in the following format
 -add colon after question, each options, answer
@@ -771,6 +775,7 @@ function createEmptyBranding(): WorkspaceBranding {
     instituteName: "",
     justAddToList: false,
     profileImageDataUrl: null,
+    promotionalImageDataUrls: [],
     recurringBookingLimit: null,
     recurringBookingsEnabled: false,
     showRemainingBookings: false,
@@ -787,7 +792,7 @@ function getBookingBehaviorMode(branding: WorkspaceBranding | null): BookingBeha
   }
 
   if (branding?.recurringBookingsEnabled === true) {
-    return "recurring";
+    return "standard";
   }
 
   return branding?.showRemainingBookings === true ? "standard" : "none";
@@ -798,6 +803,10 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
   const address = branding?.address.trim() ?? "";
   const imageDataUrl = branding?.imageDataUrl?.trim() ?? null;
   const profileImageDataUrl = branding?.profileImageDataUrl?.trim() ?? null;
+  const promotionalImageDataUrls = (branding?.promotionalImageDataUrls ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .slice(0, MAX_PROMOTIONAL_IMAGES);
   const advanceBookingWeeks = [1, 2, 3, 4].includes(branding?.advanceBookingWeeks ?? 0)
     ? branding?.advanceBookingWeeks ?? null
     : null;
@@ -825,7 +834,7 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
     ? branding?.slotDurationMinutes ?? null
     : null;
 
-  if (!instituteName && !address && !imageDataUrl && !profileImageDataUrl && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null && !justAddToList && !recurringBookingsEnabled) {
+  if (!instituteName && !address && !imageDataUrl && !profileImageDataUrl && !promotionalImageDataUrls.length && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null && !justAddToList && !recurringBookingsEnabled) {
     return null;
   }
 
@@ -840,6 +849,7 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
     instituteName,
     justAddToList,
     profileImageDataUrl,
+    promotionalImageDataUrls,
     recurringBookingLimit,
     recurringBookingsEnabled,
     showRemainingBookings,
@@ -1649,6 +1659,7 @@ export function AdminQuestionWorkspace({
   const [brandingImageDataUrl, setBrandingImageDataUrl] = useState<string | null>(null);
   const [brandingInstituteName, setBrandingInstituteName] = useState("");
   const [brandingProfileImageDataUrl, setBrandingProfileImageDataUrl] = useState<string | null>(null);
+  const [brandingPromotionalImageDataUrls, setBrandingPromotionalImageDataUrls] = useState<string[]>([]);
   const [isApportionAddAppointmentOpen, setIsApportionAddAppointmentOpen] = useState(false);
   const [isApportionBusinessPanelOpen, setIsApportionBusinessPanelOpen] = useState(false);
   const [isBrandingDragActive, setIsBrandingDragActive] = useState(false);
@@ -1790,6 +1801,7 @@ export function AdminQuestionWorkspace({
     setBrandingInstituteName(branding?.instituteName ?? "");
     setBrandingImageDataUrl(branding?.imageDataUrl ?? null);
     setBrandingProfileImageDataUrl(branding?.profileImageDataUrl ?? null);
+    setBrandingPromotionalImageDataUrls(branding?.promotionalImageDataUrls ?? []);
     setBusinessAdvanceBookingWeeks("4");
     setBusinessAppointmentsPerSlot(String(Math.min(6, Math.max(1, branding?.appointmentsPerSlot ?? 1))));
     setBusinessAppointmentNotesPrompt(branding?.appointmentNotesPrompt ?? DEFAULT_APPOINTMENT_NOTES_PROMPT);
@@ -1821,11 +1833,31 @@ export function AdminQuestionWorkspace({
     }
 
     try {
-      const [userDashboardPayload, brandingPayload, apportionPayload, userParticipantsPayload, categorySnapshotPayload, categoryManagementPayload] =
+      const [brandingPayload, apportionPayload] =
         await Promise.all([
-          readJson<UserDashboardResponse>(await fetch("/api/user/dashboard")),
           readJson<BrandingResponse>(await fetch("/api/admin/branding")),
           readJson<ApportionDashboardResponse>(await fetch("/api/user/apportion")),
+        ]);
+
+      setWorkspaceBranding(brandingPayload.branding);
+      setBusinessAppointmentShareCode(apportionPayload.appointmentShareCode ?? brandingPayload.branding?.appointmentShareCode ?? null);
+      setAvailableApportionBusinesses(apportionPayload.availableBusinesses ?? []);
+      if (!isBrandingDraftDirtyRef.current) {
+        syncBrandingDraft(brandingPayload.branding);
+      }
+      setOwnerApportionAppointments(apportionPayload.ownerAppointments);
+      setOwnerOperatingHoursByIdentifier(
+        normalizeOwnerOperatingHoursByIdentifier(apportionPayload.ownerOperatingHoursByIdentifier),
+      );
+      setRequesterApportionAppointments(apportionPayload.requesterAppointments);
+
+      if (!options?.silent) {
+        setIsLoading(false);
+      }
+
+      const [userDashboardPayload, userParticipantsPayload, categorySnapshotPayload, categoryManagementPayload] =
+        await Promise.all([
+          readJson<UserDashboardResponse>(await fetch("/api/user/dashboard")),
           currentActorRole === "user"
             ? readJson<ParticipantsResponse>(await fetch("/api/admin/participants"))
             : Promise.resolve<ParticipantsResponse | null>(null),
@@ -1843,17 +1875,6 @@ export function AdminQuestionWorkspace({
       setParticipantTests(userDashboardPayload.availableTests);
       setParticipantTestHistory(userDashboardPayload.history);
       setOverallGamePoints(userDashboardPayload.overallGamePoints);
-      setWorkspaceBranding(brandingPayload.branding);
-      setBusinessAppointmentShareCode(apportionPayload.appointmentShareCode ?? brandingPayload.branding?.appointmentShareCode ?? null);
-      setAvailableApportionBusinesses(apportionPayload.availableBusinesses ?? []);
-      if (!isBrandingDraftDirtyRef.current) {
-        syncBrandingDraft(brandingPayload.branding);
-      }
-      setOwnerApportionAppointments(apportionPayload.ownerAppointments);
-      setOwnerOperatingHoursByIdentifier(
-        normalizeOwnerOperatingHoursByIdentifier(apportionPayload.ownerOperatingHoursByIdentifier),
-      );
-      setRequesterApportionAppointments(apportionPayload.requesterAppointments);
       setCategorySnapshot(categorySnapshotPayload);
       setCategoryManagement(categoryManagementPayload);
 
@@ -3537,6 +3558,35 @@ export function AdminQuestionWorkspace({
     }
   }
 
+  async function handlePromotionalImageSelection(files: FileList | null) {
+    if (!files?.length) {
+      return;
+    }
+
+    const selectedFiles = Array.from(files);
+
+    if (brandingPromotionalImageDataUrls.length + selectedFiles.length > MAX_PROMOTIONAL_IMAGES) {
+      setBrandingFeedback("Upload no more than 4 promotional images.");
+      return;
+    }
+
+    const invalidFile = selectedFiles.find((file) => !file.type.startsWith("image/") || file.size > MAX_PROMOTIONAL_IMAGE_BYTES);
+
+    if (invalidFile) {
+      setBrandingFeedback("Each promotional image must be an image up to 2 MB.");
+      return;
+    }
+
+    try {
+      const imageDataUrls = await Promise.all(selectedFiles.map((file) => fileToDataUrl(file)));
+      markBrandingDraftDirty();
+      setBrandingPromotionalImageDataUrls((current) => [...current, ...imageDataUrls]);
+      setBrandingFeedback(null);
+    } catch (error) {
+      setBrandingFeedback(error instanceof Error ? error.message : "Unable to read the promotional images.");
+    }
+  }
+
   function handlePreviewPollImport() {
     if (!pollImportText.trim()) {
       setPollImportFeedback("Paste OCR text before previewing the poll import.");
@@ -3862,8 +3912,9 @@ export function AdminQuestionWorkspace({
       instituteName: brandingInstituteName,
       justAddToList: businessBookingBehaviorMode === "queue",
       profileImageDataUrl: brandingProfileImageDataUrl,
-      recurringBookingLimit: businessBookingBehaviorMode === "recurring" ? Number(businessRecurringBookingLimit) : null,
-      recurringBookingsEnabled: businessBookingBehaviorMode === "recurring",
+      promotionalImageDataUrls: brandingPromotionalImageDataUrls,
+      recurringBookingLimit: null,
+      recurringBookingsEnabled: false,
       showRemainingBookings: businessBookingBehaviorMode === "standard",
       slotDurationMinutes,
       workingHoursSecondWindow: businessWorkingHoursSecondWindow,
@@ -3961,6 +4012,7 @@ export function AdminQuestionWorkspace({
     setBrandingInstituteName("");
     setBrandingImageDataUrl(null);
     setBrandingProfileImageDataUrl(null);
+    setBrandingPromotionalImageDataUrls([]);
     setBusinessAdvanceBookingWeeks("4");
     setBusinessAppointmentsPerSlot("1");
     setBusinessAppointmentNotesPrompt(DEFAULT_APPOINTMENT_NOTES_PROMPT);
@@ -4637,8 +4689,9 @@ export function AdminQuestionWorkspace({
     instituteName: brandingInstituteName,
     justAddToList: businessBookingBehaviorMode === "queue",
     profileImageDataUrl: brandingProfileImageDataUrl,
-    recurringBookingLimit: businessBookingBehaviorMode === "recurring" ? Number.parseInt(businessRecurringBookingLimit, 10) : null,
-    recurringBookingsEnabled: businessBookingBehaviorMode === "recurring",
+    promotionalImageDataUrls: brandingPromotionalImageDataUrls,
+    recurringBookingLimit: null,
+    recurringBookingsEnabled: false,
     showRemainingBookings: businessBookingBehaviorMode === "standard",
     slotDurationMinutes: Number.parseInt(businessSlotDurationMinutes, 10),
     workingHoursSecondWindow: businessWorkingHoursSecondWindow,
@@ -4969,26 +5022,7 @@ export function AdminQuestionWorkspace({
           <option value="none">None</option>
           <option value="standard">Standard slots (show remaining)</option>
           <option value="queue">Queue only</option>
-          <option value="recurring">Recurring slots</option>
         </select>
-        {businessBookingBehaviorMode === "recurring" ? (
-          <>
-            <label htmlFor="business-recurring-booking-limit">Number of recurring bookings</label>
-            <select
-              className="select-field"
-              id="business-recurring-booking-limit"
-              value={businessRecurringBookingLimit}
-              onChange={(event) => {
-                markBrandingDraftDirty();
-                setBusinessRecurringBookingLimit(event.target.value);
-              }}
-            >
-              {Array.from({ length: 12 }, (_, index) => index + 1).map((count) => (
-                <option key={count} value={String(count)}>{count}</option>
-              ))}
-            </select>
-          </>
-        ) : null}
         <p className="muted-text">If opening and closing times are the same, the booking page treats the business as open for 24 hours starting from that time.</p>
       </div>
       <div className="field business-field-card">
@@ -5057,6 +5091,77 @@ export function AdminQuestionWorkspace({
           </div>
         </div>
       </div>
+      <div className="field business-field-card">
+        <span className="field-label">Promotional images ({brandingPromotionalImageDataUrls.length}/4)</span>
+        <label className="button-secondary promotional-image-upload" htmlFor="branding-promotional-images">
+          Upload promotional images
+        </label>
+        <input
+          accept="image/*"
+          className="sr-only"
+          disabled={brandingPromotionalImageDataUrls.length >= MAX_PROMOTIONAL_IMAGES}
+          id="branding-promotional-images"
+          multiple
+          type="file"
+          onChange={(event) => {
+            void handlePromotionalImageSelection(event.target.files);
+            event.target.value = "";
+          }}
+        />
+        {brandingPromotionalImageDataUrls.length ? (
+          <div className="promotional-image-grid">
+            {brandingPromotionalImageDataUrls.map((imageDataUrl, index) => (
+              <div className="promotional-image-preview" key={`${imageDataUrl.slice(0, 32)}-${index}`}>
+                <img alt={`Promotional preview ${index + 1}`} src={imageDataUrl} />
+                <div className="promotional-image-actions">
+                  <button
+                    aria-label={`Move promotional image ${index + 1} left`}
+                    className="button-secondary small-button"
+                    disabled={index === 0}
+                    type="button"
+                    onClick={() => {
+                      markBrandingDraftDirty();
+                      setBrandingPromotionalImageDataUrls((current) => {
+                        const next = [...current];
+                        [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                        return next;
+                      });
+                    }}
+                  >
+                    Left
+                  </button>
+                  <button
+                    aria-label={`Move promotional image ${index + 1} right`}
+                    className="button-secondary small-button"
+                    disabled={index === brandingPromotionalImageDataUrls.length - 1}
+                    type="button"
+                    onClick={() => {
+                      markBrandingDraftDirty();
+                      setBrandingPromotionalImageDataUrls((current) => {
+                        const next = [...current];
+                        [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                        return next;
+                      });
+                    }}
+                  >
+                    Right
+                  </button>
+                  <button
+                    className="button-secondary small-button"
+                    type="button"
+                    onClick={() => {
+                      markBrandingDraftDirty();
+                      setBrandingPromotionalImageDataUrls((current) => current.filter((_, imageIndex) => imageIndex !== index));
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : <p className="muted-text">Add up to four images for the booking-page carousel.</p>}
+      </div>
       {brandingFeedback ? <p className="muted-text">{brandingFeedback}</p> : null}
       <div className="inline-actions">
         <button className="button" disabled={isMutating} type="button" onClick={() => void handleSaveBranding()}>
@@ -5064,7 +5169,7 @@ export function AdminQuestionWorkspace({
         </button>
         <button
           className="button-secondary"
-          disabled={isMutating || (!brandingInstituteName.trim() && !brandingAddress.trim() && !brandingImageDataUrl && !brandingProfileImageDataUrl && !businessWorkingDays.trim() && !businessWorkingHours.trim() && businessAppointmentsPerSlot === "1" && !businessSlotDurationMinutes.trim() && businessAppointmentNotesPrompt.trim() === DEFAULT_APPOINTMENT_NOTES_PROMPT && businessBookingBehaviorMode === "none")}
+          disabled={isMutating || (!brandingInstituteName.trim() && !brandingAddress.trim() && !brandingImageDataUrl && !brandingProfileImageDataUrl && !brandingPromotionalImageDataUrls.length && !businessWorkingDays.trim() && !businessWorkingHours.trim() && businessAppointmentsPerSlot === "1" && !businessSlotDurationMinutes.trim() && businessAppointmentNotesPrompt.trim() === DEFAULT_APPOINTMENT_NOTES_PROMPT && businessBookingBehaviorMode === "none")}
           type="button"
           onClick={() => void handleClearBranding()}
         >
@@ -5352,7 +5457,7 @@ export function AdminQuestionWorkspace({
               >
                 <button
                   aria-selected={activeTopLevelSection === item.section}
-                  className={`dashboard-top-nav-item${activeTopLevelSection === item.section ? " is-active" : ""}`}
+                  className={`dashboard-top-nav-item${item.section === "test" || item.section === "poll" ? " match-apportion-alignment" : ""}${activeTopLevelSection === item.section ? " is-active" : ""}`}
                   role="tab"
                   type="button"
                   onClick={() => handleTopLevelSelection(item.section)}
@@ -5496,9 +5601,7 @@ export function AdminQuestionWorkspace({
                         <p className="eyebrow">Apportion</p>
                         <h2 className="section-title" id="apportion-business-panel-title">Business Panel</h2>
                       </div>
-                      <button className="button-secondary small-button" type="button" onClick={() => setIsApportionBusinessPanelOpen(false)}>
-                        Close
-                      </button>
+                      <FloatingWindowCloseButton label="Close Business Panel" onClick={() => setIsApportionBusinessPanelOpen(false)} />
                     </div>
                     {businessDetailsPanel}
                   </div>
@@ -5569,6 +5672,7 @@ export function AdminQuestionWorkspace({
 
                       return (
                         <div aria-modal="true" className="apportion-floating-drawer apportion-appointment-drawer panel" key={draft.id} role="dialog">
+                          <FloatingWindowCloseButton label="Close Add Appointment" onClick={() => setIsApportionAddAppointmentOpen(false)} />
                           <div className="apportion-appointment-summary">
                             <div className="apportion-log-topline apportion-log-topline-card">
                               <span className="status-chip apportion-serial-chip">--</span>
@@ -5817,9 +5921,6 @@ export function AdminQuestionWorkspace({
                               <button className="button-secondary small-button" type="button" onClick={() => removeApportionDraftCard(draft.id)}>
                                 Remove
                               </button>
-                              <button className="button-secondary small-button" type="button" onClick={() => setIsApportionAddAppointmentOpen(false)}>
-                                Close
-                              </button>
                             </div>
                           </div>
                         </div>
@@ -5989,6 +6090,7 @@ export function AdminQuestionWorkspace({
                           <tr>
                             <th scope="col">S. No.</th>
                             <th scope="col">Date and time (IST)</th>
+                            <th scope="col">Completion time (IST)</th>
                             <th scope="col">Contact</th>
                             <th scope="col">Phone</th>
                             <th scope="col">Scope</th>
@@ -5999,11 +6101,15 @@ export function AdminQuestionWorkspace({
                         <tbody>
                           {completedApportionAppointments.map((appointment, appointmentIndex) => {
                             const isOwnerScope = appointment.scope === "owner";
+                            const completionTime = appointment.currentStatus === "done"
+                              ? [...appointment.history].reverse().find((entry) => entry.action === "done")?.at ?? appointment.statusUpdatedAt
+                              : null;
 
                             return (
                               <tr key={`completed-${appointment.id}`}>
                                 <td>{appointmentIndex + 1}</td>
                                 <td>{formatShortDateTimeIst(appointment.startsAt)}</td>
+                                <td>{completionTime ? formatShortDateTimeIst(completionTime) : "-"}</td>
                                 <td>
                                   {isOwnerScope ? appointment.requesterName : appointment.ownerName ?? "Business"}
                                   <span className="apportion-status-helper">{appointment.locationName}: {appointment.locationAddress}</span>
@@ -6448,9 +6554,7 @@ export function AdminQuestionWorkspace({
           <div aria-labelledby="test-questions-drawer-title" className="apportion-floating-drawer panel" role="dialog" onClick={(event) => event.stopPropagation()}>
             <div className="workspace-overflow-head">
               <h2 id="test-questions-drawer-title">Question Pool</h2>
-              <button className="button-secondary small-button" type="button" onClick={() => setOpenSection("history")}>
-                Close
-              </button>
+              <FloatingWindowCloseButton label="Close Question Pool" onClick={() => setOpenSection("history")} />
             </div>
         {isLoading ? (
           <div className="empty-state">
@@ -7245,13 +7349,12 @@ export function AdminQuestionWorkspace({
           <div aria-labelledby="schedule-test-drawer-title" className={`apportion-floating-drawer panel${isTestAddQuestionOpen ? " is-question-authoring" : ""}`} role="dialog" onClick={(event) => event.stopPropagation()}>
             <div className="workspace-overflow-head">
               <h2 id="schedule-test-drawer-title">{isTestAddQuestionOpen ? "Add Question" : editingScheduledTestId ? "Edit Test" : "Schedule Test"}</h2>
-              <button className="button-secondary small-button" type="button" onClick={() => setOpenSection("history")}>
-                Close
-              </button>
+              <FloatingWindowCloseButton label="Close Schedule Test" onClick={() => setOpenSection("history")} />
             </div>
         <div className="form-stack">
           <CollapsibleWorkspaceSection
             eyebrow=""
+            hideToggle
             isOpen={isTestAddQuestionOpen}
             sectionId="admin-schedule-test-add-questions"
             title="Add Questions"
@@ -7623,9 +7726,7 @@ export function AdminQuestionWorkspace({
           <div aria-labelledby="poll-questions-drawer-title" className="apportion-floating-drawer panel" role="dialog" onClick={(event) => event.stopPropagation()}>
             <div className="workspace-overflow-head">
               <h2 id="poll-questions-drawer-title">Add Poll Questions</h2>
-              <button className="button-secondary small-button" type="button" onClick={() => setOpenSection("history")}>
-                Close
-              </button>
+              <FloatingWindowCloseButton label="Close Poll Questions" onClick={() => setOpenSection("history")} />
             </div>
         <div className="form-stack">
           <div className="question-bank-summary">
@@ -7916,13 +8017,12 @@ export function AdminQuestionWorkspace({
           <div aria-labelledby="schedule-poll-drawer-title" className={`apportion-floating-drawer panel${isPollAddQuestionOpen ? " is-question-authoring" : ""}`} role="dialog" onClick={(event) => event.stopPropagation()}>
             <div className="workspace-overflow-head">
               <h2 id="schedule-poll-drawer-title">{isPollAddQuestionOpen ? "Add Question" : editingScheduledPollId ? "Edit Poll" : "Schedule Poll"}</h2>
-              <button className="button-secondary small-button" type="button" onClick={() => setOpenSection("history")}>
-                Close
-              </button>
+              <FloatingWindowCloseButton label="Close Schedule Poll" onClick={() => setOpenSection("history")} />
             </div>
         <div className="form-stack">
           <CollapsibleWorkspaceSection
             eyebrow=""
+            hideToggle
             isOpen={isPollAddQuestionOpen}
             sectionId="admin-schedule-poll-add-questions"
             title="Add Poll Question"
@@ -8042,9 +8142,6 @@ export function AdminQuestionWorkspace({
               <div className="field form-stack">
                 <div className="question-head">
                   <strong>Type additional poll questions</strong>
-                  <button className="button-secondary small-button" type="button" onClick={handleAddTypedPollScheduleDraft}>
-                    Add question
-                  </button>
                 </div>
                 {pollScheduleTypedDrafts.length ? (
                   <div className="question-list">
@@ -8202,9 +8299,6 @@ export function AdminQuestionWorkspace({
             <div className="field form-stack">
               <div className="question-head">
                 <strong>Type additional poll questions</strong>
-                <button className="button-secondary small-button" type="button" onClick={handleAddTypedPollScheduleDraft}>
-                  Add question
-                </button>
               </div>
               {pollScheduleTypedDrafts.length ? (
                 <div className="question-list">

@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { formatShortDateTime } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
+import { FloatingWindowCloseButton } from "./floating-window-close-button";
 import { NotificationBell, type NotificationBellItem } from "./notification-bell";
 
 type AvailableTest = {
@@ -923,14 +924,10 @@ export function RestrictedUserDashboardWorkspace({
             role="dialog"
             onClick={(event) => event.stopPropagation()}
           >
+            <FloatingWindowCloseButton label="Close upgrade notice" onClick={() => setLockedFeatureMessage(null)} />
             <p className="eyebrow">Locked feature</p>
             <h2 className="section-title">TRAPit Pro</h2>
             <p className="muted-text">{lockedFeatureMessage}</p>
-            <div className="inline-actions">
-              <button className="button" type="button" onClick={() => setLockedFeatureMessage(null)}>
-                Close
-              </button>
-            </div>
           </div>
         </div>
       ) : null}
