@@ -1,28 +1,50 @@
 "use client";
 
-import type { GameAnswer, GameLeaderboardEntry } from "@trapit/testing";
+import type { GameAnswer, GameCreatorRole, GameLeaderboardEntry } from "@trapit/testing";
 import { useEffect, useRef, useState } from "react";
 
 type GameState = {
   acceptedCount: number;
   canStart: boolean;
+  countdownDeadline: string | null;
+  creatorRole: GameCreatorRole | null;
   currentQuestion: { id: string; options: string[]; prompt: string } | null;
   currentQuestionIndex: number | null;
+  displayName: string;
   isAccepted: boolean;
   isCreator: boolean;
+  isMissed: boolean;
   leaderboard: GameLeaderboardEntry[];
+  overallGamePoints: number;
   ownAnswers: GameAnswer[];
   participantCount: number;
-  participants: Array<{ accepted: boolean; identifier: string; label: string }>;
+  participants: Array<{ acceptedAt: string; identifier: string; label: string }>;
   questionDeadline: string | null;
   recentDeltas: Array<{ answeredAt: string; participantIdentifier: string; points: number }>;
-  status: "completed" | "ongoing" | "upcoming";
+  reviewQuestions: Array<{
+    answer: GameAnswer | null;
+    correctOptionIndex: number;
+    id: string;
+    options: string[];
+    prompt: string;
+    questionIndex: number;
+  }>;
+  rules: {
+    correctPoints: readonly number[];
+    incorrectPoints: number;
+    launchCountdownMs: number;
+    questionCount: number;
+    questionDurationMs: number;
+  };
+  status: "completed" | "countdown" | "ongoing" | "upcoming";
   title: string;
+  viewerMode: "participant" | "spectator";
 };
 
 type GamePayload = { game: GameState; serverNow: string };
 
 type UserGameRunnerProps = {
+  autoAccept?: boolean;
   authConfigured: boolean;
   defaultParticipantIdentifier: string | null;
   gameId: string;
@@ -38,7 +60,17 @@ async function readJson<T>(response: Response) {
   return payload;
 }
 
-export function UserGameRunner({ authConfigured, defaultParticipantIdentifier, gameId }: UserGameRunnerProps) {
+function formatOrdinal(value: number) {
+  const remainder100 = value % 100;
+
+  if (remainder100 >= 11 && remainder100 <= 13) {
+    return `${value}th`;
+  }
+
+  return `${value}${value % 10 === 1 ? "st" : value % 10 === 2 ? "nd" : value % 10 === 3 ? "rd" : "th"}`;
+}
+
+export function UserGameRunner({ autoAccept = false, authConfigured, defaultParticipantIdentifier, gameId }: UserGameRunnerProps) {
   const [feedback, setFeedback] = useState<string | null>(null);
   const [game, setGame] = useState<GameState | null>(null);
   const [identifier, setIdentifier] = useState(defaultParticipantIdentifier ?? "");
@@ -67,7 +99,9 @@ export function UserGameRunner({ authConfigured, defaultParticipantIdentifier, g
       clockOffsetRef.current = new Date(payload.serverNow).getTime() - Date.now();
       setGame(payload.game);
       setSelectedOptionIndex(null);
-      setFeedback(null);
+      if (!options?.silent) {
+        setFeedback(null);
+      }
       deadlineRefreshRef.current = false;
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to load the game.");
@@ -77,8 +111,25 @@ export function UserGameRunner({ authConfigured, defaultParticipantIdentifier, g
   }
 
   useEffect(() => {
-    void loadGame();
-  }, [gameId]);
+    async function initializeGame() {
+      let acceptanceError: string | null = null;
+
+      if (autoAccept) {
+        try {
+          await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/accept${getQuery()}`, { method: "POST" }));
+        } catch (error) {
+          acceptanceError = error instanceof Error ? error.message : "Unable to accept the game.";
+        }
+      }
+
+      await loadGame();
+      if (acceptanceError) {
+        setFeedback(acceptanceError);
+      }
+    }
+
+    void initializeGame();
+  }, [gameId, autoAccept]);
 
   useEffect(() => {
     const source = new EventSource("/api/internal/events");
@@ -94,7 +145,9 @@ export function UserGameRunner({ authConfigured, defaultParticipantIdentifier, g
   }, [gameId, identifier]);
 
   useEffect(() => {
-    if (!game?.questionDeadline) {
+    const activeDeadline = game?.countdownDeadline ?? game?.questionDeadline;
+
+    if (!activeDeadline) {
       setRemainingMs(0);
       return;
     }
@@ -102,7 +155,7 @@ export function UserGameRunner({ authConfigured, defaultParticipantIdentifier, g
     const tick = () => {
       const nextRemaining = Math.max(
         0,
-        new Date(game.questionDeadline as string).getTime() - (Date.now() + clockOffsetRef.current),
+        new Date(activeDeadline).getTime() - (Date.now() + clockOffsetRef.current),
       );
       setRemainingMs(nextRemaining);
 
@@ -115,7 +168,7 @@ export function UserGameRunner({ authConfigured, defaultParticipantIdentifier, g
     tick();
     const intervalId = window.setInterval(tick, 250);
     return () => window.clearInterval(intervalId);
-  }, [game?.questionDeadline]);
+  }, [game?.countdownDeadline, game?.questionDeadline]);
 
   async function runAction(action: "accept" | "start") {
     setIsMutating(true);
@@ -124,6 +177,22 @@ export function UserGameRunner({ authConfigured, defaultParticipantIdentifier, g
       await loadGame({ silent: true });
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : `Unable to ${action} the game.`);
+    } finally {
+      setIsMutating(false);
+    }
+  }
+
+  async function chooseCreatorRole(role: GameCreatorRole) {
+    setIsMutating(true);
+    try {
+      await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/role${getQuery()}`, {
+        body: JSON.stringify({ role }),
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+      }));
+      await loadGame({ silent: true });
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to choose your game role.");
     } finally {
       setIsMutating(false);
     }
@@ -174,51 +243,117 @@ export function UserGameRunner({ authConfigured, defaultParticipantIdentifier, g
     );
   }
 
-  if (game.status === "upcoming") {
+  const userBanner = (
+    <header className="game-user-banner">
+      <div>
+        <span className="eyebrow">Player</span>
+        <strong>{game.displayName}</strong>
+      </div>
+      <div className="game-user-points">
+        <span className="eyebrow">Overall points</span>
+        <strong>{game.overallGamePoints}</strong>
+      </div>
+    </header>
+  );
+
+  if (game.status === "upcoming" || game.status === "countdown") {
     return (
-      <section className="workspace-card game-lobby">
-        <p className="eyebrow">Game lobby</p>
-        <h1>{game.title}</h1>
-        <p className="muted-text">Accepted {game.acceptedCount}/{game.participantCount}. At least 4 participants are required.</p>
-        <div className="game-lobby-roster">
-          {game.participants.map((participant) => (
-            <div className="game-lobby-participant" key={participant.identifier}>
-              <span>{participant.label}</span>
-              <span className={`status-chip ${participant.accepted ? "success" : "warning"}`}>
-                {participant.accepted ? "Accepted" : "Pending"}
-              </span>
+      <div className="game-page-stack">
+        {userBanner}
+        {game.status === "countdown" ? (
+          <section className="workspace-card game-launch-countdown" aria-live="polite">
+            <p className="eyebrow">Game starts in</p>
+            <strong>{Math.ceil(remainingMs / 1000)}</strong>
+            <p>{game.viewerMode === "participant" ? "Get ready to play" : "You are watching as a spectator"}</p>
+          </section>
+        ) : null}
+        <div className="game-runner-layout">
+          <section className="workspace-card game-question-panel">
+            <p className="eyebrow">Game waiting room</p>
+            <h1>{game.title}</h1>
+            <div className="game-rules-list">
+              <h2>Game rules</h2>
+              <p>{game.rules.questionCount} questions, {game.rules.questionDurationMs / 1000} seconds each.</p>
+              <p>Correct answer points by order: {game.rules.correctPoints.join(", ")}.</p>
+              <p>Incorrect or unanswered: {game.rules.incorrectPoints} points.</p>
+              <p>The next question starts early when every competitor answers.</p>
             </div>
-          ))}
-        </div>
-        <div className="inline-actions">
-          {!game.isAccepted ? <button className="button" disabled={isMutating} type="button" onClick={() => void runAction("accept")}>Accept</button> : null}
-          {game.isCreator ? <button className="button" disabled={isMutating || !game.canStart} type="button" onClick={() => void runAction("start")}>Start</button> : null}
+            {game.isCreator && game.status === "upcoming" ? (
+              <div className="form-stack">
+                <h2>Choose your role</h2>
+                <div className="game-role-selector" role="group" aria-label="Creator game role">
+                  <button aria-pressed={game.creatorRole === "participant"} className="button-secondary" disabled={isMutating} type="button" onClick={() => void chooseCreatorRole("participant")}>Join Game</button>
+                  <button aria-pressed={game.creatorRole === "spectator"} className="button-secondary" disabled={isMutating} type="button" onClick={() => void chooseCreatorRole("spectator")}>Watch Game</button>
+                </div>
+              </div>
+            ) : null}
+            <div className="inline-actions">
+              {!game.isCreator && !game.isAccepted && game.status === "upcoming" ? <button className="button" disabled={isMutating} type="button" onClick={() => void runAction("accept")}>Accept</button> : null}
+              {game.isCreator && game.status === "upcoming" ? <button className="button" disabled={isMutating || !game.canStart} type="button" onClick={() => void runAction("start")}>Start Game</button> : null}
+            </div>
+            {game.isCreator && game.status === "upcoming" && !game.creatorRole ? <p className="muted-text">Choose Join Game or Watch Game before starting.</p> : null}
+          </section>
+          <aside className="workspace-card game-leaderboard-panel">
+            <p className="eyebrow">Accepted competitors</p>
+            <h2>{game.acceptedCount} ready</h2>
+            <div className="game-lobby-roster">
+              {game.participants.map((participant, index) => (
+                <div className="game-lobby-participant" key={participant.identifier}>
+                  <strong>#{index + 1} {participant.label}</strong>
+                  <span className="status-chip success">Accepted</span>
+                </div>
+              ))}
+            </div>
+          </aside>
         </div>
         {feedback ? <p className="muted-text">{feedback}</p> : null}
-      </section>
+      </div>
     );
   }
 
   if (game.status === "completed") {
-    const ownAnswerMap = new Map(game.ownAnswers.map((answer) => [answer.questionIndex, answer]));
     return (
-      <div className="game-runner-layout">
-        <section className="workspace-card">
-          <p className="eyebrow">Completed game</p>
-          <h1>{game.title}</h1>
-          <div className="review-list">
-            {Array.from({ length: 20 }, (_, questionIndex) => {
-              const answer = ownAnswerMap.get(questionIndex);
-              return (
-                <div className="game-breakdown-row" key={questionIndex}>
-                  <span>Question {questionIndex + 1}</span>
-                  <strong>{answer ? `${answer.points >= 0 ? "+" : ""}${answer.points}` : "0"}</strong>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-        <GameLeaderboard game={game} />
+      <div className="game-page-stack">
+        {userBanner}
+        <div className="game-runner-layout">
+          <section className="workspace-card game-question-panel">
+            <p className="eyebrow">{game.isMissed ? "Missed game" : "Completed game"}</p>
+            <h1>{game.title}</h1>
+            {game.isMissed ? <p>You did not accept before the game started. Final results are available below.</p> : null}
+            {game.reviewQuestions.length ? (
+              <div className="review-list game-question-review-list">
+                {game.reviewQuestions.map((question) => (
+                  <article className="game-question-review" key={question.id}>
+                    <div className="question-head">
+                      <h2>{question.questionIndex + 1}. {question.prompt}</h2>
+                      {question.answer ? <strong>{question.answer.points >= 0 ? "+" : ""}{question.answer.points}</strong> : null}
+                    </div>
+                    <div className="game-review-options">
+                      {question.options.map((option, optionIndex) => {
+                        const isCorrect = optionIndex === question.correctOptionIndex;
+                        const isChosen = question.answer?.optionIndex === optionIndex;
+                        return (
+                          <div className={`game-review-option${isCorrect ? " is-correct" : ""}${isChosen && !isCorrect ? " is-incorrect" : ""}`} key={`${question.id}-${optionIndex}`}>
+                            <span>{option}</span>
+                            <strong>{isCorrect ? `\u2713 Correct${isChosen ? " and chosen" : ""}` : isChosen ? "\u2715 Chosen" : ""}</strong>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <p className="muted-text">
+                      {question.answer?.kind === "timeout"
+                        ? "Timed out"
+                        : question.answer?.responsePosition
+                          ? `${formatOrdinal(question.answer.responsePosition)} to answer`
+                          : "No response"}
+                    </p>
+                  </article>
+                ))}
+              </div>
+            ) : <p className="muted-text">Spectator view: no personal responses were recorded.</p>}
+          </section>
+          <GameLeaderboard game={game} />
+        </div>
       </div>
     );
   }
@@ -226,10 +361,13 @@ export function UserGameRunner({ authConfigured, defaultParticipantIdentifier, g
   const hasAnswered = game.currentQuestionIndex !== null && game.ownAnswers.some(
     (answer) => answer.questionIndex === game.currentQuestionIndex,
   );
+  const latestOwnAnswer = game.ownAnswers[game.ownAnswers.length - 1];
 
   return (
-    <div className="game-runner-layout">
-      <section className="workspace-card game-question-panel">
+    <div className="game-page-stack">
+      {userBanner}
+      <div className="game-runner-layout">
+        <section className="workspace-card game-question-panel">
         <div className="question-head">
           <div>
             <p className="eyebrow">Question {(game.currentQuestionIndex ?? 0) + 1} of 20</p>
@@ -245,7 +383,7 @@ export function UserGameRunner({ authConfigured, defaultParticipantIdentifier, g
                 <button
                   aria-pressed={selectedOptionIndex === optionIndex}
                   className={`role-option game-answer-option${selectedOptionIndex === optionIndex ? " is-selected" : ""}`}
-                  disabled={hasAnswered || isMutating}
+                  disabled={game.viewerMode === "spectator" || hasAnswered || isMutating}
                   key={`${game.currentQuestion?.id}-${optionIndex}`}
                   type="button"
                   onClick={() => setSelectedOptionIndex(optionIndex)}
@@ -254,14 +392,17 @@ export function UserGameRunner({ authConfigured, defaultParticipantIdentifier, g
                 </button>
               ))}
             </div>
-            <button className="button" disabled={selectedOptionIndex === null || hasAnswered || isMutating} type="button" onClick={() => void submitAnswer()}>
-              {hasAnswered ? "Answer submitted" : "Submit answer"}
-            </button>
+            {game.viewerMode === "participant" ? (
+              <button className="button" disabled={selectedOptionIndex === null || hasAnswered || isMutating} type="button" onClick={() => void submitAnswer()}>
+                {hasAnswered ? "Answer submitted" : "Submit answer"}
+              </button>
+            ) : <p className="status-chip warning">Watching as spectator</p>}
           </div>
         ) : <p className="muted-text">Preparing the next question...</p>}
-        {feedback ? <p className="muted-text">{feedback}</p> : null}
-      </section>
-      <GameLeaderboard game={game} />
+          {feedback ? <p className="muted-text">{feedback}</p> : latestOwnAnswer?.kind === "timeout" ? <p className="muted-text">Previous question timed out ({latestOwnAnswer.points})</p> : null}
+        </section>
+        <GameLeaderboard game={game} />
+      </div>
     </div>
   );
 }

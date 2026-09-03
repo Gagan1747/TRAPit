@@ -11,7 +11,11 @@ import {
   createParticipantProfile,
   createPersistentPollQuestion,
   createPersistentQuestion,
+  GAME_INCORRECT_POINTS,
+  GAME_LAUNCH_COUNTDOWN_MS,
   GAME_QUESTION_COUNT,
+  GAME_QUESTION_DURATION_MS,
+  getGameQuestionDeadline,
   getGameQuestionIndex,
   getGameQuestionPoints,
   getGameStatus,
@@ -30,6 +34,7 @@ import {
   summarizeTestHistory,
   type BulkImportPreview,
   type GroupJoinRequest,
+  type GameCreatorRole,
   type GameLeaderboardEntry,
   type ObjectiveQuestion,
   type PollAttempt,
@@ -295,20 +300,34 @@ function normalizeWorkspaceAppointmentShareCodesByActor(
 function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspaceState {
   return {
     attempts: parsed.attempts ?? [],
-    games: (parsed.games ?? []).map((game) => ({
-      ...game,
-      answers: game.answers ?? [],
-      completedAt: game.completedAt ?? null,
-      participants: (game.participants ?? []).map((participant) => ({
-        ...participant,
-        acceptedAt: participant.acceptedAt ?? null,
-        identifier: normalizeParticipantIdentifier(participant.identifier),
-        label: participant.label?.trim() || participant.identifier,
-      })),
-      questionIds: dedupe(game.questionIds ?? []).slice(0, GAME_QUESTION_COUNT),
-      startedAt: game.startedAt ?? null,
-      title: game.title?.trim() || "Game",
-    })),
+    games: (parsed.games ?? []).map((game) => {
+      const rulesVersion = game.rulesVersion ?? (game.startedAt || game.completedAt ? 1 : 2);
+
+      return {
+        ...game,
+        answers: (game.answers ?? []).map((answer) => ({
+          ...answer,
+          kind: answer.kind ?? "submitted",
+          responsePosition: answer.responsePosition ?? null,
+        })),
+        completedAt: game.completedAt ?? null,
+        countdownStartedAt: game.countdownStartedAt ?? null,
+        creatorRole: game.creatorRole ?? null,
+        participants: (game.participants ?? []).map((participant) => ({
+          ...participant,
+          acceptedAt: participant.acceptedAt ?? null,
+          identifier: normalizeParticipantIdentifier(participant.identifier),
+          label: participant.label?.trim() || participant.identifier,
+        })),
+        questionIds: dedupe(game.questionIds ?? []).slice(0, GAME_QUESTION_COUNT),
+        questionStartedAt: rulesVersion === 2
+          ? (game.questionStartedAt ?? (game.startedAt ? [game.startedAt] : []))
+          : undefined,
+        rulesVersion,
+        startedAt: game.startedAt ?? null,
+        title: game.title?.trim() || "Game",
+      };
+    }),
     groupJoinRequests: (parsed.groupJoinRequests ?? []).map((request) => ({
       ...request,
       adminLabel: request.adminLabel?.trim() || request.adminIdentifier?.trim() || "Unknown admin",
@@ -4161,26 +4180,118 @@ function findGameParticipant(game: ScheduledGame, participantIdentifier: string)
   );
 }
 
-function finalizeGameIfExpired(game: ScheduledGame, now: Date) {
-  if (!game.completedAt && getGameStatus(game, now.getTime()) === "completed") {
-    game.completedAt = now.toISOString();
-    game.updatedAt = game.completedAt;
+function advanceGameLifecycle(game: ScheduledGame, now: Date) {
+  if (game.completedAt) {
+    return;
+  }
+
+  if (game.rulesVersion !== 2) {
+    if (getGameStatus(game, now.getTime()) === "completed") {
+      game.completedAt = now.toISOString();
+      game.updatedAt = game.completedAt;
+    }
+    return;
+  }
+
+  if (!game.countdownStartedAt) {
+    return;
+  }
+
+  const launchAtMs = new Date(game.countdownStartedAt).getTime() + GAME_LAUNCH_COUNTDOWN_MS;
+  const questionStartedAt = game.questionStartedAt ?? (game.questionStartedAt = []);
+
+  if (!game.startedAt) {
+    if (now.getTime() < launchAtMs) {
+      return;
+    }
+
+    game.startedAt = new Date(launchAtMs).toISOString();
+    questionStartedAt[0] = game.startedAt;
+    game.updatedAt = game.startedAt;
+  }
+
+  while (!game.completedAt) {
+    const questionIndex = questionStartedAt.length - 1;
+
+    if (questionIndex < 0 || questionIndex >= GAME_QUESTION_COUNT) {
+      return;
+    }
+
+    const acceptedParticipants = game.participants.filter((participant) => participant.acceptedAt);
+    const questionAnswers = game.answers.filter((answer) => answer.questionIndex === questionIndex);
+    const allAcceptedAnswered = acceptedParticipants.length > 0 && acceptedParticipants.every((participant) =>
+      questionAnswers.some((answer) => identifiersMatch(answer.participantIdentifier, participant.identifier)),
+    );
+    const deadlineMs = new Date(questionStartedAt[questionIndex]).getTime() + GAME_QUESTION_DURATION_MS;
+
+    if (!allAcceptedAnswered && now.getTime() < deadlineMs) {
+      return;
+    }
+
+    const transitionAt = allAcceptedAnswered
+      ? questionAnswers.reduce(
+          (latest, answer) => Math.max(latest, new Date(answer.answeredAt).getTime()),
+          new Date(questionStartedAt[questionIndex]).getTime(),
+        )
+      : deadlineMs;
+
+    if (!allAcceptedAnswered) {
+      for (const participant of acceptedParticipants) {
+        if (questionAnswers.some((answer) => identifiersMatch(answer.participantIdentifier, participant.identifier))) {
+          continue;
+        }
+
+        game.answers.push({
+          answeredAt: new Date(deadlineMs).toISOString(),
+          isCorrect: false,
+          kind: "timeout",
+          optionIndex: null,
+          participantIdentifier: participant.identifier,
+          points: GAME_INCORRECT_POINTS,
+          questionIndex,
+          responsePosition: null,
+        });
+      }
+    }
+
+    if (questionIndex === GAME_QUESTION_COUNT - 1) {
+      game.completedAt = new Date(transitionAt).toISOString();
+      game.updatedAt = game.completedAt;
+      return;
+    }
+
+    questionStartedAt[questionIndex + 1] = new Date(transitionAt).toISOString();
+    game.updatedAt = questionStartedAt[questionIndex + 1];
+
+    if (now.getTime() < transitionAt) {
+      return;
+    }
   }
 }
 
 export type AvailableGame = ScheduledGame & {
   acceptedCount: number;
+  countdownDeadline: string | null;
   currentQuestionIndex: number | null;
   leaderboard: GameLeaderboardEntry[];
+  questionDeadline: string | null;
   status: ReturnType<typeof getGameStatus>;
 };
 
 function hydrateGame(game: ScheduledGame, nowMs = Date.now()): AvailableGame {
+  const currentQuestionIndex = getGameQuestionIndex(game, nowMs);
+
   return {
     ...game,
     acceptedCount: game.participants.filter((participant) => participant.acceptedAt).length,
-    currentQuestionIndex: getGameQuestionIndex(game, nowMs),
+    countdownDeadline: game.countdownStartedAt && !game.startedAt
+      ? new Date(new Date(game.countdownStartedAt).getTime() + GAME_LAUNCH_COUNTDOWN_MS).toISOString()
+      : null,
+    currentQuestionIndex,
     leaderboard: buildGameLeaderboard(game),
+    questionDeadline: currentQuestionIndex === null
+      ? null
+      : getGameQuestionDeadline(game, currentQuestionIndex),
     status: getGameStatus(game, nowMs),
   };
 }
@@ -4251,18 +4362,22 @@ export async function createScheduledGame(input: {
     const game: ScheduledGame = {
       answers: [],
       completedAt: null,
+      countdownStartedAt: null,
       createdAt: timestamp,
       createdBy: input.createdBy,
+      creatorRole: null,
       creatorIdentifier: actorIdentifier,
       id: createEntityId("game"),
       participantGroupId: group.id,
       participants,
       poolId: pool.id,
+      questionStartedAt: [],
       questionIds: selectQuestionIdsForScheduledTest(
         availableQuestionIds,
         GAME_QUESTION_COUNT,
         `${actorIdentifier}:${timestamp}:game`,
       ),
+      rulesVersion: 2,
       startedAt: null,
       title: input.title?.trim() || `${group.name} game`,
       updatedAt: timestamp,
@@ -4279,7 +4394,7 @@ export async function listGamesForParticipant(participantIdentifier: string) {
     const now = new Date();
 
     for (const game of state.games) {
-      finalizeGameIfExpired(game, now);
+      advanceGameLifecycle(game, now);
     }
 
     return state.games
@@ -4307,7 +4422,11 @@ export async function acceptGame(gameId: string, participantIdentifier: string) 
       throw new Error("You are not invited to this game.");
     }
 
-    if (game.startedAt) {
+    if (identifiersMatch(game.creatorIdentifier, participantIdentifier)) {
+      throw new Error("Choose Join Game or Watch Game in the waiting room.");
+    }
+
+    if (game.countdownStartedAt || game.startedAt) {
       throw new Error("This game has already started.");
     }
 
@@ -4316,6 +4435,40 @@ export async function acceptGame(gameId: string, participantIdentifier: string) 
       game.updatedAt = participant.acceptedAt;
     }
 
+    return hydrateGame(game);
+  });
+}
+
+export async function setGameCreatorRole(
+  gameId: string,
+  creatorIdentifier: string,
+  role: GameCreatorRole,
+) {
+  return withSerializedGameMutation((state) => {
+    const game = state.games.find((entry) => entry.id === gameId);
+
+    if (!game) {
+      throw new Error("Game not found.");
+    }
+
+    if (!identifiersMatch(game.creatorIdentifier, creatorIdentifier)) {
+      throw new Error("Only the game creator can choose this role.");
+    }
+
+    if (game.countdownStartedAt || game.startedAt) {
+      throw new Error("The creator role cannot change after the game starts.");
+    }
+
+    const participant = findGameParticipant(game, creatorIdentifier);
+
+    if (!participant) {
+      throw new Error("Game creator is not available in this game.");
+    }
+
+    const timestamp = new Date().toISOString();
+    game.creatorRole = role;
+    participant.acceptedAt = role === "participant" ? (participant.acceptedAt ?? timestamp) : null;
+    game.updatedAt = timestamp;
     return hydrateGame(game);
   });
 }
@@ -4332,13 +4485,17 @@ export async function startGame(gameId: string, creatorIdentifier: string) {
       throw new Error("Only the game creator can start this game.");
     }
 
+    if (!game.creatorRole) {
+      throw new Error("Choose Join Game or Watch Game before starting.");
+    }
+
     if (game.participants.filter((participant) => participant.acceptedAt).length < 4) {
       throw new Error("At least 4 participants must accept before the game can start.");
     }
 
-    if (!game.startedAt) {
-      game.startedAt = new Date().toISOString();
-      game.updatedAt = game.startedAt;
+    if (!game.countdownStartedAt && !game.startedAt) {
+      game.countdownStartedAt = new Date().toISOString();
+      game.updatedAt = game.countdownStartedAt;
     }
 
     return hydrateGame(game);
@@ -4359,7 +4516,7 @@ export async function recordGameAnswer(input: {
       throw new Error("Game not found.");
     }
 
-    finalizeGameIfExpired(game, now);
+    advanceGameLifecycle(game, now);
     const participant = findGameParticipant(game, input.participantIdentifier);
 
     if (!participant?.acceptedAt) {
@@ -4393,14 +4550,19 @@ export async function recordGameAnswer(input: {
     const answer = {
       answeredAt: now.toISOString(),
       isCorrect,
+      kind: "submitted" as const,
       optionIndex: input.optionIndex,
       participantIdentifier: participant.identifier,
       points: getGameQuestionPoints(correctPosition),
       questionIndex: currentQuestionIndex,
+      responsePosition: game.answers.filter((candidate) =>
+        candidate.questionIndex === currentQuestionIndex && candidate.kind !== "timeout",
+      ).length + 1,
     };
 
     game.answers.push(answer);
     game.updatedAt = answer.answeredAt;
+    advanceGameLifecycle(game, now);
 
     return { answer, game: hydrateGame(game, now.getTime()) };
   });

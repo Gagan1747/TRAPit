@@ -3023,9 +3023,89 @@ button:disabled {
   width: 100%;
 }
 
+.game-page-stack {
+  display: grid;
+  gap: 18px;
+  width: 100%;
+}
+
+.game-user-banner {
+  position: sticky;
+  top: 12px;
+  z-index: 5;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 18px;
+  border: 1px solid var(--border-color, #d8dbe5);
+  border-left: 4px solid #16705a;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface, #ffffff) 94%, #d8f3e8);
+  box-shadow: 0 8px 24px rgb(27 45 62 / 10%);
+}
+
+.game-user-banner > div {
+  display: grid;
+  gap: 3px;
+}
+
+.game-user-points {
+  text-align: right;
+}
+
+.game-user-banner strong {
+  overflow-wrap: anywhere;
+  font-size: 1.05rem;
+}
+
+.game-launch-countdown {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.game-launch-countdown > strong {
+  display: grid;
+  width: 112px;
+  height: 112px;
+  place-items: center;
+  border: 6px solid #16705a;
+  border-radius: 50%;
+  background: #edf8f4;
+  color: #123f35;
+  font-size: 3rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .game-question-panel,
 .game-leaderboard-panel {
   min-width: 0;
+}
+
+.game-rules-list {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0;
+  padding: 16px;
+  border-left: 4px solid #d18a16;
+  background: #fff8e8;
+}
+
+.game-rules-list > * {
+  margin: 0;
+}
+
+.game-role-selector {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.game-role-selector [aria-pressed="true"] {
+  border-color: #16705a;
+  background: #16705a;
+  color: #ffffff;
 }
 
 .game-countdown {
@@ -3078,6 +3158,56 @@ button:disabled {
   font-weight: 700;
 }
 
+.game-question-review-list {
+  gap: 16px;
+}
+
+.game-question-review {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-color, #d8dbe5);
+  border-radius: 8px;
+}
+
+.game-question-review h2 {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.game-review-options {
+  display: grid;
+  gap: 8px;
+}
+
+.game-review-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, #d8dbe5);
+  border-radius: 6px;
+}
+
+.game-review-option span {
+  overflow-wrap: anywhere;
+}
+
+.game-review-option.is-correct {
+  border-color: #16705a;
+  background: #edf8f4;
+  color: #123f35;
+}
+
+.game-review-option.is-incorrect {
+  border-color: #b63e3e;
+  background: #fff0f0;
+  color: #752525;
+}
+
 @media (max-width: 760px) {
   .game-runner-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -3085,6 +3215,18 @@ button:disabled {
 
   .game-leaderboard-panel {
     order: 2;
+  }
+
+  .game-user-banner {
+    top: 8px;
+  }
+
+  .game-role-selector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .game-review-option {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

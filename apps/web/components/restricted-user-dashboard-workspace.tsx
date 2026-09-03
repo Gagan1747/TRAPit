@@ -47,13 +47,21 @@ type DashboardResponse = {
 type AvailableGameSummary = {
   acceptedCount: number;
   completedAt: string | null;
+  countdownDeadline: string | null;
   creatorIdentifier: string;
+  creatorRole: "participant" | "spectator" | null;
+  displayStatus: "Completed" | "In Progress" | "Missed" | "Upcoming";
   id: string;
+  isAccepted: boolean;
+  isCreator: boolean;
+  isMissed: boolean;
   leaderboard: GameLeaderboardEntry[];
   participantCount: number;
   participants: Array<{ accepted: boolean; identifier: string; label: string }>;
+  questionDurationMs: number;
+  questionDeadline: string | null;
   startedAt: string | null;
-  status: "completed" | "ongoing" | "upcoming";
+  status: "completed" | "countdown" | "ongoing" | "upcoming";
   title: string;
 };
 
@@ -290,14 +298,12 @@ export function RestrictedUserDashboardWorkspace({
     return () => source.close();
   }, [identifier]);
 
-  async function handleAcceptGame(gameId: string) {
-    try {
-      const query = !authConfigured ? `?participantId=${encodeURIComponent(identifier)}` : "";
-      await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/accept${query}`, { method: "POST" }));
-      await loadDashboard(identifier);
-    } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Unable to accept the game.");
-    }
+  function handleAcceptGame(gameId: string) {
+    const query = !authConfigured
+      ? `?accept=1&participantId=${encodeURIComponent(identifier)}`
+      : "?accept=1";
+    const gameTab = window.open(`/user/game/${encodeURIComponent(gameId)}${query}`, "_blank", "noopener,noreferrer");
+    setFeedback(gameTab ? "Game opened in a dedicated tab." : "Allow pop-ups to open the game waiting room.");
   }
 
   function toggleSection(section: UserDashboardSection) {
@@ -606,8 +612,8 @@ export function RestrictedUserDashboardWorkspace({
                             <strong>{game.title}</strong>
                             <div className="inline-actions">
                               <span className="status-chip success">Game</span>
-                              <span className={`status-chip ${game.status === "ongoing" ? "success" : "warning"}`}>
-                                {game.status === "ongoing" ? "Ongoing" : game.status === "completed" ? "Completed" : "Upcoming"}
+                              <span className={`status-chip ${game.displayStatus === "In Progress" || game.displayStatus === "Completed" ? "success" : "warning"}`}>
+                                {game.displayStatus}
                               </span>
                             </div>
                           </div>
@@ -619,9 +625,9 @@ export function RestrictedUserDashboardWorkspace({
                             {game.status === "upcoming" && !participant?.accepted ? (
                               <button className="button-secondary small-button" type="button" onClick={() => void handleAcceptGame(game.id)}>Accept</button>
                             ) : null}
-                            {(game.status === "ongoing" && participant?.accepted) || game.status === "completed" ? (
-                              <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`}>
-                                {game.status === "completed" ? "Game results" : "Open game"}
+                            {game.status === "countdown" || game.status === "ongoing" || game.status === "completed" ? (
+                              <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} target="_blank" rel="noreferrer">
+                                {game.status === "completed" ? "Game results" : participant?.accepted ? "Open game" : "Watch as spectator"}
                               </a>
                             ) : null}
                           </div>

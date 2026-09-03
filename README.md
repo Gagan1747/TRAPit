@@ -89,6 +89,14 @@ The current scaffold now includes real Cognito-backed handlers:
    pnpm run dev:mobile
    ```
 
+## Multiplayer games
+
+- Creating a web game opens a dedicated waiting-room tab. The creator must choose to join as a competitor or watch as a spectator before starting.
+- Starting freezes the competitor roster and begins a synchronized 60-second countdown. Each of the 20 questions allows 30 seconds and advances early when every competitor answers.
+- Incorrect and timed-out answers deduct 5 points. Completed reviews include chosen/correct options, per-question points, and response order.
+- Invitees who did not accept before Start can watch while the game is in progress and are marked `Missed` only after completion.
+- Game persistence uses `testing-workspace.json`, a process-local mutation queue, and in-process SSE. Run one web application instance until game persistence and events move to distributed infrastructure.
+
 ## Next implementation steps
 
 1. Fill in `.env.local` with your real Cognito values and, if you want automatic user-group assignment, provide AWS credentials to the web server.

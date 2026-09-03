@@ -468,9 +468,15 @@ type UserDashboardResponse = {
 type AvailableGameSummary = {
   acceptedCount: number;
   completedAt: string | null;
+  countdownDeadline: string | null;
   createdAt: string;
   creatorIdentifier: string;
+  creatorRole: "participant" | "spectator" | null;
+  displayStatus: "Completed" | "In Progress" | "Missed" | "Upcoming";
   id: string;
+  isAccepted: boolean;
+  isCreator: boolean;
+  isMissed: boolean;
   leaderboard: GameLeaderboardEntry[];
   participantCount: number;
   participantGroupId: string;
@@ -480,8 +486,10 @@ type AvailableGameSummary = {
     label: string;
   }>;
   poolId: string;
+  questionDurationMs: number;
+  questionDeadline: string | null;
   startedAt: string | null;
-  status: "completed" | "ongoing" | "upcoming";
+  status: "completed" | "countdown" | "ongoing" | "upcoming";
   title: string;
   updatedAt: string;
 };
@@ -4264,8 +4272,15 @@ export function AdminQuestionWorkspace({
         return;
       }
 
+      const waitingRoomTab = window.open("about:blank", "_blank");
+      let gameCreated = false;
+      if (waitingRoomTab) {
+        waitingRoomTab.opener = null;
+        waitingRoomTab.document.title = "Opening game waiting room...";
+      }
+
       void mutateWorkspace(async () => {
-        await readJson<{ game: AvailableGameSummary }>(
+        const payload = await readJson<{ game: AvailableGameSummary }>(
           await fetch("/api/admin/games", {
             body: JSON.stringify({
               participantGroupId: selectedScheduleGroupIds[0],
@@ -4276,10 +4291,22 @@ export function AdminQuestionWorkspace({
             method: "POST",
           }),
         );
+        gameCreated = true;
 
-        setScheduleFeedback("Game created. Invited participants can now accept it.");
+        if (waitingRoomTab) {
+          waitingRoomTab.location.replace(`/user/game/${encodeURIComponent(payload.game.id)}`);
+        } else {
+          setScheduleFeedback("Game created. Open it from the Upcoming table; the browser blocked the waiting-room tab.");
+        }
+
+        if (waitingRoomTab) {
+          setScheduleFeedback("Game created. The waiting room opened in a new tab.");
+        }
         resetScheduledTestForm();
       }).catch((error) => {
+        if (!gameCreated) {
+          waitingRoomTab?.close();
+        }
         handleWorkspaceActionError(error, "Unable to create the game.", setScheduleFeedback);
       });
       return;
@@ -4359,10 +4386,8 @@ export function AdminQuestionWorkspace({
   }
 
   function handleAcceptGame(gameId: string) {
-    void mutateWorkspace(async () => {
-      await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/accept`, { method: "POST" }));
-      setFeedback("Game accepted.");
-    }).catch((error) => handleWorkspaceActionError(error, "Unable to accept the game.", setFeedback));
+    const gameTab = window.open(`/user/game/${encodeURIComponent(gameId)}?accept=1`, "_blank", "noopener,noreferrer");
+    setFeedback(gameTab ? "Game opened in a dedicated tab." : "Allow pop-ups to open the game waiting room.");
   }
 
   function handleStartGame(gameId: string) {
@@ -8824,33 +8849,34 @@ export function AdminQuestionWorkspace({
                             const isAccepted = Boolean(currentAdminIdentifier && game.participants.some((participant) =>
                               participant.accepted && participantIdentifiersMatch(participant.identifier, currentAdminIdentifier),
                             ));
-                            const completedAt = game.startedAt
-                              ? new Date(new Date(game.startedAt).getTime() + 20 * 15 * 1000).toISOString()
-                              : null;
-
                             return (
                               <tr key={`upcoming-game-${game.id}`}>
                                 <td><span className="status-chip success">Game</span> {game.title}</td>
                                 <td>Manual start</td>
-                                <td>5 min</td>
-                                <td>{completedAt ? formatShortDateTime(completedAt) : "-"}</td>
+                                <td>{game.questionDurationMs / 1000} sec/question</td>
+                                <td>{game.completedAt ? formatShortDateTime(game.completedAt) : "-"}</td>
                                 <td>20</td>
                                 <td>{pools.find((pool) => pool.id === game.poolId)?.name ?? "Unknown pool"}</td>
                                 <td>{participantGroups.find((group) => group.id === game.participantGroupId)?.name ?? "Unknown group"}</td>
                                 <td>{game.acceptedCount}/{game.participantCount} accepted</td>
                                 <td>
                                   <div className="inline-actions">
-                                    <span className={`status-chip ${game.status === "ongoing" ? "success" : "warning"}`}>
-                                      {game.status === "ongoing" ? "Ongoing" : "Upcoming"}
+                                    <span className={`status-chip ${game.displayStatus === "In Progress" ? "success" : "warning"}`}>
+                                      {game.displayStatus}
                                     </span>
                                     {!isAccepted && game.status === "upcoming" ? (
                                       <button className="button-secondary small-button" type="button" onClick={() => handleAcceptGame(game.id)}>Accept</button>
                                     ) : null}
                                     {isCreator && game.status === "upcoming" ? (
-                                      <button className="button small-button" disabled={game.acceptedCount < 4} type="button" onClick={() => handleStartGame(game.id)}>Start</button>
+                                      <button className="button small-button" disabled={!game.creatorRole || game.acceptedCount < 4} type="button" onClick={() => handleStartGame(game.id)}>Start</button>
                                     ) : null}
-                                    {game.status === "ongoing" && isAccepted ? (
-                                      <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`}>Open</a>
+                                    {isCreator && game.status === "upcoming" ? (
+                                      <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} target="_blank" rel="noreferrer">Open waiting room</a>
+                                    ) : null}
+                                    {(game.status === "countdown" || game.status === "ongoing") ? (
+                                      <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} target="_blank" rel="noreferrer">
+                                        {isAccepted ? "Open" : "Watch"}
+                                      </a>
                                     ) : null}
                                   </div>
                                 </td>
@@ -8942,13 +8968,14 @@ export function AdminQuestionWorkspace({
                               <tr key={`completed-game-${game.id}`}>
                                 <td><span className="status-chip success">Game</span> {game.title}</td>
                                 <td>{game.startedAt ? formatShortDateTime(game.startedAt) : "-"}</td>
-                                <td>5 min</td>
+                                <td>{game.questionDurationMs / 1000} sec/question</td>
                                 <td>{game.completedAt ? formatShortDateTime(game.completedAt) : "Completed"}</td>
                                 <td>20</td>
                                 <td>{pools.find((pool) => pool.id === game.poolId)?.name ?? "Unknown pool"}</td>
                                 <td>{participantGroups.find((group) => group.id === game.participantGroupId)?.name ?? "Unknown group"}</td>
                                 <td>{game.acceptedCount}/{game.participantCount}</td>
                                 <td>
+                                  <span className={`status-chip ${game.isMissed ? "warning" : "success"}`}>{game.displayStatus}</span>{" "}
                                   <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`}>
                                     {ownResult ? `Rank ${ownResult.rank} · ${ownResult.points} pts` : "Game results"}
                                   </a>

@@ -1,3 +1,4 @@
+import { getGameQuestionDurationMs } from "@trapit/testing";
 import { NextResponse } from "next/server";
 
 import { getUserActor } from "../../../../lib/user-api";
@@ -28,26 +29,49 @@ export async function GET(request: Request) {
     ]);
 
     return NextResponse.json({
-      availableGames: availableGames.map((game) => ({
-        acceptedCount: game.acceptedCount,
-        completedAt: game.completedAt,
-        createdAt: game.createdAt,
-        creatorIdentifier: game.creatorIdentifier,
-        id: game.id,
-        leaderboard: game.status === "completed" ? game.leaderboard : [],
-        participantCount: game.participants.length,
-        participantGroupId: game.participantGroupId,
-        participants: game.participants.map((participant) => ({
-          accepted: Boolean(participant.acceptedAt),
-          identifier: participant.identifier,
-          label: participant.label,
-        })),
-        poolId: game.poolId,
-        startedAt: game.startedAt,
-        status: game.status,
-        title: game.title,
-        updatedAt: game.updatedAt,
-      })),
+      availableGames: availableGames.map((game) => {
+        const participant = game.participants.find((entry) =>
+          entry.identifier.trim().toLowerCase() === actor.identifier.trim().toLowerCase(),
+        );
+        const isAccepted = Boolean(participant?.acceptedAt);
+        const isCreator = game.creatorIdentifier.trim().toLowerCase() === actor.identifier.trim().toLowerCase();
+        const isMissed = game.status === "completed"
+          && !isAccepted
+          && !(isCreator && game.creatorRole === "spectator");
+
+        return {
+          acceptedCount: game.acceptedCount,
+          completedAt: game.completedAt,
+          countdownDeadline: game.countdownDeadline,
+          createdAt: game.createdAt,
+          creatorIdentifier: game.creatorIdentifier,
+          creatorRole: game.creatorRole ?? null,
+          displayStatus: game.status === "upcoming"
+            ? "Upcoming"
+            : game.status === "completed"
+              ? (isMissed ? "Missed" : "Completed")
+              : "In Progress",
+          id: game.id,
+          isAccepted,
+          isCreator,
+          isMissed,
+          leaderboard: game.status === "completed" ? game.leaderboard : [],
+          participantCount: game.participants.length,
+          participantGroupId: game.participantGroupId,
+          participants: game.participants.map((gameParticipant) => ({
+            accepted: Boolean(gameParticipant.acceptedAt),
+            identifier: gameParticipant.identifier,
+            label: gameParticipant.label,
+          })),
+          poolId: game.poolId,
+          questionDurationMs: getGameQuestionDurationMs(game),
+          questionDeadline: game.questionDeadline,
+          startedAt: game.startedAt,
+          status: game.status,
+          title: game.title,
+          updatedAt: game.updatedAt,
+        };
+      }),
       availablePolls,
       availableTests,
       groupJoinRequests,
