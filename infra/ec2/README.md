@@ -23,6 +23,49 @@ That also means this guide is not safe for:
 2. Multiple PM2 cluster workers writing the same file
 3. Auto-scaling without moving the remaining file-backed state to a real database
 
+## Question pool incident recovery
+
+Treat a missing pool in the UI as an access incident until the live data proves that the pool record is absent. Before changing production data, copy the live file and record its hash:
+
+```bash
+mkdir -p /tmp/trapit-pool-incident
+cp /var/lib/trapit/testing-workspace.json /tmp/trapit-pool-incident/live.json
+sha256sum /tmp/trapit-pool-incident/live.json
+ls -lt /var/backups/trapit/testing-workspace-*.json | head
+```
+
+Validate the selected backup against live data, then create a staged selective merge without applying it:
+
+```bash
+./infra/ec2/validate-testing-data.sh \
+   /var/backups/trapit/testing-workspace-BACKUP.json \
+   /var/lib/trapit/testing-workspace.json
+
+node infra/ec2/recover-question-pools.cjs \
+   --live /var/lib/trapit/testing-workspace.json \
+   --backup /var/backups/trapit/testing-workspace-BACKUP.json \
+   --output /tmp/trapit-pool-incident/staged.json
+
+./infra/ec2/validate-testing-data.sh \
+   /tmp/trapit-pool-incident/staged.json \
+   /var/lib/trapit/testing-workspace.json
+```
+
+Review the command report, restored owners, restored question counts, and unresolved question IDs. If a Cognito account was recreated, prepare an audited JSON ownership map from old subject to new subject and pass it with `--ownership-map`. Do not use a full restore to repair a subset of pools.
+
+Apply only after the staged file is approved:
+
+```bash
+node infra/ec2/recover-question-pools.cjs \
+   --live /var/lib/trapit/testing-workspace.json \
+   --backup /var/backups/trapit/testing-workspace-BACKUP.json \
+   --apply
+
+./infra/ec2/validate-testing-data.sh /var/lib/trapit/testing-workspace.json
+```
+
+The recovery command creates a `.pre-pool-recovery-*.json` rollback copy beside the live file. Keep that copy until pool visibility, ownership, sharing, and question counts have been verified. The super-admin diagnostic endpoint `/api/admin/pools/diagnostics?identifier=...&sub=...` reports why each pool is visible and identifies missing question references without returning question content.
+
 ## Recommended architecture
 
 1. EC2 instance runs the Next.js server on port `3000`.

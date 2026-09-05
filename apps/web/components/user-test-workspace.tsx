@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { formatShortDateTime } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
+import { AnswerStatusIndicator } from "./answer-status-indicator";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 
 type AvailableTest = {
@@ -913,17 +914,16 @@ export function UserTestWorkspace({
                             <article className="question-card nested-card" key={`${test.id}-review-${question.questionId}`}>
                               <div className="question-head">
                                 <strong>Question {reviewIndex + 1}</strong>
-                                <span className="status-chip success">
-                                  Correct option {question.correctOptionIndex + 1}
-                                </span>
                               </div>
                               <p>{question.prompt}</p>
                               <ol className="question-options compact-question-options">
                                 {question.options.map((option, optionIndex) => (
                                   <li key={`${question.questionId}-${optionIndex}`}>
                                     {option}
-                                    {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
-                                    {optionIndex === question.selectedOptionIndex ? " (your answer)" : ""}
+                                    <AnswerStatusIndicator
+                                      isCorrect={optionIndex === question.correctOptionIndex}
+                                      isSelected={optionIndex === question.selectedOptionIndex}
+                                    />
                                   </li>
                                 ))}
                               </ol>

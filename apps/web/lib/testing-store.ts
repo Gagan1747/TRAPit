@@ -9,6 +9,7 @@ import {
   createEntityId,
   createParticipantGroup,
   createParticipantProfile,
+  createPresentedQuestions,
   createPersistentPollQuestion,
   createPersistentQuestion,
   GAME_INCORRECT_POINTS,
@@ -18,12 +19,14 @@ import {
   getGameQuestionDeadline,
   getGameQuestionIndex,
   getGameQuestionPoints,
+  getNextGameQuestionStartedAt,
   getGameStatus,
   getIncorrectCount,
   getScheduledTestEndTime,
   normalizeWorkspaceBranding,
   normalizeDraft,
   normalizePollQuestionDraft,
+  participantIdentifiersMatch as identifiersMatch,
   previewQuestionImport,
   previewPollQuestionImport,
   resolveScheduledTestStatus,
@@ -228,31 +231,6 @@ function normalizeBrandingActorKey(value: string | null | undefined) {
 
   const normalized = normalizeParticipantIdentifier(value);
   return normalized || null;
-}
-
-function getParticipantIdentifierCandidates(value: string) {
-  const normalized = normalizeParticipantIdentifier(value);
-  const compact = normalized.replace(/[\s()-]/g, "");
-  const digitsOnly = compact.replace(/\D/g, "");
-  const candidates = new Set<string>([normalized, compact]);
-
-  if (digitsOnly) {
-    candidates.add(digitsOnly);
-
-    if (digitsOnly.length > 10) {
-      candidates.add(digitsOnly.slice(-10));
-    }
-  }
-
-  return candidates;
-}
-
-function identifiersMatch(left: string, right: string) {
-  const leftCandidates = getParticipantIdentifierCandidates(left);
-
-  return Array.from(getParticipantIdentifierCandidates(right)).some((candidate) =>
-    leftCandidates.has(candidate),
-  );
 }
 
 function normalizeWorkspaceBrandingByActor(
@@ -4260,7 +4238,10 @@ function advanceGameLifecycle(game: ScheduledGame, now: Date) {
       return;
     }
 
-    questionStartedAt[questionIndex + 1] = new Date(transitionAt).toISOString();
+    questionStartedAt[questionIndex + 1] = getNextGameQuestionStartedAt(
+      transitionAt,
+      now.getTime(),
+    );
     game.updatedAt = questionStartedAt[questionIndex + 1];
 
     if (now.getTime() < transitionAt) {
@@ -4339,6 +4320,25 @@ export async function createScheduledGame(input: {
     }
 
     const timestamp = new Date().toISOString();
+    const selectedQuestionIds = selectQuestionIdsForScheduledTest(
+      availableQuestionIds,
+      GAME_QUESTION_COUNT,
+      `${actorIdentifier}:${timestamp}:game`,
+    );
+    const selectedQuestions = selectedQuestionIds.flatMap((questionId) => {
+      const question = state.questions.find((entry) => entry.id === questionId);
+      return question ? [question] : [];
+    });
+    const presentedQuestions = createPresentedQuestions(
+      selectedQuestions,
+      `${actorIdentifier}:${timestamp}:game-options`,
+    ).map((entry) => ({
+      correctOptionIndex: entry.correctOptionIndex,
+      id: entry.question.id,
+      options: entry.displayOptions,
+      originalOptionIndexes: entry.originalOptionIndexes,
+      prompt: entry.question.prompt,
+    }));
     const participants = uniqueGroupIdentifiers.map((identifier) => {
       const participant = groupParticipants.find((entry) =>
         identifiersMatch(entry.identifier, identifier),
@@ -4371,12 +4371,9 @@ export async function createScheduledGame(input: {
       participantGroupId: group.id,
       participants,
       poolId: pool.id,
+      presentedQuestions,
       questionStartedAt: [],
-      questionIds: selectQuestionIdsForScheduledTest(
-        availableQuestionIds,
-        GAME_QUESTION_COUNT,
-        `${actorIdentifier}:${timestamp}:game`,
-      ),
+      questionIds: presentedQuestions.map((question) => question.id),
       rulesVersion: 2,
       startedAt: null,
       title: input.title?.trim() || `${group.name} game`,
@@ -4537,7 +4534,8 @@ export async function recordGameAnswer(input: {
     }
 
     const questionId = game.questionIds[currentQuestionIndex];
-    const question = state.questions.find((entry) => entry.id === questionId);
+    const question = game.presentedQuestions?.[currentQuestionIndex]
+      ?? state.questions.find((entry) => entry.id === questionId);
 
     if (!question || input.optionIndex < 0 || input.optionIndex >= question.options.length) {
       throw new Error("Choose a valid answer.");

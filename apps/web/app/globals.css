@@ -1,3 +1,25 @@
+.answer-status-indicator {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 0.2rem;
+  margin-left: 0.45rem;
+}
+
+.answer-status-icon {
+  height: 1rem;
+  stroke-width: 3;
+  width: 1rem;
+}
+
+.answer-status-icon.is-correct,
+.answer-status-icon.is-selected-correct {
+  color: #16803a;
+}
+
+.answer-status-icon.is-incorrect {
+  color: #c62828;
+}
 :root {
   color-scheme: light;
   --bg: #e7f4ff;

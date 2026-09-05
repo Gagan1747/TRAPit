@@ -36,6 +36,7 @@ import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime, formatShortDateTimeIst } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
+import { AnswerStatusIndicator } from "./answer-status-indicator";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 import { FloatingWindowCloseButton } from "./floating-window-close-button";
@@ -419,6 +420,12 @@ type QuestionMutationPayload =
 
 type PoolsResponse = {
   pools: WorkspaceQuestionPool[];
+  creationCapability: {
+    canCreate: boolean;
+    limit: number | null;
+    ownedCount: number;
+    reason: string | null;
+  };
 };
 
 type WorkspaceQuestionPool = QuestionPool & {
@@ -1754,6 +1761,7 @@ export function AdminQuestionWorkspace({
   const [poolName, setPoolName] = useState("");
   const [poolShareSearch, setPoolShareSearch] = useState("");
   const [pools, setPools] = useState<WorkspaceQuestionPool[]>([]);
+  const [poolCreationCapability, setPoolCreationCapability] = useState<PoolsResponse["creationCapability"] | null>(null);
   const [authorPoolId, setAuthorPoolId] = useState("");
   const [isOcrImportOpen, setIsOcrImportOpen] = useState(false);
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
@@ -1905,6 +1913,7 @@ export function AdminQuestionWorkspace({
 
       setQuestions(questionsPayload.questions);
       setPools(poolsPayload.pools);
+      setPoolCreationCapability(poolsPayload.creationCapability);
       setParticipants(participantsPayload.participants);
       setParticipantGroups(participantsPayload.participantGroups);
       setGroupJoinRequests(participantsPayload.groupJoinRequests);
@@ -3340,6 +3349,7 @@ export function AdminQuestionWorkspace({
       );
 
       setPools(payload.pools);
+      setPoolCreationCapability(payload.creationCapability);
       setFeedback(
         nextSharedIdentifiers.includes(identifier)
           ? "Question pool shared successfully."
@@ -3487,6 +3497,7 @@ export function AdminQuestionWorkspace({
         setAuthorPoolId(newestPool.id);
       }
 
+      setPoolCreationCapability(payload.creationCapability);
       setPoolFeedback("Pool created.");
       setPoolName("");
     }).catch((error) => {
@@ -6444,13 +6455,14 @@ export function AdminQuestionWorkspace({
                     onChange={(event) => setPoolName(event.target.value)}
                   />
                 </div>
-                <button className="button-secondary small-button" disabled={isMutating} type="button" onClick={handleCreatePool}>
+                <button className="button-secondary small-button" disabled={isMutating || poolCreationCapability?.canCreate === false} type="button" onClick={handleCreatePool}>
                   Create pool
                 </button>
               </div>
             </div>
           </div>
 
+          {poolCreationCapability?.reason ? <p className="muted-text">{poolCreationCapability.reason}</p> : null}
           {poolFeedback ? <p className="muted-text">{poolFeedback}</p> : null}
           {feedback ? <p className="muted-text">{feedback}</p> : null}
 
@@ -7414,13 +7426,14 @@ export function AdminQuestionWorkspace({
                         onChange={(event) => setPoolName(event.target.value)}
                       />
                     </div>
-                    <button className="button-secondary small-button" disabled={isMutating} type="button" onClick={handleCreatePool}>
+                    <button className="button-secondary small-button" disabled={isMutating || poolCreationCapability?.canCreate === false} type="button" onClick={handleCreatePool}>
                       Create pool
                     </button>
                   </div>
                 </div>
               </div>
 
+              {poolCreationCapability?.reason ? <p className="muted-text">{poolCreationCapability.reason}</p> : null}
               {poolFeedback ? <p className="muted-text">{poolFeedback}</p> : null}
               {feedback ? <p className="muted-text">{feedback}</p> : null}
 
@@ -9438,9 +9451,6 @@ export function AdminQuestionWorkspace({
                                 <div className="question-head">
                                   <div className="inline-actions">
                                     <strong>Question {reviewIndex + 1}</strong>
-                                    <span className="status-chip success">
-                                      Correct option {question.correctOptionIndex + 1}
-                                    </span>
                                     {question.reportCount ? (
                                       <span className="status-chip warning">
                                         {question.reportCount} report{question.reportCount === 1 ? "" : "s"}
@@ -9463,8 +9473,10 @@ export function AdminQuestionWorkspace({
                                   {question.options.map((option, optionIndex) => (
                                     <li key={`${question.questionId}-${optionIndex}`}>
                                       {option}
-                                      {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
-                                      {optionIndex === question.selectedOptionIndex ? " (your answer)" : ""}
+                                      <AnswerStatusIndicator
+                                        isCorrect={optionIndex === question.correctOptionIndex}
+                                        isSelected={optionIndex === question.selectedOptionIndex}
+                                      />
                                     </li>
                                   ))}
                                 </ol>

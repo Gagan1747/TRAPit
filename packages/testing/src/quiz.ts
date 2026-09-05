@@ -7,6 +7,31 @@ export const GAME_LAUNCH_COUNTDOWN_MS = 60_000;
 export const GAME_CORRECT_POINTS = [50, 30, 10, 5, 5] as const;
 export const GAME_INCORRECT_POINTS = -5;
 
+function getParticipantIdentifierCandidates(value: string) {
+  const normalized = value.trim().toLowerCase();
+  const compact = normalized.replace(/[\s()-]/g, "");
+  const digitsOnly = compact.replace(/\D/g, "");
+  const candidates = new Set<string>([normalized, compact]);
+
+  if (digitsOnly) {
+    candidates.add(digitsOnly);
+
+    if (digitsOnly.length > 10) {
+      candidates.add(digitsOnly.slice(-10));
+    }
+  }
+
+  return candidates;
+}
+
+export function participantIdentifiersMatch(left: string, right: string) {
+  const leftCandidates = getParticipantIdentifierCandidates(left);
+
+  return Array.from(getParticipantIdentifierCandidates(right)).some((candidate) =>
+    leftCandidates.has(candidate),
+  );
+}
+
 export type ObjectiveQuestion = {
   correctOptionIndex: number;
   id: string;
@@ -216,6 +241,14 @@ export type GameAnswer = {
   responsePosition?: number | null;
 };
 
+export type GamePresentedQuestion = {
+  correctOptionIndex: number;
+  id: string;
+  options: string[];
+  originalOptionIndexes: number[];
+  prompt: string;
+};
+
 export type ScheduledGame = {
   answers: GameAnswer[];
   completedAt: string | null;
@@ -228,6 +261,7 @@ export type ScheduledGame = {
   participantGroupId: string;
   participants: GameParticipant[];
   poolId: string;
+  presentedQuestions?: GamePresentedQuestion[];
   questionStartedAt?: string[];
   questionIds: string[];
   rulesVersion?: 1 | 2;
@@ -333,6 +367,13 @@ export function getGameQuestionDurationMs(game: Pick<ScheduledGame, "rulesVersio
   return game.rulesVersion === 2
     ? GAME_QUESTION_DURATION_MS
     : LEGACY_GAME_QUESTION_DURATION_MS;
+}
+
+export function getNextGameQuestionStartedAt(
+  transitionAtMs: number,
+  observedAtMs: number,
+) {
+  return new Date(Math.max(transitionAtMs, observedAtMs)).toISOString();
 }
 
 export function getGameStatus(

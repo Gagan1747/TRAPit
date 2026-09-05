@@ -38,7 +38,8 @@ export async function GET(request: Request, context: { params: { gameId: string 
   const currentQuestionIndex = game.currentQuestionIndex;
   const question = currentQuestionIndex === null
     ? null
-    : workspace.questions.find((entry) => entry.id === game.questionIds[currentQuestionIndex]);
+    : game.presentedQuestions?.[currentQuestionIndex]
+      ?? workspace.questions.find((entry) => entry.id === game.questionIds[currentQuestionIndex]);
   const participant = game.participants.find((entry) => identifiersMatch(entry.identifier, actor.identifier));
   const ownAnswers = game.answers.filter((answer) =>
     identifiersMatch(answer.participantIdentifier, actor.identifier),
@@ -50,7 +51,8 @@ export async function GET(request: Request, context: { params: { gameId: string 
     && !(isCreator && game.creatorRole === "spectator");
   const reviewQuestions = game.status === "completed"
     ? game.questionIds.map((questionId, questionIndex) => {
-        const reviewQuestion = workspace.questions.find((entry) => entry.id === questionId);
+      const reviewQuestion = game.presentedQuestions?.[questionIndex]
+        ?? workspace.questions.find((entry) => entry.id === questionId);
         const answer = ownAnswers.find((entry) => entry.questionIndex === questionIndex) ?? null;
 
         return reviewQuestion

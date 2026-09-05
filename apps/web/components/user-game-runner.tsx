@@ -3,6 +3,8 @@
 import type { GameAnswer, GameCreatorRole, GameLeaderboardEntry } from "@trapit/testing";
 import { useEffect, useRef, useState } from "react";
 
+import { AnswerStatusIndicator } from "./answer-status-indicator";
+
 type GameState = {
   acceptedCount: number;
   canStart: boolean;
@@ -335,7 +337,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
                         return (
                           <div className={`game-review-option${isCorrect ? " is-correct" : ""}${isChosen && !isCorrect ? " is-incorrect" : ""}`} key={`${question.id}-${optionIndex}`}>
                             <span>{option}</span>
-                            <strong>{isCorrect ? `\u2713 Correct${isChosen ? " and chosen" : ""}` : isChosen ? "\u2715 Chosen" : ""}</strong>
+                            <AnswerStatusIndicator isCorrect={isCorrect} isSelected={isChosen} />
                           </div>
                         );
                       })}
