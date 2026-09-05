@@ -1895,9 +1895,22 @@ export function AdminQuestionWorkspace({
       setCategoryManagement(categoryManagementPayload);
 
       if (currentActorRole === "user") {
+        const [questionsPayload, poolsPayload] = await Promise.all([
+          readJson<QuestionApiResponse>(await fetch("/api/admin/questions")),
+          readJson<PoolsResponse>(await fetch("/api/admin/pools")),
+        ]);
+
+        setQuestions(questionsPayload.questions);
+        setPools(poolsPayload.pools);
+        setPoolCreationCapability(poolsPayload.creationCapability);
         setParticipants(userParticipantsPayload?.participants ?? []);
         setParticipantGroups(userParticipantsPayload?.participantGroups ?? []);
         setGroupJoinRequests(userParticipantsPayload?.groupJoinRequests ?? []);
+        setSelectedQuestionBankPoolId((currentPoolId) =>
+          currentPoolId && poolsPayload.pools.some((pool) => pool.id === currentPoolId)
+            ? currentPoolId
+            : null,
+        );
         return;
       }
 
