@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildGameLeaderboard,
   createPresentedQuestions,
+  dedupeParticipantIdentifiers,
   GAME_QUESTION_DURATION_MS,
   getNextGameQuestionStartedAt,
   getGameQuestionDeadline,
@@ -40,6 +41,15 @@ describe("versioned game lifecycle", () => {
     expect(participantIdentifiersMatch("+91 95823-72662", "9582372662")).toBe(true);
     expect(participantIdentifiersMatch("User@Example.com", "user@example.com")).toBe(true);
     expect(participantIdentifiersMatch("9582372662", "9582372663")).toBe(false);
+  });
+
+  it("counts equivalent phone formats as one participant identity", () => {
+    expect(dedupeParticipantIdentifiers([
+      "+919582372662",
+      "9582372662",
+      "+919876543210",
+      "player@example.com",
+    ])).toEqual(["+919582372662", "+919876543210", "player@example.com"]);
   });
 
   it("reports the synchronized countdown before question one launches", () => {

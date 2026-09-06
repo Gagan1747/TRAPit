@@ -1,4 +1,4 @@
-import { getGameQuestionDurationMs } from "@trapit/testing";
+import { getGameQuestionDurationMs, participantIdentifiersMatch } from "@trapit/testing";
 import { NextResponse } from "next/server";
 
 import { getUserActor } from "../../../../lib/user-api";
@@ -33,10 +33,10 @@ export async function GET(request: Request) {
     return NextResponse.json({
       availableGames: availableGames.map((game) => {
         const participant = game.participants.find((entry) =>
-          entry.identifier.trim().toLowerCase() === actor.identifier.trim().toLowerCase(),
+          participantIdentifiersMatch(entry.identifier, actor.identifier),
         );
         const isAccepted = Boolean(participant?.acceptedAt);
-        const isCreator = game.creatorIdentifier.trim().toLowerCase() === actor.identifier.trim().toLowerCase();
+        const isCreator = participantIdentifiersMatch(game.creatorIdentifier, actor.identifier);
         const isMissed = game.status === "completed"
           && !isAccepted
           && !(isCreator && game.creatorRole === "spectator");

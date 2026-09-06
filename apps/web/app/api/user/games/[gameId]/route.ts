@@ -4,6 +4,7 @@ import {
   GAME_LAUNCH_COUNTDOWN_MS,
   GAME_QUESTION_COUNT,
   getGameQuestionDurationMs,
+  participantIdentifiersMatch,
 } from "@trapit/testing";
 import { NextResponse } from "next/server";
 
@@ -13,10 +14,6 @@ import {
   getWorkspaceData,
 } from "../../../../../lib/testing-store";
 import { getUserActor } from "../../../../../lib/user-api";
-
-function identifiersMatch(left: string, right: string) {
-  return left.trim().toLowerCase() === right.trim().toLowerCase();
-}
 
 export async function GET(request: Request, context: { params: { gameId: string } }) {
   const actor = await getUserActor(request);
@@ -40,12 +37,14 @@ export async function GET(request: Request, context: { params: { gameId: string 
     ? null
     : game.presentedQuestions?.[currentQuestionIndex]
       ?? workspace.questions.find((entry) => entry.id === game.questionIds[currentQuestionIndex]);
-  const participant = game.participants.find((entry) => identifiersMatch(entry.identifier, actor.identifier));
+  const participant = game.participants.find((entry) =>
+    participantIdentifiersMatch(entry.identifier, actor.identifier),
+  );
   const ownAnswers = game.answers.filter((answer) =>
-    identifiersMatch(answer.participantIdentifier, actor.identifier),
+    participantIdentifiersMatch(answer.participantIdentifier, actor.identifier),
   );
   const isAccepted = Boolean(participant?.acceptedAt);
-  const isCreator = identifiersMatch(game.creatorIdentifier, actor.identifier);
+  const isCreator = participantIdentifiersMatch(game.creatorIdentifier, actor.identifier);
   const isMissed = game.status === "completed"
     && !isAccepted
     && !(isCreator && game.creatorRole === "spectator");

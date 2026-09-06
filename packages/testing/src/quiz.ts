@@ -32,6 +32,23 @@ export function participantIdentifiersMatch(left: string, right: string) {
   );
 }
 
+export function dedupeParticipantIdentifiers(identifiers: string[]) {
+  return identifiers.reduce<string[]>((uniqueIdentifiers, identifier) => {
+    const normalizedIdentifier = identifier.trim();
+
+    if (
+      normalizedIdentifier
+      && !uniqueIdentifiers.some((candidate) =>
+        participantIdentifiersMatch(candidate, normalizedIdentifier),
+      )
+    ) {
+      uniqueIdentifiers.push(normalizedIdentifier);
+    }
+
+    return uniqueIdentifiers;
+  }, []);
+}
+
 export type ObjectiveQuestion = {
   correctOptionIndex: number;
   id: string;

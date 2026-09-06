@@ -12,6 +12,7 @@ import {
   createPresentedQuestions,
   createPersistentPollQuestion,
   createPersistentQuestion,
+  dedupeParticipantIdentifiers,
   GAME_INCORRECT_POINTS,
   GAME_LAUNCH_COUNTDOWN_MS,
   GAME_QUESTION_COUNT,
@@ -1914,9 +1915,53 @@ export async function syncParticipants(
       continue;
     }
 
-    if (
-      nextParticipants.some((participant) => identifiersMatch(participant.identifier, normalizedIdentifier))
-    ) {
+    const existingParticipant = nextParticipants.find((participant) =>
+      identifiersMatch(participant.identifier, normalizedIdentifier),
+    );
+
+    if (existingParticipant) {
+      const directoryLabel = input.label?.trim() ?? "";
+      const previousLabel = existingParticipant.label.trim();
+      const hasDirectoryName = Boolean(directoryLabel)
+        && !identifiersMatch(directoryLabel, normalizedIdentifier);
+
+      if (!hasDirectoryName || previousLabel === directoryLabel) {
+        continue;
+      }
+
+      const timestamp = new Date().toISOString();
+      existingParticipant.label = directoryLabel;
+      existingParticipant.updatedAt = timestamp;
+
+      for (const game of state.games) {
+        for (const gameParticipant of game.participants) {
+          if (
+            identifiersMatch(gameParticipant.identifier, normalizedIdentifier)
+            && (
+              !gameParticipant.label.trim()
+              || gameParticipant.label === previousLabel
+              || identifiersMatch(gameParticipant.label, gameParticipant.identifier)
+            )
+          ) {
+            gameParticipant.label = directoryLabel;
+            game.updatedAt = timestamp;
+          }
+        }
+      }
+
+      for (const attempt of state.attempts) {
+        if (
+          identifiersMatch(attempt.userId, normalizedIdentifier)
+          && (
+            !attempt.participantName?.trim()
+            || identifiersMatch(attempt.participantName, attempt.userId)
+          )
+        ) {
+          attempt.participantName = directoryLabel;
+        }
+      }
+
+      didChange = true;
       continue;
     }
 
@@ -4282,6 +4327,16 @@ function findGameParticipant(game: ScheduledGame, participantIdentifier: string)
   );
 }
 
+function getAcceptedGameParticipants(game: ScheduledGame) {
+  return game.participants.filter((participant, participantIndex, participants) =>
+    Boolean(participant.acceptedAt)
+    && participants.findIndex((candidate) =>
+      Boolean(candidate.acceptedAt)
+      && identifiersMatch(candidate.identifier, participant.identifier),
+    ) === participantIndex,
+  );
+}
+
 function advanceGameLifecycle(game: ScheduledGame, now: Date) {
   if (game.completedAt) {
     return;
@@ -4319,7 +4374,7 @@ function advanceGameLifecycle(game: ScheduledGame, now: Date) {
       return;
     }
 
-    const acceptedParticipants = game.participants.filter((participant) => participant.acceptedAt);
+    const acceptedParticipants = getAcceptedGameParticipants(game);
     const questionAnswers = game.answers.filter((answer) => answer.questionIndex === questionIndex);
     const allAcceptedAnswered = acceptedParticipants.length > 0 && acceptedParticipants.every((participant) =>
       questionAnswers.some((answer) => identifiersMatch(answer.participantIdentifier, participant.identifier)),
@@ -4388,7 +4443,7 @@ function hydrateGame(game: ScheduledGame, nowMs = Date.now()): AvailableGame {
 
   return {
     ...game,
-    acceptedCount: game.participants.filter((participant) => participant.acceptedAt).length,
+    acceptedCount: getAcceptedGameParticipants(game).length,
     countdownDeadline: game.countdownStartedAt && !game.startedAt
       ? new Date(new Date(game.countdownStartedAt).getTime() + GAME_LAUNCH_COUNTDOWN_MS).toISOString()
       : null,
@@ -4427,7 +4482,7 @@ export async function createScheduledGame(input: {
       const participant = participantMap.get(participantId);
       return participant ? [participant] : [];
     });
-    const uniqueGroupIdentifiers = dedupe(
+    const uniqueGroupIdentifiers = dedupeParticipantIdentifiers(
       groupParticipants.map((participant) => normalizeParticipantIdentifier(participant.identifier)),
     );
 
@@ -4628,7 +4683,7 @@ export async function startGame(gameId: string, creatorIdentifier: string) {
       throw new Error("Choose Join Game or Watch Game before starting.");
     }
 
-    if (game.participants.filter((participant) => participant.acceptedAt).length < 4) {
+    if (getAcceptedGameParticipants(game).length < 4) {
       throw new Error("At least 4 participants must accept before the game can start.");
     }
 
