@@ -12,7 +12,8 @@ export async function POST(request: Request, context: { params: { gameId: string
   }
 
   try {
-    const game = await acceptGame(context.params.gameId, actor.identifier);
+    const body = (await request.json()) as { participantName?: string };
+    const game = await acceptGame(context.params.gameId, actor.identifier, body.participantName ?? "");
     publishWorkspaceEvent("game");
     return NextResponse.json({ game });
   } catch (error) {

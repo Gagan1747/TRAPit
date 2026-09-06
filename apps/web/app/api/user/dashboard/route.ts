@@ -9,6 +9,7 @@ import {
   listAvailableTestsForParticipant,
   listGroupJoinRequestsForUser,
   listUserHistory,
+  getWorkspaceData,
 } from "../../../../lib/testing-store";
 
 export async function GET(request: Request) {
@@ -19,13 +20,14 @@ export async function GET(request: Request) {
   }
 
   try {
-    const [availableGames, availablePolls, availableTests, groupJoinRequests, history, overallGamePoints] = await Promise.all([
+    const [availableGames, availablePolls, availableTests, groupJoinRequests, history, overallGamePoints, workspace] = await Promise.all([
       listGamesForParticipant(actor.identifier),
       listAvailablePollsForParticipant(actor.identifier),
       listAvailableTestsForParticipant(actor.identifier),
       listGroupJoinRequestsForUser(actor.identifier),
       listUserHistory(actor.identifier),
       getOverallGamePoints(actor.identifier),
+      getWorkspaceData(),
     ]);
 
     return NextResponse.json({
@@ -58,12 +60,14 @@ export async function GET(request: Request) {
           leaderboard: game.status === "completed" ? game.leaderboard : [],
           participantCount: game.participants.length,
           participantGroupId: game.participantGroupId,
+          groupName: workspace.participantGroups.find((group) => group.id === game.participantGroupId)?.name ?? "Unknown group",
           participants: game.participants.map((gameParticipant) => ({
             accepted: Boolean(gameParticipant.acceptedAt),
             identifier: gameParticipant.identifier,
             label: gameParticipant.label,
           })),
           poolId: game.poolId,
+          poolName: workspace.pools.find((pool) => pool.id === game.poolId)?.name ?? "Unknown pool",
           questionDurationMs: getGameQuestionDurationMs(game),
           questionDeadline: game.questionDeadline,
           startedAt: game.startedAt,

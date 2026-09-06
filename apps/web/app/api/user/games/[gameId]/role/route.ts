@@ -13,13 +13,18 @@ export async function POST(request: Request, context: { params: { gameId: string
   }
 
   try {
-    const body = (await request.json()) as { role?: GameCreatorRole };
+    const body = (await request.json()) as { participantName?: string; role?: GameCreatorRole };
 
     if (body.role !== "participant" && body.role !== "spectator") {
       return NextResponse.json({ error: "Choose Join Game or Watch Game." }, { status: 400 });
     }
 
-    const game = await setGameCreatorRole(context.params.gameId, actor.identifier, body.role);
+    const game = await setGameCreatorRole(
+      context.params.gameId,
+      actor.identifier,
+      body.role,
+      body.participantName,
+    );
     publishWorkspaceEvent("game");
     return NextResponse.json({ game });
   } catch (error) {

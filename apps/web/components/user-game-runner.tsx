@@ -78,6 +78,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
   const [identifier, setIdentifier] = useState(defaultParticipantIdentifier ?? "");
   const [isLoading, setIsLoading] = useState(true);
   const [isMutating, setIsMutating] = useState(false);
+  const [participantName, setParticipantName] = useState("");
   const [remainingMs, setRemainingMs] = useState(0);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | null>(null);
   const clockOffsetRef = useRef(0);
@@ -100,6 +101,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
       );
       clockOffsetRef.current = new Date(payload.serverNow).getTime() - Date.now();
       setGame(payload.game);
+      setParticipantName((currentName) => currentName || payload.game.displayName);
       setSelectedOptionIndex(null);
       if (!options?.silent) {
         setFeedback(null);
@@ -114,20 +116,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
 
   useEffect(() => {
     async function initializeGame() {
-      let acceptanceError: string | null = null;
-
-      if (autoAccept) {
-        try {
-          await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/accept${getQuery()}`, { method: "POST" }));
-        } catch (error) {
-          acceptanceError = error instanceof Error ? error.message : "Unable to accept the game.";
-        }
-      }
-
       await loadGame();
-      if (acceptanceError) {
-        setFeedback(acceptanceError);
-      }
     }
 
     void initializeGame();
@@ -175,7 +164,11 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
   async function runAction(action: "accept" | "start") {
     setIsMutating(true);
     try {
-      await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/${action}${getQuery()}`, { method: "POST" }));
+      await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/${action}${getQuery()}`, {
+        body: action === "accept" ? JSON.stringify({ participantName }) : undefined,
+        headers: action === "accept" ? { "Content-Type": "application/json" } : undefined,
+        method: "POST",
+      }));
       await loadGame({ silent: true });
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : `Unable to ${action} the game.`);
@@ -188,7 +181,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
     setIsMutating(true);
     try {
       await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/role${getQuery()}`, {
-        body: JSON.stringify({ role }),
+        body: JSON.stringify({ participantName, role }),
         headers: { "Content-Type": "application/json" },
         method: "POST",
       }));
@@ -283,14 +276,40 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
             {game.isCreator && game.status === "upcoming" ? (
               <div className="form-stack">
                 <h2>Choose your role</h2>
+                {game.creatorRole !== "spectator" && !game.isAccepted ? (
+                  <div className="field">
+                    <label htmlFor="game-participant-name">Participant name</label>
+                    <input
+                      autoFocus={autoAccept}
+                      id="game-participant-name"
+                      maxLength={80}
+                      placeholder="Enter your name"
+                      value={participantName}
+                      onChange={(event) => setParticipantName(event.target.value)}
+                    />
+                  </div>
+                ) : null}
                 <div className="game-role-selector" role="group" aria-label="Creator game role">
-                  <button aria-pressed={game.creatorRole === "participant"} className="button-secondary" disabled={isMutating} type="button" onClick={() => void chooseCreatorRole("participant")}>Join Game</button>
+                  <button aria-pressed={game.creatorRole === "participant"} className="button-secondary" disabled={isMutating || !participantName.trim()} type="button" onClick={() => void chooseCreatorRole("participant")}>Join Game</button>
                   <button aria-pressed={game.creatorRole === "spectator"} className="button-secondary" disabled={isMutating} type="button" onClick={() => void chooseCreatorRole("spectator")}>Watch Game</button>
                 </div>
               </div>
             ) : null}
+            {!game.isCreator && !game.isAccepted && game.status === "upcoming" ? (
+              <div className="field">
+                <label htmlFor="game-participant-name">Participant name</label>
+                <input
+                  autoFocus={autoAccept}
+                  id="game-participant-name"
+                  maxLength={80}
+                  placeholder="Enter your name"
+                  value={participantName}
+                  onChange={(event) => setParticipantName(event.target.value)}
+                />
+              </div>
+            ) : null}
             <div className="inline-actions">
-              {!game.isCreator && !game.isAccepted && game.status === "upcoming" ? <button className="button" disabled={isMutating} type="button" onClick={() => void runAction("accept")}>Accept</button> : null}
+              {!game.isCreator && !game.isAccepted && game.status === "upcoming" ? <button className="button" disabled={isMutating || !participantName.trim()} type="button" onClick={() => void runAction("accept")}>Accept Game</button> : null}
               {game.isCreator && game.status === "upcoming" ? <button className="button" disabled={isMutating || !game.canStart} type="button" onClick={() => void runAction("start")}>Start Game</button> : null}
             </div>
             {game.isCreator && game.status === "upcoming" && !game.creatorRole ? <p className="muted-text">Choose Join Game or Watch Game before starting.</p> : null}

@@ -7,12 +7,14 @@ import {
   type ParticipantGroup,
   type ScheduledPoll,
   type TestHistoryEntry,
+  type TestLeaderboardEntry,
 } from "@trapit/testing";
 import { useEffect, useState } from "react";
 
 import { formatShortDateTime } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { AnswerStatusIndicator } from "./answer-status-indicator";
+import { AssessmentLogTable, type AssessmentLogRow } from "./assessment-log-table";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 import { FloatingWindowCloseButton } from "./floating-window-close-button";
 import { NotificationBell, type NotificationBellItem } from "./notification-bell";
@@ -20,8 +22,12 @@ import { NotificationBell, type NotificationBellItem } from "./notification-bell
 type AvailableTest = {
   createdAt: string;
   durationMinutes: number;
+  groupNames: string[];
   hasAttempt: boolean;
   id: string;
+  participantResult?: TestLeaderboardEntry;
+  participantResultCount?: number;
+  poolName: string;
   questionCount: number;
   startsAt: string;
   status: "completed" | "live" | "scheduled";
@@ -49,21 +55,26 @@ type AvailableGameSummary = {
   acceptedCount: number;
   completedAt: string | null;
   countdownDeadline: string | null;
+  createdAt: string;
   creatorIdentifier: string;
   creatorRole: "participant" | "spectator" | null;
   displayStatus: "Completed" | "In Progress" | "Missed" | "Upcoming";
   id: string;
+  groupName: string;
   isAccepted: boolean;
   isCreator: boolean;
   isMissed: boolean;
   leaderboard: GameLeaderboardEntry[];
   participantCount: number;
+  participantGroupId: string;
   participants: Array<{ accepted: boolean; identifier: string; label: string }>;
   questionDurationMs: number;
   questionDeadline: string | null;
   startedAt: string | null;
   status: "completed" | "countdown" | "ongoing" | "upcoming";
   title: string;
+  poolId: string;
+  poolName: string;
 };
 
 type GroupSearchResponse = {
@@ -174,6 +185,63 @@ export function RestrictedUserDashboardWorkspace({
 
     return new Date(rightPoll.startsAt).getTime() - new Date(leftPoll.startsAt).getTime();
   });
+  const assessmentLogRows: AssessmentLogRow[] = [
+    ...sortedAvailableTests.map((test) => {
+      const historyEntry = historyByTestId.get(test.id);
+      const result = test.participantResult;
+      const hasCompletedResult = test.status === "completed" && historyEntry?.status !== "missed" && Boolean(result);
+      const duration = `${test.durationMinutes} min`;
+
+      return {
+        groups: test.groupNames.length ? test.groupNames.join(", ") : "None",
+        id: `test-${test.id}`,
+        marksOrPoints: hasCompletedResult && result
+          ? `${result.correctCount} (${result.incorrectCount}) / ${result.totalCount}`
+          : "—",
+        participantName: historyEntry?.participantName?.trim() || identifier || "—",
+        questionPool: test.poolName,
+        rank: hasCompletedResult && result
+          ? `${result.rank} / ${test.participantResultCount ?? 1}`
+          : "—",
+        scheduled: formatShortDateTime(test.startsAt),
+        sortTime: new Date(test.startsAt).getTime(),
+        status: test.status === "scheduled"
+          ? <span className="status-chip warning">Upcoming</span>
+          : test.status === "live"
+            ? <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Live</a>
+            : <a className="button-secondary small-button" href={`/test-results/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Results</a>,
+        test: test.title,
+        time: hasCompletedResult && result ? `${formatElapsedTime(result.elapsedMs)} / ${duration}` : duration,
+      };
+    }),
+    ...availableGames.map((game) => {
+      const participant = game.participants.find((entry) => entry.identifier.toLowerCase() === identifier.toLowerCase());
+      const ownResult = game.leaderboard.find((entry) => entry.participantIdentifier.toLowerCase() === identifier.toLowerCase());
+      const duration = formatElapsedTime(20 * game.questionDurationMs);
+
+      return {
+        groups: game.groupName,
+        id: `game-${game.id}`,
+        marksOrPoints: game.status === "completed" && ownResult ? `${ownResult.points}` : "—",
+        participantName: participant?.label?.trim() || identifier || "—",
+        questionPool: game.poolName,
+        rank: game.status === "completed" && ownResult
+          ? `${ownResult.rank} / ${game.leaderboard.length}`
+          : "—",
+        scheduled: formatShortDateTime(game.startedAt ?? game.createdAt),
+        sortTime: new Date(game.startedAt ?? game.createdAt).getTime(),
+        status: game.status === "upcoming"
+          ? participant?.accepted
+            ? <span className="status-chip warning">Accepted</span>
+            : <button className="button-secondary small-button" type="button" onClick={() => handleAcceptGame(game.id)}>Accept</button>
+          : game.status === "completed"
+            ? <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Results</a>
+            : <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Watch</a>,
+        test: "Game",
+        time: duration,
+      };
+    }),
+  ];
   const notificationBaseline = previousSignInAt ? new Date(previousSignInAt).getTime() : null;
   const liveTestsCount = sortedAvailableTests.filter((test) => test.status === "live").length;
   const livePollsCount = sortedAvailablePolls.filter((poll) => poll.status === "live").length;
@@ -601,145 +669,7 @@ export function RestrictedUserDashboardWorkspace({
               </div>
 
               {resultsMode === "tests" ? (
-                sortedAvailableTests.length || availableGames.length ? (
-                  <div className="question-list">
-                    {availableGames.map((game) => {
-                      const participant = game.participants.find((entry) => entry.identifier.toLowerCase() === identifier.toLowerCase());
-                      const ownResult = game.leaderboard.find((entry) => entry.participantIdentifier.toLowerCase() === identifier.toLowerCase());
-
-                      return (
-                        <article className="question-card" key={game.id}>
-                          <div className="question-head">
-                            <strong>{game.title}</strong>
-                            <div className="inline-actions">
-                              <span className="status-chip success">Game</span>
-                              <span className={`status-chip ${game.displayStatus === "In Progress" || game.displayStatus === "Completed" ? "success" : "warning"}`}>
-                                {game.displayStatus}
-                              </span>
-                            </div>
-                          </div>
-                          <p className="muted-text">Accepted: {game.acceptedCount}/{game.participantCount}</p>
-                          {game.status === "completed" && ownResult ? (
-                            <p className="muted-text">Your result: Rank {ownResult.rank}, {ownResult.points} points</p>
-                          ) : null}
-                          <div className="inline-actions">
-                            {game.status === "upcoming" && !participant?.accepted ? (
-                              <button className="button-secondary small-button" type="button" onClick={() => void handleAcceptGame(game.id)}>Accept</button>
-                            ) : null}
-                            {game.status === "countdown" || game.status === "ongoing" || game.status === "completed" ? (
-                              <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} target="_blank" rel="noreferrer">
-                                {game.status === "completed" ? "Game results" : participant?.accepted ? "Open game" : "Watch as spectator"}
-                              </a>
-                            ) : null}
-                          </div>
-                        </article>
-                      );
-                    })}
-                    {sortedAvailableTests.map((test) => {
-                      const historyEntry = historyByTestId.get(test.id);
-                      const isCompleted = test.status === "completed";
-
-                      return (
-                        <article className="question-card" key={test.id}>
-                          <div className="question-head">
-                            <strong>{test.title}</strong>
-                            <div className="inline-actions">
-                              <span className="status-chip success">Participant</span>
-                              <span className={`status-chip ${test.status === "live" ? "success" : "warning"}`}>
-                                {isCompleted
-                                  ? historyEntry?.status === "missed"
-                                    ? "missed"
-                                    : "completed"
-                                  : test.status}
-                              </span>
-                            </div>
-                          </div>
-                          <p className="muted-text">Starts: {formatShortDateTime(test.startsAt)}</p>
-                          <p className="muted-text">Duration: {test.durationMinutes} min</p>
-                          <p className="muted-text">Questions: {test.questionCount}</p>
-
-                          {isCompleted ? (
-                            historyEntry?.status === "missed" ? (
-                              <p className="muted-text">This test closed without a submission.</p>
-                            ) : historyEntry ? (
-                              <>
-                                <p className="muted-text">
-                                  Submitted as {historyEntry.participantName?.trim() || historyEntry.participantId}
-                                </p>
-                                <p className="muted-text">
-                                  Score {historyEntry.correctCount}/{historyEntry.totalCount}
-                                </p>
-                                <p className="muted-text">Time taken {formatElapsedTime(historyEntry.elapsedMs)}</p>
-                                {typeof historyEntry.rank === "number" ? (
-                                  <p className="muted-text">Rank {historyEntry.rank}</p>
-                                ) : null}
-                              </>
-                            ) : (
-                              <p className="muted-text">No participant submission was recorded for this test.</p>
-                            )
-                          ) : test.status === "live" ? (
-                            <p className="muted-text">This test is live now.</p>
-                          ) : (
-                            <p className="muted-text">This test has not started yet.</p>
-                          )}
-
-                          {test.topPerformer ? (
-                            <p className="muted-text">
-                              Topper {test.topPerformer.participantName}: {test.topPerformer.correctCount}/{test.questionCount} in {formatElapsedTime(test.topPerformer.elapsedMs)}
-                            </p>
-                          ) : null}
-
-                          {isCompleted ? (
-                            <div className="form-stack">
-                              <div className="inline-actions">
-                                <button
-                                  className="button-secondary small-button"
-                                  disabled={reviewLoadingByTestId[test.id]}
-                                  type="button"
-                                  onClick={() => void handleLoadReview(test.id)}
-                                >
-                                  {reviewLoadingByTestId[test.id]
-                                    ? "Loading..."
-                                    : visibleReviewTestIds.includes(test.id)
-                                      ? "Hide review"
-                                      : "Review questions"}
-                                </button>
-                              </div>
-
-                              {visibleReviewTestIds.includes(test.id) && reviewByTestId[test.id] ? (
-                                <div className="review-list">
-                                  {reviewByTestId[test.id].review.map((question, questionIndex) => (
-                                    <article className="question-card nested-card" key={`${test.id}-${question.questionId}`}>
-                                      <div className="question-head">
-                                        <strong>Question {questionIndex + 1}</strong>
-                                      </div>
-                                      <p>{question.prompt}</p>
-                                      <ol className="question-options compact-question-options">
-                                        {question.options.map((option, optionIndex) => (
-                                          <li key={`${question.questionId}-${optionIndex}`}>
-                                            {option}
-                                            <AnswerStatusIndicator
-                                              isCorrect={optionIndex === question.correctOptionIndex}
-                                              isSelected={optionIndex === question.selectedOptionIndex}
-                                            />
-                                          </li>
-                                        ))}
-                                      </ol>
-                                    </article>
-                                  ))}
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : null}
-                        </article>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="empty-state">
-                    <p className="muted-text">No tests match this view yet.</p>
-                  </div>
-                )
+                <AssessmentLogTable rows={assessmentLogRows} />
               ) : sortedAvailablePolls.length ? (
                 <div className="question-list">
                   {sortedAvailablePolls.map((poll) => (

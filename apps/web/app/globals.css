@@ -1531,6 +1531,92 @@ main {
   vertical-align: middle;
 }
 
+.assessment-log-table {
+  min-width: 1120px;
+}
+
+.assessment-log-table th:last-child,
+.assessment-log-table td:last-child {
+  min-width: 104px;
+  text-align: center;
+}
+
+.test-results-page-shell {
+  align-items: stretch;
+  max-width: 1440px;
+}
+
+.test-results-stack {
+  display: grid;
+  gap: 20px;
+  width: 100%;
+}
+
+.test-results-header {
+  border-bottom: 1px solid var(--border);
+  padding: 12px 0 18px;
+}
+
+.test-results-header h1 {
+  font-size: clamp(1.75rem, 3vw, 2.75rem);
+  margin: 4px 0 0;
+}
+
+.participant-results-table {
+  min-width: 760px;
+}
+
+.incorrect-count {
+  color: var(--danger);
+}
+
+.test-results-question-list,
+.test-results-options {
+  display: grid;
+  gap: 12px;
+}
+
+.test-results-question {
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+}
+
+.test-results-question:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.test-results-question h3 {
+  font-size: 1rem;
+  margin: 0 0 14px;
+}
+
+.test-results-option {
+  align-items: center;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 10px 12px;
+}
+
+.test-results-option.is-correct {
+  border-color: var(--success);
+}
+
+.test-results-option.is-incorrect {
+  border-color: var(--danger);
+}
+
+.test-results-option-meta {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10px;
+}
+
 .apportion-reschedule-row td {
   background: var(--surface-soft);
 }

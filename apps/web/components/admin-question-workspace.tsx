@@ -27,6 +27,7 @@ import {
   type QuestionPool,
   type ScheduledTest,
   type TestLeaderboard,
+  type TestLeaderboardEntry,
   type TestHistoryEntry,
   type TestResult,
   type WorkspaceBranding,
@@ -37,6 +38,7 @@ import QRCode from "qrcode";
 import { formatShortDate, formatShortDateTime, formatShortDateTimeIst } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { AnswerStatusIndicator } from "./answer-status-indicator";
+import { AssessmentLogTable, type AssessmentLogRow } from "./assessment-log-table";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 import { FloatingWindowCloseButton } from "./floating-window-close-button";
@@ -450,11 +452,15 @@ type UserDashboardResponse = {
   availableTests: Array<{
     branding?: WorkspaceBranding | null;
     durationMinutes: number;
+    groupNames: string[];
     hasAttempt: boolean;
     id: string;
     isSelfTest: boolean;
     participantGroupIds: string[];
+    participantResult?: TestLeaderboardEntry;
+    participantResultCount?: number;
     poolId: string;
+    poolName: string;
     questionCount: number;
     questions: ObjectiveQuestion[];
     startsAt: string;
@@ -480,6 +486,7 @@ type AvailableGameSummary = {
   creatorIdentifier: string;
   creatorRole: "participant" | "spectator" | null;
   displayStatus: "Completed" | "In Progress" | "Missed" | "Upcoming";
+  groupName: string;
   id: string;
   isAccepted: boolean;
   isCreator: boolean;
@@ -493,6 +500,7 @@ type AvailableGameSummary = {
     label: string;
   }>;
   poolId: string;
+  poolName: string;
   questionDurationMs: number;
   questionDeadline: string | null;
   startedAt: string | null;
@@ -4698,6 +4706,110 @@ export function AdminQuestionWorkspace({
   const completedMergedTests = filteredMergedTests.filter((test) => test.status === "completed");
   const upcomingGames = availableGames.filter((game) => game.status !== "completed");
   const completedGames = availableGames.filter((game) => game.status === "completed");
+  const visibleGames = availableGames.filter((game) => {
+    if (testListFilter === "admin") {
+      return game.isCreator;
+    }
+
+    if (testListFilter === "participant") {
+      return !game.isCreator || game.creatorRole === "participant";
+    }
+
+    return true;
+  });
+  const assessmentLogRows: AssessmentLogRow[] = [
+    ...filteredMergedTests.map((test) => {
+      const scheduledTest = test.scheduledTest;
+      const participantTest = test.participantTest;
+      const participantResult = participantTest?.participantResult;
+      const participantHistory = test.participantHistoryEntry;
+      const leaderboard = scheduledTest ? leaderboards.find((entry) => entry.testId === scheduledTest.id) : undefined;
+      const useParticipantScope = testListFilter === "participant"
+        || (testListFilter === "both" && test.hasParticipantScope);
+      const hasParticipantResult = useParticipantScope
+        && test.status === "completed"
+        && participantHistory?.status !== "missed"
+        && Boolean(participantResult);
+      const duration = `${test.durationMinutes} min`;
+      const groupIds = scheduledTest?.participantGroupIds ?? participantTest?.participantGroupIds ?? [];
+      const groups = participantTest?.groupNames?.length
+        ? participantTest.groupNames.join(", ")
+        : groupIds.length
+          ? groupIds.map((groupId) => participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group").join(", ")
+          : "None";
+
+      return {
+        groups,
+        id: `test-${test.id}`,
+        marksOrPoints: hasParticipantResult && participantResult
+          ? `${participantResult.correctCount} (${participantResult.incorrectCount}) / ${participantResult.totalCount}`
+          : "—",
+        participantName: useParticipantScope
+          ? participantHistory?.participantName?.trim() || currentAdminIdentifier || "—"
+          : "—",
+        questionPool: participantTest?.poolName ?? pools.find((pool) => pool.id === test.poolId)?.name ?? "Unknown pool",
+        rank: hasParticipantResult && participantResult
+          ? `${participantResult.rank} / ${participantTest?.participantResultCount ?? 1}`
+          : !useParticipantScope && test.status === "completed"
+            ? `${leaderboard?.submittedCount ?? 0} appeared`
+            : "—",
+        scheduled: formatShortDateTime(test.startsAt),
+        sortTime: new Date(test.startsAt).getTime(),
+        status: test.status === "scheduled"
+          ? useParticipantScope
+            ? <span className="status-chip warning">Upcoming</span>
+            : scheduledTest
+              ? <button className="button-secondary small-button" type="button" onClick={() => scheduledTest.participantIds.length ? handleStartEditingSelfTest(scheduledTest) : handleStartEditingScheduledTest(scheduledTest)}>Upcoming</button>
+              : <span className="status-chip warning">Upcoming</span>
+          : test.status === "live"
+            ? useParticipantScope
+              ? <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Live</a>
+              : <span className="status-chip success">Live</span>
+            : <a className="button-secondary small-button" href={`/test-results/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Results</a>,
+        test: test.title,
+        time: hasParticipantResult && participantResult
+          ? `${formatElapsedTime(participantResult.elapsedMs)} / ${duration}`
+          : duration,
+      };
+    }),
+    ...visibleGames.map((game) => {
+      const participant = currentAdminIdentifier
+        ? game.participants.find((entry) => participantIdentifiersMatch(entry.identifier, currentAdminIdentifier))
+        : undefined;
+      const ownResult = currentAdminIdentifier
+        ? game.leaderboard.find((entry) => participantIdentifiersMatch(entry.participantIdentifier, currentAdminIdentifier))
+        : undefined;
+      const useParticipantScope = testListFilter === "participant"
+        || (testListFilter === "both" && (!game.isCreator || game.creatorRole === "participant"));
+      const duration = formatElapsedTime(20 * game.questionDurationMs);
+
+      return {
+        groups: game.groupName,
+        id: `game-${game.id}`,
+        marksOrPoints: useParticipantScope && game.status === "completed" && ownResult ? `${ownResult.points}` : "—",
+        participantName: useParticipantScope ? participant?.label?.trim() || currentAdminIdentifier || "—" : "—",
+        questionPool: game.poolName,
+        rank: useParticipantScope && game.status === "completed" && ownResult
+          ? `${ownResult.rank} / ${game.leaderboard.length}`
+          : !useParticipantScope && game.status === "completed"
+            ? `${game.leaderboard.length} appeared`
+            : "—",
+        scheduled: formatShortDateTime(game.startedAt ?? game.createdAt),
+        sortTime: new Date(game.startedAt ?? game.createdAt).getTime(),
+        status: game.status === "upcoming"
+          ? useParticipantScope
+            ? participant?.accepted
+              ? <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Accept</a>
+              : <button className="button-secondary small-button" type="button" onClick={() => handleAcceptGame(game.id)}>Accept</button>
+            : <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Open</a>
+          : game.status === "completed"
+            ? <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Results</a>
+            : <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Watch</a>,
+        test: "Game",
+        time: duration,
+      };
+    }),
+  ];
   const upcomingMergedPolls = filteredMergedPolls.filter((poll) => poll.status !== "completed");
   const completedMergedPolls = filteredMergedPolls.filter((poll) => poll.status === "completed");
   const apportionNavigationCount = Array.from(
@@ -7915,7 +8027,7 @@ export function AdminQuestionWorkspace({
                   <span className="status-chip success">{pollQuestions.length}</span>
                 </div>
               </div>
-              <div className="question-list">
+              <div className="question-list" hidden>
                 {pollQuestions.map((question, index) => (
                   <article className="question-card nested-card compact-question-card" key={question.id}>
                     <div className="question-head compact-question-head">
@@ -8815,6 +8927,8 @@ export function AdminQuestionWorkspace({
           {!activeParticipantTest && resultsMode === "tests" ? (
             filteredMergedTests.length || availableGames.length ? (
               <div className="form-stack">
+                <AssessmentLogTable rows={assessmentLogRows} />
+                <div hidden>
                 <div className="workspace-result-table-group">
                   <h3>Upcoming</h3>
                   {upcomingMergedTests.length || upcomingGames.length ? (
@@ -9013,6 +9127,7 @@ export function AdminQuestionWorkspace({
                       </table>
                     </div>
                   ) : <p className="muted-text">No completed tests.</p>}
+                </div>
                 </div>
 
               <div className="question-list">

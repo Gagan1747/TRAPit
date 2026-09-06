@@ -54,6 +54,7 @@ import {
   type ScheduledGame,
   type ScheduledTest,
   type TestAttempt,
+  type TestLeaderboardEntry,
   type TestQuestionReport,
   type TestingWorkspaceState,
   type WorkspaceBranding,
@@ -194,11 +195,15 @@ export type AvailableUserTest = {
   branding?: WorkspaceBranding | null;
   createdAt: string;
   durationMinutes: number;
+  groupNames: string[];
   hasAttempt: boolean;
   id: string;
   isSelfTest: boolean;
   participantGroupIds: string[];
+  participantResult?: TestLeaderboardEntry;
+  participantResultCount?: number;
   poolId: string;
+  poolName: string;
   topPerformer?: {
     correctCount: number;
     elapsedMs: number;
@@ -2820,10 +2825,19 @@ export async function listAvailableTestsForParticipant(
   const questionMap = getQuestionMap(state);
 
   return scheduledTests
-    .map((scheduledTest) => ({
+    .map((scheduledTest) => {
+      const leaderboard = leaderboardByTestId.get(scheduledTest.id);
+      const participantResult = leaderboard?.entries.find((entry) =>
+        identifiersMatch(entry.participantId, normalizedIdentifier),
+      );
+
+      return {
     branding: scheduledTest.branding ?? null,
     createdAt: scheduledTest.createdAt,
     durationMinutes: scheduledTest.durationMinutes,
+    groupNames: scheduledTest.participantGroupIds.map(
+      (groupId) => state.participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group",
+    ),
     hasAttempt: state.attempts.some(
       (attempt) =>
         attempt.testId === scheduledTest.id && identifiersMatch(attempt.userId, normalizedIdentifier),
@@ -2833,9 +2847,12 @@ export async function listAvailableTestsForParticipant(
       && scheduledTest.resolvedParticipantIdentifiers.length === 1
       && identifiersMatch(scheduledTest.resolvedParticipantIdentifiers[0], normalizedIdentifier),
     participantGroupIds: [...scheduledTest.participantGroupIds],
+    participantResult,
+    participantResultCount: participantResult ? leaderboard?.submittedCount : undefined,
     poolId: scheduledTest.poolId,
+    poolName: state.pools.find((pool) => pool.id === scheduledTest.poolId)?.name ?? "Unknown pool",
     topPerformer: (() => {
-      const topEntry = leaderboardByTestId.get(scheduledTest.id)?.entries[0];
+      const topEntry = leaderboard?.entries[0];
 
       if (!topEntry) {
         return undefined;
@@ -2855,7 +2872,8 @@ export async function listAvailableTestsForParticipant(
     status: scheduledTest.status,
     title: scheduledTest.title,
     updatedAt: scheduledTest.updatedAt,
-  }))
+      };
+    })
     .sort((left, right) => {
       if (left.status === "completed" && right.status !== "completed") {
         return 1;
@@ -4054,6 +4072,112 @@ export async function getAdminTestReview(testId: string, actorId: string | null 
   };
 }
 
+export async function getTestResults(input: {
+  actorId: string | null;
+  participantIdentifier: string;
+  testId: string;
+}) {
+  const state = await readStore();
+  const scheduledTest = getCompletedScheduledTest(state, input.testId);
+  const normalizedParticipantIdentifier = normalizeParticipantIdentifier(input.participantIdentifier);
+  const participantAttempt = state.attempts.find(
+    (attempt) => attempt.testId === input.testId
+      && identifiersMatch(attempt.userId, normalizedParticipantIdentifier),
+  );
+  const hasParticipantScope = Boolean(participantAttempt)
+    || scheduledTest.resolvedParticipantIdentifiers.some((identifier) =>
+      identifiersMatch(identifier, normalizedParticipantIdentifier),
+    );
+  const hasCreatorScope = input.actorId === null || scheduledTest.createdBy === input.actorId;
+
+  if (!hasCreatorScope && !hasParticipantScope) {
+    throw new Error("You do not have access to these test results.");
+  }
+
+  const attempts = state.attempts.filter((attempt) => attempt.testId === input.testId);
+  const leaderboard = buildTestLeaderboards(attempts, [scheduledTest])[0];
+  const participantEntry = leaderboard.entries.find((entry) =>
+    identifiersMatch(entry.participantId, normalizedParticipantIdentifier),
+  );
+  const questionMap = getQuestionMap(state);
+  const pool = state.pools.find((entry) => entry.id === scheduledTest.poolId);
+  const groupNames = scheduledTest.participantGroupIds.map(
+    (groupId) => state.participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group",
+  );
+
+  return {
+    branding: scheduledTest.branding ?? null,
+    groupNames,
+    hasCreatorScope,
+    hasParticipantScope,
+    participantResult: participantEntry
+      ? {
+          completedAt: participantEntry.completedAt,
+          correctCount: participantEntry.correctCount,
+          elapsedMs: participantEntry.elapsedMs,
+          incorrectCount: participantEntry.incorrectCount,
+          participantName: participantEntry.participantName?.trim() || normalizedParticipantIdentifier,
+          rank: participantEntry.rank,
+          rankedParticipantCount: leaderboard.submittedCount,
+          totalCount: participantEntry.totalCount,
+        }
+      : null,
+    participants: hasCreatorScope
+      ? leaderboard.entries.map((entry) => {
+          const profile = state.participants.find((participant) =>
+            identifiersMatch(participant.identifier, entry.participantId),
+          );
+
+          return {
+            correctCount: entry.correctCount,
+            elapsedMs: entry.elapsedMs,
+            identifier: profile?.identifier ?? entry.participantId,
+            incorrectCount: entry.incorrectCount,
+            manualName: entry.participantName?.trim() || "—",
+            profileLabel: profile?.label?.trim() || "—",
+            rank: entry.rank,
+            totalCount: entry.totalCount,
+          };
+        })
+      : [],
+    poolName: pool?.name ?? "Unknown pool",
+    questions: scheduledTest.questionIds
+      .map((questionId) => questionMap.get(questionId))
+      .filter((question): question is PersistentQuestion => Boolean(question))
+      .map((question) => {
+        const optionSelectionCounts = question.options.map(() => 0);
+
+        if (hasCreatorScope) {
+          for (const attempt of attempts) {
+            const selectedOptionIndex = attempt.answers[question.id];
+
+            if (typeof selectedOptionIndex === "number" && optionSelectionCounts[selectedOptionIndex] !== undefined) {
+              optionSelectionCounts[selectedOptionIndex] += 1;
+            }
+          }
+        }
+
+        return {
+          correctOptionIndex: question.correctOptionIndex,
+          optionSelectionCounts: hasCreatorScope ? optionSelectionCounts : null,
+          options: question.options,
+          prompt: question.prompt,
+          questionId: question.id,
+          selectedOptionIndex: hasParticipantScope ? participantAttempt?.answers[question.id] ?? null : null,
+        };
+      }),
+    summary: {
+      durationMinutes: scheduledTest.durationMinutes,
+      participantName: participantEntry?.participantName?.trim() || normalizedParticipantIdentifier || "—",
+      poolName: pool?.name ?? "Unknown pool",
+      startsAt: scheduledTest.startsAt,
+      submittedCount: leaderboard.submittedCount,
+      testId: scheduledTest.id,
+      title: scheduledTest.title,
+    },
+  };
+}
+
 export async function updateCompletedTestQuestion(input: {
   actorId: string | null;
   correctOptionIndex: number;
@@ -4405,7 +4529,7 @@ export async function getGameForParticipant(gameId: string, participantIdentifie
   return games.find((game) => game.id === gameId) ?? null;
 }
 
-export async function acceptGame(gameId: string, participantIdentifier: string) {
+export async function acceptGame(gameId: string, participantIdentifier: string, participantName: string) {
   return withSerializedGameMutation((state) => {
     const game = state.games.find((entry) => entry.id === gameId);
 
@@ -4428,6 +4552,13 @@ export async function acceptGame(gameId: string, participantIdentifier: string) 
     }
 
     if (!participant.acceptedAt) {
+      const normalizedParticipantName = participantName.trim();
+
+      if (!normalizedParticipantName) {
+        throw new Error("Enter your name before accepting the game.");
+      }
+
+      participant.label = normalizedParticipantName;
       participant.acceptedAt = new Date().toISOString();
       game.updatedAt = participant.acceptedAt;
     }
@@ -4440,6 +4571,7 @@ export async function setGameCreatorRole(
   gameId: string,
   creatorIdentifier: string,
   role: GameCreatorRole,
+  participantName?: string,
 ) {
   return withSerializedGameMutation((state) => {
     const game = state.games.find((entry) => entry.id === gameId);
@@ -4463,6 +4595,16 @@ export async function setGameCreatorRole(
     }
 
     const timestamp = new Date().toISOString();
+    if (role === "participant" && !participant.acceptedAt) {
+      const normalizedParticipantName = participantName?.trim() ?? "";
+
+      if (!normalizedParticipantName) {
+        throw new Error("Enter your name before joining the game.");
+      }
+
+      participant.label = normalizedParticipantName;
+    }
+
     game.creatorRole = role;
     participant.acceptedAt = role === "participant" ? (participant.acceptedAt ?? timestamp) : null;
     game.updatedAt = timestamp;
