@@ -1566,6 +1566,52 @@ main {
   min-width: 760px;
 }
 
+.test-results-summary-table {
+  min-width: 720px;
+}
+
+.test-results-personal-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 22px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--success);
+  background: var(--surface-soft);
+}
+
+.test-results-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 20px;
+  align-items: start;
+}
+
+.test-results-question-panel,
+.test-results-leaderboard {
+  min-width: 0;
+}
+
+.test-results-leaderboard {
+  position: sticky;
+  top: 18px;
+}
+
+.test-results-leaderboard h2 {
+  margin-top: 4px;
+}
+
+.test-results-leaderboard-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.test-results-leaderboard-time {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
 .incorrect-count {
   color: var(--danger);
 }
@@ -1615,6 +1661,32 @@ main {
   display: flex;
   flex: 0 0 auto;
   gap: 10px;
+}
+
+.answer-status-icon.is-answer {
+  color: var(--success);
+  outline: 1px solid currentColor;
+  outline-offset: 2px;
+}
+
+@media (max-width: 820px) {
+  .test-results-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .test-results-leaderboard {
+    position: static;
+  }
+
+  .test-results-option {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .test-results-option-meta {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }
 
 .apportion-reschedule-row td {
@@ -3397,4 +3469,161 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.business-time-selector {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.business-time-selector-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.business-time-trigger {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.business-time-trigger span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.business-time-bar-shell {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+.business-time-bar-shell p {
+  margin: 0;
+}
+
+.business-time-bar {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  min-height: 62px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+}
+
+.business-time-point {
+  display: grid;
+  flex: 0 0 42px;
+  grid-template-rows: 24px 24px;
+  width: 42px;
+  height: 52px;
+  padding: 0;
+  place-items: start center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+.business-time-tick {
+  display: block;
+  width: 2px;
+  height: 13px;
+  margin-top: 3px;
+  background: currentColor;
+}
+
+.business-time-point.is-half-hour .business-time-tick {
+  height: 7px;
+  margin-top: 9px;
+  opacity: 0.6;
+}
+
+.business-time-label {
+  font-size: 0.72rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.business-time-point:hover:not(:disabled),
+.business-time-point:focus-visible,
+.business-time-point.is-selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-deep);
+}
+
+.business-time-point.is-blocked {
+  cursor: not-allowed;
+  background: repeating-linear-gradient(135deg, transparent 0 5px, rgba(80, 80, 80, 0.16) 5px 10px);
+  color: var(--muted);
+  opacity: 0.55;
+}
+
+.business-exception-calendar {
+  display: grid;
+  gap: 10px;
+  max-width: 520px;
+}
+
+.business-exception-calendar-head {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
+.business-exception-weekdays,
+.business-exception-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(34px, 1fr));
+  gap: 6px;
+}
+
+.business-exception-weekdays span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.business-exception-date {
+  aspect-ratio: 1;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-soft);
+  color: var(--muted);
+}
+
+.business-exception-date.is-active {
+  border-color: var(--success);
+  background: color-mix(in srgb, var(--success) 14%, white);
+  color: var(--text);
+  font-weight: 800;
+}
+
+.business-exception-date.is-opened {
+  outline: 2px solid var(--success);
+  outline-offset: 1px;
+}
+
+.business-exception-date.is-closed {
+  background: repeating-linear-gradient(135deg, var(--surface-soft) 0 5px, rgba(80, 80, 80, 0.13) 5px 10px);
+}
+
+.business-exception-date:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
 }

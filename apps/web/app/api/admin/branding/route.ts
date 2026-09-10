@@ -20,6 +20,30 @@ function validatePromotionalImages(values: string[] | undefined) {
   }
 }
 
+function validateAppointmentDateOverrides(branding: WorkspaceBranding) {
+  const values = [
+    ...(branding.appointmentDateOverrides?.closedDateKeys ?? []),
+    ...(branding.appointmentDateOverrides?.openedDateKeys ?? []),
+  ];
+  const today = new Date();
+  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const maxDate = new Date(today.getFullYear(), today.getMonth() + 6, today.getDate());
+  const maxDateKey = `${maxDate.getFullYear()}-${String(maxDate.getMonth() + 1).padStart(2, "0")}-${String(maxDate.getDate()).padStart(2, "0")}`;
+
+  for (const value of values) {
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const date = match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null;
+    const isValid = Boolean(match && date
+      && date.getFullYear() === Number(match[1])
+      && date.getMonth() === Number(match[2]) - 1
+      && date.getDate() === Number(match[3]));
+
+    if (!isValid || value < todayKey || value > maxDateKey) {
+      throw new Error("Appointment calendar dates must be valid dates within the next 6 months.");
+    }
+  }
+}
+
 export async function GET() {
   const actor = await getWorkspaceActor();
 
@@ -43,6 +67,7 @@ export async function POST(request: Request) {
   try {
     if (body.branding) {
       validateAppointmentLocations(body.branding.appointmentLocations);
+      validateAppointmentDateOverrides(body.branding);
       validatePromotionalImages(body.branding.promotionalImageDataUrls);
     }
 

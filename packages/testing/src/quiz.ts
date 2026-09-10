@@ -121,6 +121,10 @@ export type AppointmentLocation = {
 export type WorkspaceBranding = {
   address: string;
   advanceBookingWeeks: number | null;
+  appointmentDateOverrides?: {
+    closedDateKeys: string[];
+    openedDateKeys: string[];
+  };
   appointmentShareCode: string | null;
   appointmentLocations?: AppointmentLocation[];
   appointmentNotesPrompt: string;
@@ -219,6 +223,8 @@ export type ScheduledTest = {
   branding?: WorkspaceBranding | null;
   createdAt: string;
   createdBy: string | null;
+  creatorDisplayName?: string | null;
+  creatorIdentifier?: string | null;
   durationMinutes: number;
   id: string;
   inviteJoinMode: ScheduledTestInviteJoinMode;
@@ -338,10 +344,12 @@ export type TestLeaderboardEntry = {
   correctCount: number;
   elapsedMs: number;
   incorrectCount: number;
+  marks: number;
   participantId: string;
   participantName?: string;
   rank: number;
   totalCount: number;
+  unansweredCount: number;
 };
 
 export type TestLeaderboard = {
@@ -812,6 +820,15 @@ export function normalizeWorkspaceBranding(
     ? branding.advanceBookingWeeks
     : null;
   const appointmentShareCode = branding.appointmentShareCode?.trim() || null;
+  const validDateKey = /^\d{4}-\d{2}-\d{2}$/;
+  const closedDateKeys = Array.from(new Set(
+    (branding.appointmentDateOverrides?.closedDateKeys ?? []).map((value) => value.trim()).filter((value) => validDateKey.test(value)),
+  ));
+  const openedDateKeys = Array.from(new Set(
+    (branding.appointmentDateOverrides?.openedDateKeys ?? [])
+      .map((value) => value.trim())
+      .filter((value) => validDateKey.test(value) && !closedDateKeys.includes(value)),
+  ));
   const appointmentNotesPrompt = branding.appointmentNotesPrompt?.trim() || "Share a brief about appointment purpose";
   const breakHours = branding.breakHours?.trim() ?? "";
   const justAddToList = branding.justAddToList === true;
@@ -864,6 +881,7 @@ export function normalizeWorkspaceBranding(
   return {
     address: primaryLocation?.address ?? address,
     advanceBookingWeeks,
+		appointmentDateOverrides: { closedDateKeys, openedDateKeys },
 		appointmentLocations,
     appointmentShareCode,
     appointmentNotesPrompt,
@@ -1057,19 +1075,34 @@ export function getIncorrectCount(
     : Math.max(0, result.attemptedCount - result.correctCount);
 }
 
-export function compareTestResults(
-  left: Pick<TestResult, "attemptedCount" | "correctCount" | "elapsedMs" | "incorrectCount">,
-  right: Pick<TestResult, "attemptedCount" | "correctCount" | "elapsedMs" | "incorrectCount">,
+export function getUnansweredCount(
+  result: Pick<TestResult, "attemptedCount" | "totalCount">,
 ) {
-  if (left.correctCount !== right.correctCount) {
-    return right.correctCount - left.correctCount;
+  return Math.max(0, result.totalCount - result.attemptedCount);
+}
+
+export function getTestMarks(
+  result: Pick<TestResult, "attemptedCount" | "correctCount" | "incorrectCount" | "totalCount">,
+) {
+  return (result.correctCount * 4) - getIncorrectCount(result) - getUnansweredCount(result);
+}
+
+export function compareTestResults(
+  left: Pick<TestResult, "attemptedCount" | "correctCount" | "elapsedMs" | "incorrectCount" | "totalCount">,
+  right: Pick<TestResult, "attemptedCount" | "correctCount" | "elapsedMs" | "incorrectCount" | "totalCount">,
+) {
+  const leftMarks = getTestMarks(left);
+  const rightMarks = getTestMarks(right);
+
+  if (leftMarks !== rightMarks) {
+    return rightMarks - leftMarks;
   }
 
-  const leftIncorrectCount = getIncorrectCount(left);
-  const rightIncorrectCount = getIncorrectCount(right);
+  const leftPenaltyCount = getIncorrectCount(left) + getUnansweredCount(left);
+  const rightPenaltyCount = getIncorrectCount(right) + getUnansweredCount(right);
 
-  if (leftIncorrectCount !== rightIncorrectCount) {
-    return leftIncorrectCount - rightIncorrectCount;
+  if (leftPenaltyCount !== rightPenaltyCount) {
+    return leftPenaltyCount - rightPenaltyCount;
   }
 
   if (left.elapsedMs !== right.elapsedMs) {
@@ -1114,10 +1147,12 @@ export function buildTestLeaderboards(
         correctCount: attempt.result.correctCount,
         elapsedMs: attempt.result.elapsedMs,
         incorrectCount: getIncorrectCount(attempt.result),
+        marks: getTestMarks(attempt.result),
         participantId: attempt.userId,
         participantName: attempt.participantName,
         rank,
         totalCount: attempt.result.totalCount,
+        unansweredCount: getUnansweredCount(attempt.result),
       });
     }
 

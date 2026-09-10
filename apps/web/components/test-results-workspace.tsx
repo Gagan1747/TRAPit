@@ -5,7 +5,6 @@ import { Check, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { formatShortDateTime } from "../lib/date-format";
-import { AssessmentLogTable, type AssessmentLogRow } from "./assessment-log-table";
 
 type TestResultsPayload = {
   branding: WorkspaceBranding | null;
@@ -16,6 +15,7 @@ type TestResultsPayload = {
     correctCount: number;
     elapsedMs: number;
     incorrectCount: number;
+    marks: number;
     participantName: string;
     rank: number;
     rankedParticipantCount: number;
@@ -24,23 +24,24 @@ type TestResultsPayload = {
   participants: Array<{
     correctCount: number;
     elapsedMs: number;
-    identifier: string;
     incorrectCount: number;
+    marks: number;
     manualName: string;
-    profileLabel: string;
     rank: number;
     totalCount: number;
+    unansweredCount: number;
   }>;
   poolName: string;
   questions: Array<{
     correctOptionIndex: number;
-    optionSelectionCounts: number[] | null;
+    optionSelectionCounts: number[];
     options: string[];
     prompt: string;
     questionId: string;
     selectedOptionIndex: number | null;
   }>;
   summary: {
+    creatorName: string;
     durationMinutes: number;
     participantName: string;
     poolName: string;
@@ -106,26 +107,6 @@ export function TestResultsWorkspace({ testId }: TestResultsWorkspaceProps) {
 
   const duration = `${payload.summary.durationMinutes} min`;
   const participantResult = payload.participantResult;
-  const useParticipantSummary = payload.hasParticipantScope;
-  const summaryRows: AssessmentLogRow[] = [{
-    groups: payload.groupNames.length ? payload.groupNames.join(", ") : "None",
-    id: payload.summary.testId,
-    marksOrPoints: participantResult
-      ? `${participantResult.correctCount} (${participantResult.incorrectCount}) / ${participantResult.totalCount}`
-      : "—",
-    participantName: useParticipantSummary ? payload.summary.participantName : "—",
-    questionPool: payload.summary.poolName,
-    rank: participantResult
-      ? `${participantResult.rank} / ${participantResult.rankedParticipantCount}`
-      : payload.hasCreatorScope
-        ? `${payload.summary.submittedCount} appeared`
-        : "—",
-    scheduled: formatShortDateTime(payload.summary.startsAt),
-    sortTime: new Date(payload.summary.startsAt).getTime(),
-    status: <span className="status-chip success">Results</span>,
-    test: payload.summary.title,
-    time: participantResult ? `${formatElapsedTime(participantResult.elapsedMs)} / ${duration}` : duration,
-  }];
 
   return (
     <div className="test-results-stack">
@@ -134,34 +115,30 @@ export function TestResultsWorkspace({ testId }: TestResultsWorkspaceProps) {
         <h1>{payload.summary.title}</h1>
       </header>
 
-      <AssessmentLogTable rows={summaryRows} />
+      <div className="leaderboard-table-wrap test-results-summary-wrap">
+        <table className="leaderboard-table test-results-summary-table">
+          <thead><tr><th>Scheduled date</th><th>Question Pool</th><th>Groups</th><th>Test creator name</th></tr></thead>
+          <tbody><tr>
+            <td>{formatShortDateTime(payload.summary.startsAt)}</td>
+            <td>{payload.summary.poolName}</td>
+            <td>{payload.groupNames.length ? payload.groupNames.join(", ") : "None"}</td>
+            <td>{payload.summary.creatorName}</td>
+          </tr></tbody>
+        </table>
+      </div>
 
-      {payload.hasCreatorScope ? (
-        <section className="workspace-card">
-          <h2>Participant Results</h2>
-          {payload.participants.length ? (
-            <div className="leaderboard-table-wrap">
-              <table className="leaderboard-table participant-results-table">
-                <thead><tr><th>Rank</th><th>Participant Name</th><th>Marks</th><th>Time Taken</th></tr></thead>
-                <tbody>
-                  {payload.participants.map((participant) => (
-                    <tr key={participant.identifier}>
-                      <td>{participant.rank}</td>
-                      <td>{participant.manualName} ({participant.profileLabel} / {participant.identifier})</td>
-                      <td>{participant.correctCount} <span className="incorrect-count">({participant.incorrectCount})</span> / {participant.totalCount}</td>
-                      <td>{formatElapsedTime(participant.elapsedMs)} / {duration}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : <p className="muted-text">No participants appeared.</p>}
+      {participantResult ? (
+        <section className="test-results-personal-summary" aria-label="Your result">
+          <strong>Your result: {participantResult.marks} marks</strong>
+          <span>Rank {participantResult.rank} of {participantResult.rankedParticipantCount}</span>
+          <span>{formatElapsedTime(participantResult.elapsedMs)} / {duration}</span>
         </section>
       ) : null}
 
-      <section className="workspace-card">
-        <h2>Questions &amp; Options</h2>
-        <div className="test-results-question-list">
+      <div className="test-results-layout">
+        <section className="workspace-card test-results-question-panel">
+          <h2>Questions &amp; Options</h2>
+          <div className="test-results-question-list">
           {payload.questions.map((question, questionIndex) => (
             <article className="test-results-question" key={question.questionId}>
               <h3>{questionIndex + 1}. {question.prompt}</h3>
@@ -174,9 +151,10 @@ export function TestResultsWorkspace({ testId }: TestResultsWorkspaceProps) {
                     <div className={`test-results-option${isCorrect ? " is-correct" : ""}${isSelected && !isCorrect ? " is-incorrect" : ""}`} key={`${question.questionId}-${optionIndex}`}>
                       <span>{option}</span>
                       <span className="test-results-option-meta">
-                        {payload.hasCreatorScope && question.optionSelectionCounts ? <span>{question.optionSelectionCounts[optionIndex]}</span> : null}
+                        <span>{question.optionSelectionCounts[optionIndex] ?? 0} participant{question.optionSelectionCounts[optionIndex] === 1 ? "" : "s"}</span>
                         {isSelected && !isCorrect ? <X aria-label="Selected incorrect option" className="answer-status-icon is-incorrect" /> : null}
-                        {isCorrect ? <Check aria-label="Correct option" className="answer-status-icon is-correct" /> : null}
+                        {isSelected && isCorrect ? <Check aria-label="Selected correct option" className="answer-status-icon is-correct" /> : null}
+                        {isCorrect ? <Check aria-label="Actual correct answer" className="answer-status-icon is-answer" /> : null}
                       </span>
                     </div>
                   );
@@ -184,8 +162,27 @@ export function TestResultsWorkspace({ testId }: TestResultsWorkspaceProps) {
               </div>
             </article>
           ))}
-        </div>
-      </section>
+          </div>
+        </section>
+
+        <aside className="workspace-card game-leaderboard-panel test-results-leaderboard">
+          <p className="eyebrow">Leaderboard</p>
+          <h2>Final standings</h2>
+          {payload.participants.length ? (
+            <div className="game-leaderboard-list">
+              {payload.participants.map((participant, index) => (
+                <div className="game-leaderboard-row test-results-leaderboard-row" key={`${participant.rank}-${participant.manualName}-${index}`}>
+                  <strong>#{participant.rank} {participant.manualName}</strong>
+                  <span>{participant.marks} marks</span>
+                  <span className="test-results-leaderboard-time">{formatElapsedTime(participant.elapsedMs)}</span>
+                </div>
+              ))}
+            </div>
+          ) : <p className="muted-text">No participants appeared.</p>}
+        </aside>
+      </div>
+
+      <p className="apportion-identity-mark">www.TRAPit.in</p>
     </div>
   );
 }

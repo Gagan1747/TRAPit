@@ -3,8 +3,7 @@ import { participantIdentifiersMatch } from "@trapit/testing";
 import { NextResponse } from "next/server";
 
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
-import { assertCanCreateQuestionPool } from "../../../../lib/user-category-limits";
-import { createPool, listPoolsForActor, updatePoolSharing } from "../../../../lib/testing-store";
+import { deletePool, listPoolsForActor, renamePool, updatePoolSharing } from "../../../../lib/testing-store";
 
 function decoratePool<T extends { createdBy: string | null; sharedWithIdentifiers: string[] }>(
   pool: T,
@@ -69,43 +68,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
-  try {
-    const body = (await request.json()) as { description?: string; name?: string };
-
-    if (!body.name?.trim()) {
-      return NextResponse.json({ error: "Pool name is required." }, { status: 400 });
-    }
-
-    if (actor.role === "user") {
-      const existingPools = await listPoolsForActor(actor.sub, actor.identifier);
-      assertCanCreateQuestionPool(
-        actor.userCategory,
-        existingPools.filter((pool) => pool.createdBy === actor.sub).length,
-      );
-    }
-
-    const pools = await createPool({
-      createdBy: actor.sub,
-      description: body.description,
-      name: body.name,
-    });
-
-    console.info("trapit.audit", {
-      action: "question-pool.created",
-      actorSub: actor.sub,
-      poolId: pools[0]?.id ?? null,
-    });
-
-    return NextResponse.json({
-      creationCapability: getPoolCreationCapability(pools, actor),
-      pools: pools.map((pool) => decoratePool(pool, actor)),
-    });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unable to create the pool." },
-      { status: 400 },
-    );
-  }
+  void request;
+  return NextResponse.json(
+    { error: "Create a question pool while saving or importing at least one question." },
+    { status: 400 },
+  );
 }
 
 export async function PATCH(request: Request) {
@@ -116,6 +83,7 @@ export async function PATCH(request: Request) {
   }
 
   const body = (await request.json()) as {
+    name?: string;
     poolId?: string;
     sharedWithIdentifiers?: string[];
   };
@@ -125,15 +93,22 @@ export async function PATCH(request: Request) {
   }
 
   try {
-    const pools = await updatePoolSharing({
-      actorId: actor.sub,
-      actorIdentifier: actor.identifier,
-      poolId: body.poolId,
-      sharedWithIdentifiers: body.sharedWithIdentifiers ?? [],
-    });
+    const pools = body.name !== undefined
+      ? await renamePool({
+          actorId: actor.sub,
+          actorIdentifier: actor.identifier,
+          name: body.name,
+          poolId: body.poolId,
+        })
+      : await updatePoolSharing({
+          actorId: actor.sub,
+          actorIdentifier: actor.identifier,
+          poolId: body.poolId,
+          sharedWithIdentifiers: body.sharedWithIdentifiers ?? [],
+        });
 
     console.info("trapit.audit", {
-      action: "question-pool.sharing-updated",
+      action: body.name !== undefined ? "question-pool.renamed" : "question-pool.sharing-updated",
       actorSub: actor.sub,
       poolId: body.poolId,
       sharedIdentifierCount: body.sharedWithIdentifiers?.length ?? 0,
@@ -146,6 +121,38 @@ export async function PATCH(request: Request) {
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to update pool sharing." },
+      { status: 400 },
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  const actor = await getWorkspaceActor();
+
+  if (!actor) {
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
+  }
+
+  const body = (await request.json()) as { poolId?: string };
+
+  if (!body.poolId?.trim()) {
+    return NextResponse.json({ error: "Pool id is required." }, { status: 400 });
+  }
+
+  try {
+    const pools = await deletePool({
+      actorId: actor.sub,
+      actorIdentifier: actor.identifier,
+      poolId: body.poolId,
+    });
+
+    return NextResponse.json({
+      creationCapability: getPoolCreationCapability(pools, actor),
+      pools: pools.map((pool) => decoratePool(pool, actor)),
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to delete the pool." },
       { status: 400 },
     );
   }

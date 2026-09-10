@@ -1130,9 +1130,31 @@ export async function createQuestion(
   source: QuestionImportSource = "manual",
   poolIds: string[] = [],
   actorIdentifier: string | null = null,
+  newPoolName: string | null = null,
 ) {
   const state = await readStore();
-  const normalizedPoolIds = dedupe(poolIds);
+  const trimmedPoolName = newPoolName?.trim() ?? "";
+
+  if (trimmedPoolName && state.pools.some((pool) =>
+    pool.createdBy === actorId && pool.name.trim().toLowerCase() === trimmedPoolName.toLowerCase(),
+  )) {
+    throw new Error("You already have a question pool with this name.");
+  }
+
+  const timestamp = new Date().toISOString();
+  const newPool: QuestionPool | null = trimmedPoolName ? {
+    createdAt: timestamp,
+    createdBy: actorId,
+    description: "",
+    id: createEntityId("pool"),
+    name: trimmedPoolName,
+    questionIds: [],
+    sharedWithIdentifiers: [],
+    updatedAt: timestamp,
+  } : null;
+
+  if (newPool) state.pools = [newPool, ...state.pools];
+  const normalizedPoolIds = dedupe([...poolIds, ...(newPool ? [newPool.id] : [])]);
 
   for (const poolId of normalizedPoolIds) {
     ensureActorOwnsPool(state, poolId, actorId, actorIdentifier);
@@ -1148,7 +1170,10 @@ export async function createQuestion(
   syncQuestionPoolMemberships(state, question.id, question.poolIds);
   await writeStore(state);
 
-  return filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier);
+  return {
+    newPoolId: newPool?.id ?? null,
+    questions: filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier),
+  };
 }
 
 export async function importQuestions(
@@ -1156,9 +1181,31 @@ export async function importQuestions(
   actorId: string | null,
   poolIds: string[] = [],
   actorIdentifier: string | null = null,
+  newPoolName: string | null = null,
 ) {
   const state = await readStore();
-  const normalizedPoolIds = dedupe(poolIds);
+  const trimmedPoolName = newPoolName?.trim() ?? "";
+
+  if (trimmedPoolName && state.pools.some((pool) =>
+    pool.createdBy === actorId && pool.name.trim().toLowerCase() === trimmedPoolName.toLowerCase(),
+  )) {
+    throw new Error("You already have a question pool with this name.");
+  }
+
+  const timestamp = new Date().toISOString();
+  const newPool: QuestionPool | null = trimmedPoolName ? {
+    createdAt: timestamp,
+    createdBy: actorId,
+    description: "",
+    id: createEntityId("pool"),
+    name: trimmedPoolName,
+    questionIds: [],
+    sharedWithIdentifiers: [],
+    updatedAt: timestamp,
+  } : null;
+
+  if (newPool) state.pools = [newPool, ...state.pools];
+  const normalizedPoolIds = dedupe([...poolIds, ...(newPool ? [newPool.id] : [])]);
 
   for (const poolId of normalizedPoolIds) {
     ensureActorOwnsPool(state, poolId, actorId, actorIdentifier);
@@ -1180,7 +1227,10 @@ export async function importQuestions(
 
   await writeStore(state);
 
-  return filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier);
+  return {
+    newPoolId: newPool?.id ?? null,
+    questions: filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier),
+  };
 }
 
 export async function updateQuestionPools(questionId: string, poolIds: string[]) {
@@ -1868,6 +1918,60 @@ export async function updatePoolSharing(input: {
   );
   await writeStore(state);
 
+  return filterPoolsForActor(state.pools, getQuestionMap(state), input.actorId, input.actorIdentifier);
+}
+
+export async function renamePool(input: {
+  actorId: string | null;
+  actorIdentifier: string | null;
+  name: string;
+  poolId: string;
+}) {
+  const state = await readStore();
+  const pool = ensureActorOwnsPool(state, input.poolId, input.actorId, input.actorIdentifier);
+  const name = input.name.trim();
+
+  if (!name) {
+    throw new Error("Pool name is required.");
+  }
+
+  if (state.pools.some((entry) =>
+    entry.id !== pool.id
+    && entry.createdBy === input.actorId
+    && entry.name.trim().toLowerCase() === name.toLowerCase(),
+  )) {
+    throw new Error("You already have a question pool with this name.");
+  }
+
+  state.pools = state.pools.map((entry) => entry.id === pool.id
+    ? { ...entry, name, updatedAt: new Date().toISOString() }
+    : entry);
+  await writeStore(state);
+  return filterPoolsForActor(state.pools, getQuestionMap(state), input.actorId, input.actorIdentifier);
+}
+
+export async function deletePool(input: {
+  actorId: string | null;
+  actorIdentifier: string | null;
+  poolId: string;
+}) {
+  const state = await readStore();
+  const pool = ensureActorOwnsPool(state, input.poolId, input.actorId, input.actorIdentifier);
+
+  if (state.scheduledTests.some((test) => test.poolId === pool.id) || state.games.some((game) => game.poolId === pool.id)) {
+    throw new Error("This pool cannot be deleted because a test or game uses it.");
+  }
+
+  const timestamp = new Date().toISOString();
+  state.pools = state.pools.filter((entry) => entry.id !== pool.id);
+  state.questions = state.questions.map((question) => question.poolIds.includes(pool.id)
+    ? {
+        ...question,
+        poolIds: question.poolIds.filter((poolId) => poolId !== pool.id),
+        updatedAt: timestamp,
+      }
+    : question);
+  await writeStore(state);
   return filterPoolsForActor(state.pools, getQuestionMap(state), input.actorId, input.actorIdentifier);
 }
 
@@ -2590,6 +2694,7 @@ export async function createScheduledTest(input: {
   actorIdentifier?: string | null;
   branding?: WorkspaceBranding | null;
   createdBy: string | null;
+  creatorDisplayName?: string | null;
   durationMinutes: number;
   generateInviteLink?: boolean;
   participantGroupIds: string[];
@@ -2641,6 +2746,8 @@ export async function createScheduledTest(input: {
     branding: normalizeWorkspaceBranding(input.branding),
     createdAt: timestamp,
     createdBy: input.createdBy,
+    creatorDisplayName: input.creatorDisplayName?.trim() || null,
+    creatorIdentifier: input.actorIdentifier?.trim() || null,
     durationMinutes: input.durationMinutes,
     id: createEntityId("test"),
     inviteJoinMode: inviteGroup?.inviteJoinMode ?? "approval-required",
@@ -4149,6 +4256,14 @@ export async function getTestResults(input: {
   const groupNames = scheduledTest.participantGroupIds.map(
     (groupId) => state.participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group",
   );
+  const creatorProfile = state.participants.find((participant) =>
+    scheduledTest.creatorIdentifier
+    && identifiersMatch(participant.identifier, scheduledTest.creatorIdentifier),
+  );
+  const creatorName = scheduledTest.creatorDisplayName?.trim()
+    || creatorProfile?.label?.trim()
+    || scheduledTest.creatorIdentifier?.trim()
+    || "Unknown creator";
 
   return {
     branding: scheduledTest.branding ?? null,
@@ -4161,14 +4276,14 @@ export async function getTestResults(input: {
           correctCount: participantEntry.correctCount,
           elapsedMs: participantEntry.elapsedMs,
           incorrectCount: participantEntry.incorrectCount,
+          marks: participantEntry.marks,
           participantName: participantEntry.participantName?.trim() || normalizedParticipantIdentifier,
           rank: participantEntry.rank,
           rankedParticipantCount: leaderboard.submittedCount,
           totalCount: participantEntry.totalCount,
         }
       : null,
-    participants: hasCreatorScope
-      ? leaderboard.entries.map((entry) => {
+    participants: leaderboard.entries.map((entry) => {
           const profile = state.participants.find((participant) =>
             identifiersMatch(participant.identifier, entry.participantId),
           );
@@ -4176,15 +4291,14 @@ export async function getTestResults(input: {
           return {
             correctCount: entry.correctCount,
             elapsedMs: entry.elapsedMs,
-            identifier: profile?.identifier ?? entry.participantId,
+            marks: entry.marks,
             incorrectCount: entry.incorrectCount,
             manualName: entry.participantName?.trim() || "—",
-            profileLabel: profile?.label?.trim() || "—",
             rank: entry.rank,
             totalCount: entry.totalCount,
+            unansweredCount: entry.unansweredCount,
           };
-        })
-      : [],
+        }),
     poolName: pool?.name ?? "Unknown pool",
     questions: scheduledTest.questionIds
       .map((questionId) => questionMap.get(questionId))
@@ -4192,19 +4306,17 @@ export async function getTestResults(input: {
       .map((question) => {
         const optionSelectionCounts = question.options.map(() => 0);
 
-        if (hasCreatorScope) {
-          for (const attempt of attempts) {
-            const selectedOptionIndex = attempt.answers[question.id];
+        for (const attempt of attempts) {
+          const selectedOptionIndex = attempt.answers[question.id];
 
-            if (typeof selectedOptionIndex === "number" && optionSelectionCounts[selectedOptionIndex] !== undefined) {
-              optionSelectionCounts[selectedOptionIndex] += 1;
-            }
+          if (typeof selectedOptionIndex === "number" && optionSelectionCounts[selectedOptionIndex] !== undefined) {
+            optionSelectionCounts[selectedOptionIndex] += 1;
           }
         }
 
         return {
           correctOptionIndex: question.correctOptionIndex,
-          optionSelectionCounts: hasCreatorScope ? optionSelectionCounts : null,
+          optionSelectionCounts,
           options: question.options,
           prompt: question.prompt,
           questionId: question.id,
@@ -4212,6 +4324,7 @@ export async function getTestResults(input: {
         };
       }),
     summary: {
+      creatorName,
       durationMinutes: scheduledTest.durationMinutes,
       participantName: participantEntry?.participantName?.trim() || normalizedParticipantIdentifier || "—",
       poolName: pool?.name ?? "Unknown pool",

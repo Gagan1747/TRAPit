@@ -156,7 +156,9 @@ export function validateAppointmentLocations(locations: AppointmentLocation[] | 
 
   locations.forEach((location, index) => {
     if (!location.name.trim() || !location.address.trim() || !location.workingDays.trim() || !location.workingHours.trim()) {
-      throw new Error(`Complete the name, address, working days, and working hours for Location ${index + 1}.`);
+      throw new Error(index === 0
+        ? "Complete the primary address, working days, and working hours."
+        : "Complete the additional address, working days, and working hours.");
     }
   });
 

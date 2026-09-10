@@ -15,6 +15,10 @@ type BookingPayload = {
   business: {
     address: string;
     advanceBookingWeeks: number;
+    appointmentDateOverrides: {
+      closedDateKeys: string[];
+      openedDateKeys: string[];
+    };
     appointmentNotesPrompt: string;
     appointmentsPerSlot: number;
     imageDataUrl: string | null;
@@ -365,6 +369,7 @@ type PublicApportionBookingWorkspaceProps = {
 
 export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBookingWorkspaceProps) {
   const [carouselIndex, setCarouselIndex] = useState(0);
+  const [failedPromotionalImages, setFailedPromotionalImages] = useState<string[]>([]);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isBooking, setIsBooking] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -392,6 +397,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       setSelectedLocationId(nextPayload.business.locations.length === 1 ? nextPayload.business.locations[0].id : "");
       setSelectedSlotIso(null);
       setCarouselIndex(0);
+      setFailedPromotionalImages([]);
       setWeekOffset(0);
       setFeedback(null);
     } catch (error) {
@@ -429,15 +435,19 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       setSelectedDateKey(createDateKey(today));
       return;
     }
-    const nextWorkingDate = Array.from({ length: 28 }, (_, offset) => {
+    const maxDate = new Date(today);
+    maxDate.setMonth(today.getMonth() + 6);
+    const dayCount = Math.ceil((maxDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+    const closedDateKeys = new Set(payload.business.appointmentDateOverrides.closedDateKeys);
+    const openedDateKeys = new Set(payload.business.appointmentDateOverrides.openedDateKeys);
+    const nextWorkingDate = Array.from({ length: dayCount }, (_, offset) => {
       const date = new Date(today);
       date.setDate(today.getDate() + offset);
       return date;
     }).find((date) => {
-      const maxDate = new Date(today);
-      maxDate.setDate(today.getDate() + (payload.business.advanceBookingWeeks * 7) - 1);
-
-      return workingDays.has(WEEKDAY_NAMES[date.getDay()]) && date <= maxDate;
+      const key = createDateKey(date);
+      return !closedDateKeys.has(key)
+        && (workingDays.has(WEEKDAY_NAMES[date.getDay()]) || openedDateKeys.has(key));
     });
 
     if (nextWorkingDate) {
@@ -448,7 +458,11 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   }, [payload, selectedLocationId]);
 
   useEffect(() => {
-    const imageCount = payload?.business.promotionalImageDataUrls.length ?? 0;
+    const imageCount = payload?.business.promotionalImageDataUrls
+      .map(normalizeImageDataUrl)
+      .filter((imageUrl) => !failedPromotionalImages.includes(imageUrl)).length ?? 0;
+
+    setCarouselIndex((current) => imageCount ? current % imageCount : 0);
 
     if (imageCount < 2 || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       return;
@@ -459,7 +473,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     }, 5000);
 
     return () => window.clearInterval(intervalId);
-  }, [payload]);
+  }, [failedPromotionalImages, payload]);
 
   useEffect(() => {
     if (recurrenceMode !== "weekly") {
@@ -574,7 +588,9 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     .filter((slot) => slot.locationId === selectedLocationId)
     .map((slot) => [slot.dateKey, slot.count]));
   const maxBookableDate = new Date(today);
-  maxBookableDate.setDate(today.getDate() + (payload.business.advanceBookingWeeks * 7) - 1);
+  maxBookableDate.setMonth(today.getMonth() + 6);
+  const closedDateKeys = new Set(payload.business.appointmentDateOverrides.closedDateKeys);
+  const openedDateKeys = new Set(payload.business.appointmentDateOverrides.openedDateKeys);
   const weekStartDate = new Date(today);
   weekStartDate.setDate(today.getDate() + (weekOffset * 7));
   const weekDates = Array.from({ length: 7 }, (_, dayOffset) => {
@@ -607,10 +623,13 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   const selectedSlot = availableSlots.find((slot) => slot.startsAt === selectedSlotIso) ?? null;
   const logoDataUrl = payload.business.imageDataUrl ? normalizeImageDataUrl(payload.business.imageDataUrl) : null;
   const profileImageDataUrl = payload.business.profileImageDataUrl ? normalizeImageDataUrl(payload.business.profileImageDataUrl) : null;
-  const promotionalImageDataUrls = payload.business.promotionalImageDataUrls.map(normalizeImageDataUrl);
+  const promotionalImageDataUrls = payload.business.promotionalImageDataUrls
+    .map(normalizeImageDataUrl)
+    .filter((imageUrl) => !failedPromotionalImages.includes(imageUrl));
   const queueEstimate = payload.business.justAddToList
     && selectedLocation
-    && workingDays.has(WEEKDAY_NAMES[today.getDay()])
+    && !closedDateKeys.has(selectedDateKey)
+    && (workingDays.has(WEEKDAY_NAMES[today.getDay()]) || openedDateKeys.has(selectedDateKey))
     ? estimateQueueStart({
         activeCount: queueCountsByDateKey[selectedDateKey] ?? 0,
         appointmentsPerSlot: payload.business.appointmentsPerSlot,
@@ -657,6 +676,12 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
               <img
                 alt={`Business promotion ${carouselIndex + 1} of ${promotionalImageDataUrls.length}`}
                 src={promotionalImageDataUrls[carouselIndex]}
+                onError={() => {
+                  const failedImageUrl = promotionalImageDataUrls[carouselIndex];
+                  if (failedImageUrl) {
+                    setFailedPromotionalImages((current) => current.includes(failedImageUrl) ? current : [...current, failedImageUrl]);
+                  }
+                }}
               />
             ) : (
               <div className="apportion-promotion-empty">
@@ -716,12 +741,12 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                 >
                   <option value="">Select a location</option>
                   {payload.business.locations.map((location) => (
-                    <option key={location.id} value={location.id}>{location.name} - {location.address}</option>
+                    <option key={location.id} value={location.id}>{location.address}</option>
                   ))}
                 </select>
                 {selectedLocation ? <p className="muted-text">{selectedLocation.address}</p> : null}
               </div>
-            ) : selectedLocation ? <p className="muted-text apportion-single-location">{selectedLocation.name}: {selectedLocation.address}</p> : null}
+            ) : selectedLocation ? <p className="muted-text apportion-single-location">{selectedLocation.address}</p> : null}
 
             {!payload.business.justAddToList ? (
               <div className="apportion-week-calendar-shell">
@@ -750,7 +775,10 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                   {weekDates.map((date) => {
                     const dateKey = createDateKey(date);
                     const isWorkingDay = workingDays.has(WEEKDAY_NAMES[date.getDay()]);
-                    const isAvailableDate = isWorkingDay && date >= today && date <= maxBookableDate;
+                    const isAvailableDate = !closedDateKeys.has(dateKey)
+                      && (isWorkingDay || openedDateKeys.has(dateKey))
+                      && date >= today
+                      && date <= maxBookableDate;
                     const isSelected = dateKey === selectedDateKey;
 
                     return (

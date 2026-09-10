@@ -132,6 +132,7 @@ export async function POST(request: Request) {
         actorIdentifier: actor.identifier,
         branding: body.branding ?? null,
         createdBy: actor.sub,
+        creatorDisplayName: actor.displayName,
         durationMinutes: body.durationMinutes,
         generateInviteLink: Boolean(body.generateInviteLink),
         participantGroupIds: body.participantGroupIds ?? [],

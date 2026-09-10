@@ -40,6 +40,8 @@ import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { AnswerStatusIndicator } from "./answer-status-indicator";
 import { AssessmentLogTable, type AssessmentLogRow } from "./assessment-log-table";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
+import { BusinessDateExceptionCalendar } from "./business-date-exception-calendar";
+import { BusinessTimeRangeSelector } from "./business-time-range-selector";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 import { FloatingWindowCloseButton } from "./floating-window-close-button";
 import { SignOutButton } from "./sign-out-button";
@@ -393,6 +395,7 @@ type QuestionApiResponse = {
 
 type QuestionImportResponse = {
   importedCount: number;
+  newPoolId: string | null;
 };
 
 type WorkspaceQuestion = PersistentQuestion & {
@@ -408,6 +411,7 @@ type QuestionMutationPayload =
         prompt: string;
       };
       mode: "create";
+      newPoolName?: string;
       poolIds: string[];
     }
   | {
@@ -417,6 +421,7 @@ type QuestionMutationPayload =
         prompt: string;
       }>;
       mode: "import";
+      newPoolName?: string;
       poolIds: string[];
     };
 
@@ -1046,11 +1051,16 @@ function getDraftBookingDateOptions(input: {
   const options: Array<{ dateKey: string; disabled: boolean; label: string }> = [];
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const maxOffset = Math.max(0, (Math.max(1, input.advanceBookingWeeks) * 7) - 1);
+  const maxDate = new Date(today.getFullYear(), today.getMonth() + 6, today.getDate());
 
-  for (let offset = 0; offset <= maxOffset; offset += 1) {
+  for (let offset = 0; ; offset += 1) {
     const date = new Date(today);
     date.setDate(today.getDate() + offset);
+
+    if (date > maxDate) {
+      break;
+    }
+
     const dateKey = createDateKeyFromDate(date);
     const weekdayKey = BUSINESS_WEEKDAY_KEYS_BY_JS_DAY[date.getDay()] ?? "Sun";
     const isWorkingDay = input.workingDayKeys.includes(weekdayKey);
@@ -1698,6 +1708,7 @@ export function AdminQuestionWorkspace({
   const [businessWorkingDays, setBusinessWorkingDays] = useState("");
   const [businessWorkingHours, setBusinessWorkingHours] = useState("");
   const [businessWorkingHoursSecondWindow, setBusinessWorkingHoursSecondWindow] = useState("");
+  const [businessDateOverrides, setBusinessDateOverrides] = useState({ closedDateKeys: [] as string[], openedDateKeys: [] as string[] });
   const [businessSecondLocation, setBusinessSecondLocation] = useState({
     address: "",
     enabled: false,
@@ -1767,6 +1778,7 @@ export function AdminQuestionWorkspace({
   const [testQrCodes, setTestQrCodes] = useState<Record<string, string>>({});
   const [poolFeedback, setPoolFeedback] = useState<string | null>(null);
   const [poolName, setPoolName] = useState("");
+  const [poolRenameName, setPoolRenameName] = useState("");
   const [poolShareSearch, setPoolShareSearch] = useState("");
   const [pools, setPools] = useState<WorkspaceQuestionPool[]>([]);
   const [poolCreationCapability, setPoolCreationCapability] = useState<PoolsResponse["creationCapability"] | null>(null);
@@ -1836,6 +1848,7 @@ export function AdminQuestionWorkspace({
     setBusinessWorkingDays(firstLocation?.workingDays ?? branding?.workingDays ?? "");
     setBusinessWorkingHours(firstLocation?.workingHours ?? branding?.workingHours ?? "");
     setBusinessWorkingHoursSecondWindow(firstLocation?.workingHoursSecondWindow ?? branding?.workingHoursSecondWindow ?? "");
+    setBusinessDateOverrides(branding?.appointmentDateOverrides ?? { closedDateKeys: [], openedDateKeys: [] });
     setIsBusinessSecondWindowOpen(Boolean(firstLocation?.workingHoursSecondWindow ?? branding?.workingHoursSecondWindow));
     setBusinessSecondLocation({
       address: secondLocation?.address ?? "",
@@ -1903,13 +1916,15 @@ export function AdminQuestionWorkspace({
       setCategoryManagement(categoryManagementPayload);
 
       if (currentActorRole === "user") {
-        const [questionsPayload, poolsPayload] = await Promise.all([
+        const [questionsPayload, poolsPayload, testsPayload] = await Promise.all([
           readJson<QuestionApiResponse>(await fetch("/api/admin/questions")),
           readJson<PoolsResponse>(await fetch("/api/admin/pools")),
+          readJson<ScheduledTestsResponse>(await fetch("/api/admin/tests")),
         ]);
 
         setQuestions(questionsPayload.questions);
         setPools(poolsPayload.pools);
+        setScheduledTests(testsPayload.scheduledTests);
         setPoolCreationCapability(poolsPayload.creationCapability);
         setParticipants(userParticipantsPayload?.participants ?? []);
         setParticipantGroups(userParticipantsPayload?.participantGroups ?? []);
@@ -3381,6 +3396,54 @@ export function AdminQuestionWorkspace({
     });
   }
 
+  function handleRenamePool() {
+    if (!selectedQuestionBankPool?.canManage || !poolRenameName.trim()) {
+      setPoolFeedback("Enter a pool name.");
+      return;
+    }
+
+    void mutateWorkspace(async () => {
+      const payload = await readJson<PoolsResponse>(
+        await fetch("/api/admin/pools", {
+          body: JSON.stringify({ name: poolRenameName, poolId: selectedQuestionBankPool.id }),
+          headers: { "Content-Type": "application/json" },
+          method: "PATCH",
+        }),
+      );
+
+      setPools(payload.pools);
+      setPoolCreationCapability(payload.creationCapability);
+      setPoolFeedback("Pool name updated.");
+    }).catch((error) => {
+      setPoolFeedback(error instanceof Error ? error.message : "Unable to rename the pool.");
+    });
+  }
+
+  function handleDeletePool() {
+    if (!selectedQuestionBankPool?.canManage
+      || !window.confirm(`Delete “${selectedQuestionBankPool.name}”? Questions will be kept.`)) {
+      return;
+    }
+
+    void mutateWorkspace(async () => {
+      const payload = await readJson<PoolsResponse>(
+        await fetch("/api/admin/pools", {
+          body: JSON.stringify({ poolId: selectedQuestionBankPool.id }),
+          headers: { "Content-Type": "application/json" },
+          method: "DELETE",
+        }),
+      );
+
+      setPools(payload.pools);
+      setPoolCreationCapability(payload.creationCapability);
+      setSelectedQuestionBankPoolId(null);
+      setPoolRenameName("");
+      setPoolFeedback("Pool deleted. Its questions were kept.");
+    }).catch((error) => {
+      setPoolFeedback(error instanceof Error ? error.message : "Unable to delete the pool.");
+    });
+  }
+
   function handlePreviewImport() {
     if (!importText.trim()) {
       setImportFeedback("Paste OCR text before previewing the import.");
@@ -3443,8 +3506,8 @@ export function AdminQuestionWorkspace({
   }
 
   function handleCommitImport() {
-    if (!pools.length || !authorPoolId) {
-      setImportFeedback("Create a pool and select a question pool before importing questions.");
+    if (!authorPoolId && !poolName.trim()) {
+      setImportFeedback("Select a pool or enter a new pool name before importing questions.");
       return;
     }
 
@@ -3463,7 +3526,8 @@ export function AdminQuestionWorkspace({
           body: JSON.stringify({
             drafts,
             mode: "import",
-            poolIds: [authorPoolId],
+            newPoolName: authorPoolId ? undefined : poolName.trim(),
+            poolIds: authorPoolId ? [authorPoolId] : [],
           } satisfies QuestionMutationPayload),
           headers: {
             "Content-Type": "application/json",
@@ -3475,6 +3539,10 @@ export function AdminQuestionWorkspace({
       setImportFeedback(
         `Imported ${payload.importedCount} question${payload.importedCount === 1 ? "" : "s"} into the shared admin bank.`,
       );
+      if (payload.newPoolId) {
+        setAuthorPoolId(payload.newPoolId);
+        setPoolName("");
+      }
       setImportPreview(null);
       setImportText("");
     }).catch((error) => {
@@ -3493,36 +3561,6 @@ export function AdminQuestionWorkspace({
       setFeedback("Cleared the shared admin bank and related schedules.");
     }).catch((error) => {
       setFeedback(error instanceof Error ? error.message : "Unable to clear the question bank.");
-    });
-  }
-
-  function handleCreatePool() {
-    if (!poolName.trim()) {
-      setPoolFeedback("Pool name is required.");
-      return;
-    }
-
-    void mutateWorkspace(async () => {
-      const payload = await readJson<PoolsResponse>(
-        await fetch("/api/admin/pools", {
-          body: JSON.stringify({ name: poolName }),
-          headers: {
-            "Content-Type": "application/json",
-          },
-          method: "POST",
-        }),
-      );
-      const newestPool = payload.pools[0];
-
-      if (newestPool) {
-        setAuthorPoolId(newestPool.id);
-      }
-
-      setPoolCreationCapability(payload.creationCapability);
-      setPoolFeedback("Pool created.");
-      setPoolName("");
-    }).catch((error) => {
-      handleWorkspaceActionError(error, "Unable to create the pool.", setPoolFeedback);
     });
   }
 
@@ -3911,7 +3949,7 @@ export function AdminQuestionWorkspace({
     }
 
     if (!businessLocationName.trim() || !brandingAddress.trim() || !businessWorkingDays.trim() || !businessWorkingHours.trim()) {
-      setBrandingFeedback("Complete the name, address, working days, and working hours for Location 1.");
+      setBrandingFeedback("Complete the primary address, working days, and working hours.");
       return;
     }
 
@@ -3919,13 +3957,14 @@ export function AdminQuestionWorkspace({
       || !businessSecondLocation.address.trim()
       || !businessSecondLocation.workingDays.trim()
       || !businessSecondLocation.workingHours.trim())) {
-      setBrandingFeedback("Complete the name, address, working days, and working hours for Location 2.");
+      setBrandingFeedback("Complete the additional address, working days, and working hours.");
       return;
     }
 
     const nextBranding = normalizeBrandingInput({
       address: brandingAddress,
       advanceBookingWeeks,
+      appointmentDateOverrides: businessDateOverrides,
       appointmentLocations: [
         {
           address: brandingAddress,
@@ -4062,6 +4101,7 @@ export function AdminQuestionWorkspace({
     setBusinessWorkingDays("");
     setBusinessWorkingHours("");
     setBusinessWorkingHoursSecondWindow("");
+    setBusinessDateOverrides({ closedDateKeys: [], openedDateKeys: [] });
     setIsBusinessSecondWindowOpen(false);
 
     try {
@@ -4742,7 +4782,7 @@ export function AdminQuestionWorkspace({
         groups,
         id: `test-${test.id}`,
         marksOrPoints: hasParticipantResult && participantResult
-          ? `${participantResult.correctCount} (${participantResult.incorrectCount}) / ${participantResult.totalCount}`
+          ? `${participantResult.marks}`
           : "—",
         participantName: useParticipantScope
           ? participantHistory?.participantName?.trim() || currentAdminIdentifier || "—"
@@ -4860,10 +4900,6 @@ export function AdminQuestionWorkspace({
     workingHours: businessWorkingHours,
   });
   const selectedBusinessDayKeys = parseBusinessDays(businessWorkingDays);
-  const businessTimeRange = parseBusinessTimeRange(businessWorkingHours || "10:00 AM - 1:00 PM");
-  const businessSecondTimeRange = businessWorkingHoursSecondWindow.trim()
-    ? parseBusinessTimeRange(businessWorkingHoursSecondWindow)
-    : null;
   const activeAppointmentShareCode = businessAppointmentShareCode ?? workspaceBranding?.appointmentShareCode ?? null;
   const businessAppointmentUrl = activeAppointmentShareCode
     ? getApportionAccessUrl(activeAppointmentShareCode)
@@ -4915,17 +4951,7 @@ export function AdminQuestionWorkspace({
             setBrandingInstituteName(event.target.value);
           }}
         />
-        <label htmlFor="business-location-one-name">Location 1 name</label>
-        <input
-          id="business-location-one-name"
-          placeholder="Main branch"
-          value={businessLocationName}
-          onChange={(event) => {
-            markBrandingDraftDirty();
-            setBusinessLocationName(event.target.value);
-          }}
-        />
-        <label htmlFor="branding-address">Location 1 address</label>
+        <label htmlFor="branding-address">Address</label>
         <textarea
           id="branding-address"
           placeholder="Enter business address"
@@ -4960,30 +4986,15 @@ export function AdminQuestionWorkspace({
       </div>
       <div className="field business-field-card">
         <span className="field-label">Working hours</span>
-        <div className="business-time-window-grid">
-          <label htmlFor="business-window-one-start">Start 1</label>
-          <select
-            className="select-field"
-            id="business-window-one-start"
-            value={formatBusinessTime(businessTimeRange.startMinutes)}
-            onChange={(event) => handleBusinessTimeDropdownChange("first", "start", event.target.value)}
-          >
-            {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
-              <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
-            ))}
-          </select>
-          <label htmlFor="business-window-one-end">Close 1</label>
-          <select
-            className="select-field"
-            id="business-window-one-end"
-            value={formatBusinessTime(businessTimeRange.endMinutes)}
-            onChange={(event) => handleBusinessTimeDropdownChange("first", "end", event.target.value)}
-          >
-            {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
-              <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
-            ))}
-          </select>
-        </div>
+        <BusinessTimeRangeSelector
+          blockedRanges={[businessWorkingHoursSecondWindow, businessSecondLocation.workingHours, businessSecondLocation.workingHoursSecondWindow].filter(Boolean)}
+          label="working hours"
+          value={businessWorkingHours}
+          onChange={(value) => {
+            markBrandingDraftDirty();
+            setBusinessWorkingHours(value);
+          }}
+        />
         <div className="business-second-window-actions">
           <button
             aria-expanded={isBusinessSecondWindowOpen}
@@ -5002,38 +5013,32 @@ export function AdminQuestionWorkspace({
           </button>
         </div>
         {isBusinessSecondWindowOpen ? (
-          <div className="business-time-window-grid business-time-window-grid-secondary">
-            <label htmlFor="business-window-two-start">Start 2</label>
-            <select
-              className="select-field"
-              id="business-window-two-start"
-              value={businessSecondTimeRange ? formatBusinessTime(businessSecondTimeRange.startMinutes) : ""}
-              onChange={(event) => handleBusinessTimeDropdownChange("second", "start", event.target.value)}
-            >
-              <option value="">Select start</option>
-              {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
-                <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
-              ))}
-            </select>
-            <label htmlFor="business-window-two-end">Close 2</label>
-            <select
-              className="select-field"
-              id="business-window-two-end"
-              value={businessSecondTimeRange ? formatBusinessTime(businessSecondTimeRange.endMinutes) : ""}
-              onChange={(event) => handleBusinessTimeDropdownChange("second", "end", event.target.value)}
-            >
-              <option value="">Select close</option>
-              {Array.from({ length: ((BUSINESS_DAY_END_MINUTES - BUSINESS_DAY_START_MINUTES) / BUSINESS_TIME_STEP_MINUTES) + 1 }, (_, index) => BUSINESS_DAY_START_MINUTES + (index * BUSINESS_TIME_STEP_MINUTES)).map((minutes) => (
-                <option key={minutes} value={formatBusinessTime(minutes)}>{formatBusinessTime(minutes)}</option>
-              ))}
-            </select>
-          </div>
+          <BusinessTimeRangeSelector
+            blockedRanges={[businessWorkingHours, businessSecondLocation.workingHours, businessSecondLocation.workingHoursSecondWindow].filter(Boolean)}
+            label="second working slot"
+            value={businessWorkingHoursSecondWindow}
+            onChange={(value) => {
+              markBrandingDraftDirty();
+              setBusinessWorkingHoursSecondWindow(value);
+            }}
+          />
         ) : null}
+      </div>
+      <div className="field business-field-card">
+        <span className="field-label">Leave and schedule calendar</span>
+        <BusinessDateExceptionCalendar
+          value={businessDateOverrides}
+          workingDays={businessWorkingDays}
+          onChange={(value) => {
+            markBrandingDraftDirty();
+            setBusinessDateOverrides(value);
+          }}
+        />
       </div>
       {businessSecondLocation.enabled ? (
         <div className="field business-field-card">
           <div className="business-second-window-actions">
-            <span className="field-label">Location 2</span>
+            <span className="field-label">Additional address</span>
             <button
               className="button-secondary small-button"
               type="button"
@@ -5052,17 +5057,7 @@ export function AdminQuestionWorkspace({
               Remove location
             </button>
           </div>
-          <label htmlFor="business-location-two-name">Location name</label>
-          <input
-            id="business-location-two-name"
-            placeholder="Second branch"
-            value={businessSecondLocation.name}
-            onChange={(event) => {
-              markBrandingDraftDirty();
-              setBusinessSecondLocation((current) => ({ ...current, name: event.target.value }));
-            }}
-          />
-          <label htmlFor="business-location-two-address">Address</label>
+          <label htmlFor="business-location-two-address">Additional address</label>
           <textarea
             id="business-location-two-address"
             placeholder="Enter business address"
@@ -5074,7 +5069,7 @@ export function AdminQuestionWorkspace({
             }}
           />
           <span className="field-label">Working days</span>
-          <div className="business-day-grid" role="group" aria-label="Location 2 working days">
+          <div className="business-day-grid" role="group" aria-label="Additional address working days">
             {BUSINESS_WEEK_DAYS.map((day) => {
               const isActive = parseBusinessDays(businessSecondLocation.workingDays).includes(day.key);
               return (
@@ -5091,24 +5086,22 @@ export function AdminQuestionWorkspace({
               );
             })}
           </div>
-          <label htmlFor="business-location-two-hours">Working hours</label>
-          <input
-            id="business-location-two-hours"
-            placeholder="9:00 AM - 1:00 PM"
+          <BusinessTimeRangeSelector
+            blockedRanges={[businessWorkingHours, businessWorkingHoursSecondWindow, businessSecondLocation.workingHoursSecondWindow].filter(Boolean)}
+            label="additional address working hours"
             value={businessSecondLocation.workingHours}
-            onChange={(event) => {
+            onChange={(value) => {
               markBrandingDraftDirty();
-              setBusinessSecondLocation((current) => ({ ...current, workingHours: event.target.value }));
+              setBusinessSecondLocation((current) => ({ ...current, workingHours: value }));
             }}
           />
-          <label htmlFor="business-location-two-hours-second">Second window (optional)</label>
-          <input
-            id="business-location-two-hours-second"
-            placeholder="2:00 PM - 6:00 PM"
+          <BusinessTimeRangeSelector
+            blockedRanges={[businessWorkingHours, businessWorkingHoursSecondWindow, businessSecondLocation.workingHours].filter(Boolean)}
+            label="additional address second slot"
             value={businessSecondLocation.workingHoursSecondWindow}
-            onChange={(event) => {
+            onChange={(value) => {
               markBrandingDraftDirty();
-              setBusinessSecondLocation((current) => ({ ...current, workingHoursSecondWindow: event.target.value }));
+              setBusinessSecondLocation((current) => ({ ...current, workingHoursSecondWindow: value }));
             }}
           />
         </div>
@@ -5121,7 +5114,7 @@ export function AdminQuestionWorkspace({
             setBusinessSecondLocation((current) => ({ ...current, enabled: true }));
           }}
         >
-          Add second location
+          Add another address
         </button>
       )}
       <div className="field business-field-card">
@@ -6555,7 +6548,7 @@ export function AdminQuestionWorkspace({
           <div className="field">
             <div className="question-list">
               <div className="field compact-field">
-                <label htmlFor="author-pool">Select or create question pool</label>
+                <label htmlFor="author-pool">Select question pool</label>
                 <select
                   className="select-field"
                   id="author-pool"
@@ -6580,9 +6573,7 @@ export function AdminQuestionWorkspace({
                     onChange={(event) => setPoolName(event.target.value)}
                   />
                 </div>
-                <button className="button-secondary small-button" disabled={isMutating || poolCreationCapability?.canCreate === false} type="button" onClick={handleCreatePool}>
-                  Create pool
-                </button>
+                <p className="muted-text">The pool is created when valid questions are imported.</p>
               </div>
             </div>
           </div>
@@ -6600,7 +6591,7 @@ export function AdminQuestionWorkspace({
             </div>
             <button
               className="button-secondary small-button"
-              disabled={!authorPoolId}
+              disabled={!authorPoolId && !poolName.trim()}
               type="button"
               onClick={() => setIsOcrImportOpen((currentState) => !currentState)}
             >
@@ -6608,9 +6599,9 @@ export function AdminQuestionWorkspace({
             </button>
           </div>
 
-          {!authorPoolId ? <p className="muted-text">Select or create a pool to enable OCR import.</p> : null}
+          {!authorPoolId && !poolName.trim() ? <p className="muted-text">Select a pool or enter a new pool name to enable OCR import.</p> : null}
 
-          {authorPoolId && isOcrImportOpen ? (
+          {(authorPoolId || poolName.trim()) && isOcrImportOpen ? (
             <div className="form-stack import-card">
               <div className="section-head">
                 <div>
@@ -6738,7 +6729,11 @@ export function AdminQuestionWorkspace({
                     className={`pool-filter-card${selectedQuestionBankPoolId === pool.id ? " is-active" : ""}`}
                     key={pool.id}
                     type="button"
-                    onClick={() => setSelectedQuestionBankPoolId(pool.id)}
+                    onClick={() => {
+                      setSelectedQuestionBankPoolId(pool.id);
+                      setPoolRenameName(pool.name);
+                      setPoolFeedback(null);
+                    }}
                   >
                     <strong>{pool.name}</strong>
                     <span>
@@ -6769,6 +6764,29 @@ export function AdminQuestionWorkspace({
                   </div>
                 </div>
                 <div className="inline-actions">
+                  {selectedQuestionBankPool.canManage ? (
+                    <>
+                      <label className="field compact-field" htmlFor="pool-rename-name">
+                        <span>Pool name</span>
+                        <input
+                          id="pool-rename-name"
+                          value={poolRenameName}
+                          onChange={(event) => setPoolRenameName(event.target.value)}
+                        />
+                      </label>
+                      <button
+                        className="button-secondary small-button"
+                        disabled={isMutating || !poolRenameName.trim() || poolRenameName.trim() === selectedQuestionBankPool.name}
+                        type="button"
+                        onClick={handleRenamePool}
+                      >
+                        Rename
+                      </button>
+                      <button className="button-secondary small-button" disabled={isMutating} type="button" onClick={handleDeletePool}>
+                        Delete pool
+                      </button>
+                    </>
+                  ) : null}
                   <button
                     className="button-secondary small-button"
                     disabled={!filteredQuestionBankQuestions.length}
@@ -6812,6 +6830,8 @@ export function AdminQuestionWorkspace({
                 <p className="muted-text">Select a pool to see only the questions assigned to it.</p>
               </div>
             )}
+
+            {poolFeedback ? <p className="muted-text">{poolFeedback}</p> : null}
 
             {selectedQuestionBankPool ? (
               <div className="question-card question-bank-share-panel">
@@ -7526,7 +7546,7 @@ export function AdminQuestionWorkspace({
               <div className="field">
                 <div className="question-list">
                   <div className="field compact-field">
-                    <label htmlFor="author-pool">Select or create question pool</label>
+                    <label htmlFor="author-pool">Select question pool</label>
                     <select
                       className="select-field"
                       id="author-pool"
@@ -7551,9 +7571,7 @@ export function AdminQuestionWorkspace({
                         onChange={(event) => setPoolName(event.target.value)}
                       />
                     </div>
-                    <button className="button-secondary small-button" disabled={isMutating || poolCreationCapability?.canCreate === false} type="button" onClick={handleCreatePool}>
-                      Create pool
-                    </button>
+                    <p className="muted-text">The pool is created when valid questions are imported.</p>
                   </div>
                 </div>
               </div>
@@ -7571,7 +7589,7 @@ export function AdminQuestionWorkspace({
                 </div>
                 <button
                   className="button-secondary small-button"
-                  disabled={!authorPoolId}
+                  disabled={!authorPoolId && !poolName.trim()}
                   type="button"
                   onClick={() => setIsOcrImportOpen((currentState) => !currentState)}
                 >
@@ -7579,9 +7597,9 @@ export function AdminQuestionWorkspace({
                 </button>
               </div>
 
-              {!authorPoolId ? <p className="muted-text">Select or create a pool to enable OCR import.</p> : null}
+              {!authorPoolId && !poolName.trim() ? <p className="muted-text">Select a pool or enter a new pool name to enable OCR import.</p> : null}
 
-              {authorPoolId && isOcrImportOpen ? (
+              {(authorPoolId || poolName.trim()) && isOcrImportOpen ? (
                 <div className="form-stack import-card">
                   <div className="section-head">
                     <div>

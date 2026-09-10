@@ -196,7 +196,7 @@ export function RestrictedUserDashboardWorkspace({
         groups: test.groupNames.length ? test.groupNames.join(", ") : "None",
         id: `test-${test.id}`,
         marksOrPoints: hasCompletedResult && result
-          ? `${result.correctCount} (${result.incorrectCount}) / ${result.totalCount}`
+          ? `${result.marks}`
           : "—",
         participantName: historyEntry?.participantName?.trim() || identifier || "—",
         questionPool: test.poolName,

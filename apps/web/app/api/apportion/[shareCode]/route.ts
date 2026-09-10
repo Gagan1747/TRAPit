@@ -212,7 +212,6 @@ function buildRecurringDateKeys(input: {
 function validateBookingDate(branding: WorkspaceBranding, slotDateKey: string) {
   const workingDays = parseWorkingDays(branding.workingDays);
   const requestedDateUtc = createDateFromKeyUtc(slotDateKey);
-  const advanceBookingWeeks = branding.advanceBookingWeeks ?? 4;
   const todayIstDateKey = getIstDateKey(new Date());
   const todayUtcDate = createDateFromKeyUtc(todayIstDateKey);
 
@@ -221,8 +220,14 @@ function validateBookingDate(branding: WorkspaceBranding, slotDateKey: string) {
   }
 
   const dayName = WEEKDAY_NAMES[requestedDateUtc.getUTCDay()];
+  const closedDateKeys = new Set(branding.appointmentDateOverrides?.closedDateKeys ?? []);
+  const openedDateKeys = new Set(branding.appointmentDateOverrides?.openedDateKeys ?? []);
 
-  if (!workingDays.has(dayName)) {
+  if (closedDateKeys.has(slotDateKey)) {
+    throw new Error("This business is closed on the selected date.");
+  }
+
+  if (!workingDays.has(dayName) && !openedDateKeys.has(slotDateKey)) {
     throw new Error("Choose a working day for this business.");
   }
 
@@ -231,7 +236,7 @@ function validateBookingDate(branding: WorkspaceBranding, slotDateKey: string) {
   }
 
   const maxDate = new Date(todayUtcDate);
-  maxDate.setUTCDate(todayUtcDate.getUTCDate() + (advanceBookingWeeks * 7) - 1);
+  maxDate.setUTCMonth(todayUtcDate.getUTCMonth() + 6);
   const maxDateKey = createDateKeyUtc(maxDate);
 
   if (slotDateKey > maxDateKey) {
@@ -330,6 +335,7 @@ export async function GET(
     business: {
       address: business.branding.address,
       advanceBookingWeeks: business.branding.advanceBookingWeeks ?? 4,
+      appointmentDateOverrides: business.branding.appointmentDateOverrides ?? { closedDateKeys: [], openedDateKeys: [] },
       appointmentNotesPrompt: business.branding.appointmentNotesPrompt,
       appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
       imageDataUrl: business.branding.imageDataUrl,

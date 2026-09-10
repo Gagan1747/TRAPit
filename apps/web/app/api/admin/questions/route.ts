@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { validateQuestionDraft, type QuestionDraft } from "@trapit/testing";
 
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
-import { assertCanAddQuestionsToPools } from "../../../../lib/user-category-limits";
+import { assertCanAddQuestionsToPools, assertCanCreateQuestionPool } from "../../../../lib/user-category-limits";
 import {
   createQuestion,
   deleteQuestions,
@@ -28,6 +28,7 @@ type CreateQuestionBody = {
   draft?: QuestionDraft;
   drafts?: QuestionDraft[];
   mode?: "create" | "import";
+  newPoolName?: string;
   poolIds?: string[];
 };
 
@@ -78,15 +79,21 @@ export async function POST(request: Request) {
         );
       }
 
-      if (!hasPoolSelection(body.poolIds)) {
+      if (!hasPoolSelection(body.poolIds) && !body.newPoolName?.trim()) {
         return NextResponse.json(
-          { error: "Select at least one pool before importing questions." },
+          { error: "Select a pool or enter a new pool name before importing questions." },
           { status: 400 },
         );
       }
 
       if (actor.role === "user") {
         const pools = await listPoolsForActor(actor.sub, actor.identifier);
+        if (body.newPoolName?.trim()) {
+          assertCanCreateQuestionPool(
+            actor.userCategory,
+            pools.filter((pool) => pool.createdBy === actor.sub).length,
+          );
+        }
         const nextCounts = (body.poolIds ?? []).map((poolId) => {
           const pool = pools.find((entry) => entry.id === poolId);
           return (pool?.questionIds.length ?? 0) + drafts.length;
@@ -95,8 +102,14 @@ export async function POST(request: Request) {
         assertCanAddQuestionsToPools(actor.userCategory, nextCounts);
       }
 
-      await importQuestions(drafts, actor.sub, body.poolIds ?? [], actor.identifier);
-      return NextResponse.json({ importedCount: drafts.length });
+      const result = await importQuestions(
+        drafts,
+        actor.sub,
+        body.poolIds ?? [],
+        actor.identifier,
+        body.newPoolName ?? null,
+      );
+      return NextResponse.json({ importedCount: drafts.length, newPoolId: result.newPoolId });
     }
 
     if (body.mode !== "create" || !body.draft) {
@@ -109,15 +122,21 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: validationError }, { status: 400 });
     }
 
-    if (!hasPoolSelection(body.poolIds)) {
+    if (!hasPoolSelection(body.poolIds) && !body.newPoolName?.trim()) {
       return NextResponse.json(
-        { error: "Select at least one pool before saving a question." },
+        { error: "Select a pool or enter a new pool name before saving a question." },
         { status: 400 },
       );
     }
 
     if (actor.role === "user") {
       const pools = await listPoolsForActor(actor.sub, actor.identifier);
+      if (body.newPoolName?.trim()) {
+        assertCanCreateQuestionPool(
+          actor.userCategory,
+          pools.filter((pool) => pool.createdBy === actor.sub).length,
+        );
+      }
       const nextCounts = (body.poolIds ?? []).map((poolId) => {
         const pool = pools.find((entry) => entry.id === poolId);
         return (pool?.questionIds.length ?? 0) + 1;
@@ -126,9 +145,19 @@ export async function POST(request: Request) {
       assertCanAddQuestionsToPools(actor.userCategory, nextCounts);
     }
 
-    const questions = await createQuestion(body.draft, actor.sub, "manual", body.poolIds ?? [], actor.identifier);
+    const result = await createQuestion(
+      body.draft,
+      actor.sub,
+      "manual",
+      body.poolIds ?? [],
+      actor.identifier,
+      body.newPoolName ?? null,
+    );
 
-    return NextResponse.json({ questions: questions.map((question) => decorateQuestion(question, actor.sub)) });
+    return NextResponse.json({
+      newPoolId: result.newPoolId,
+      questions: result.questions.map((question) => decorateQuestion(question, actor.sub)),
+    });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to save questions." },
