@@ -21,7 +21,8 @@ TRAPIT_SIGNIN_ACTIVITY_TABLE=trapit-signin-activity
 `trapit-scheduled-polls`
 
 - Partition key: `id` (String)
-- Stores `ScheduledPoll` records.
+- Stores immutable `ScheduledPoll` cycle records. Recurring cycles share a `seriesId`.
+- Creating a recurring series and replacing its not-yet-started cycles use DynamoDB transactions.
 
 `trapit-poll-attempts`
 
@@ -69,10 +70,12 @@ aws dynamodb create-table \
 Grant the web app role or user these actions on the four tables:
 
 - `dynamodb:BatchGetItem`
+- `dynamodb:DeleteItem`
 - `dynamodb:GetItem`
 - `dynamodb:PutItem`
 - `dynamodb:Query`
 - `dynamodb:Scan`
+- `dynamodb:TransactWriteItems`
 
 If your poll-table permissions are already attached separately, the incremental IAM policy for the new sign-in activity table is available at `infra/dynamodb/trapit-signin-activity-policy.json`.
 

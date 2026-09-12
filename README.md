@@ -73,6 +73,7 @@ The current scaffold now includes real Cognito-backed handlers:
    Current scope note:
 
    - Web admin poll authoring, web/public poll access, and open-poll submissions use DynamoDB when this mode is enabled.
+   - Polls can run once or recur weekly, bi-weekly, or monthly. Recurring results are released per completed instance, and editing a series replaces only cycles that have not started.
    - Tests, groups, question banks, and the mobile local workspace are still backed by their existing stores.
    - Dashboard notification baselines and the dashboard header's last-signed-in timestamp now come from `TRAPIT_SIGNIN_ACTIVITY_TABLE` in DynamoDB instead of the local JSON file.
    - Mobile poll flows are not device-shared yet because mobile still authenticates directly with Cognito and does not call the protected web poll APIs.
@@ -88,6 +89,11 @@ The current scaffold now includes real Cognito-backed handlers:
    ```bash
    pnpm run dev:mobile
    ```
+
+## Appointment booking
+
+- Slot Selection and Queue Only bookings both use the location calendar and support dates up to six months ahead.
+- Queue Only dates are disabled when the location is closed or the day's working-window capacity is full. Today's estimate starts from the current IST time; future estimates start from opening time.
 
 ## Multiplayer games
 

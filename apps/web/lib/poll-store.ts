@@ -6,8 +6,10 @@ import {
   PutCommand,
   QueryCommand,
   ScanCommand,
+  TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import {
+  buildPollRecurrenceCycles,
   createEntityId,
   createPersistentPollQuestion,
   normalizeWorkspaceBranding,
@@ -17,6 +19,8 @@ import {
   type PollAttempt,
   type PollParticipantType,
   type PollQuestionDraft,
+  type PollRecurrenceFrequency,
+  type PollResponseMode,
   type PersistentPollQuestion,
   type ScheduledPoll,
   type WorkspaceBranding,
@@ -36,6 +40,8 @@ type CreateScheduledPollInput = {
   participantGroupIds: string[];
   participantType: PollParticipantType;
   questionIds: string[];
+  recurrenceCycleCount?: number | null;
+  recurrenceFrequency?: PollRecurrenceFrequency | null;
   startsAt: string;
   title: string;
 };
@@ -64,6 +70,16 @@ const POLL_STORE_MODE = process.env.TRAPIT_POLL_STORE_MODE?.trim().toLowerCase()
 
 function dedupe(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function resolvePollResponseMode(input: Pick<CreateScheduledPollInput, "anonymous" | "openPollRequiresRegistration" | "participantType">): PollResponseMode {
+  if (input.participantType === "registered") {
+    return input.anonymous ? "groups-anonymous" : "groups-named";
+  }
+
+  return input.openPollRequiresRegistration
+    ? "open-registered-anonymous"
+    : "open-unregistered-anonymous";
 }
 
 function normalizeParticipantIdentifier(value: string) {
@@ -138,6 +154,11 @@ function hydrateScheduledPolls(polls: ScheduledPoll[], attempts?: PollAttempt[])
     branding: normalizeWorkspaceBranding(poll.branding),
     creatorDisplayName: poll.creatorDisplayName ?? null,
     creatorIdentifier: poll.creatorIdentifier ?? null,
+    recurrenceCycleCount: poll.recurrenceCycleCount ?? null,
+    recurrenceCycleIndex: poll.recurrenceCycleIndex ?? null,
+    recurrenceFrequency: poll.recurrenceFrequency ?? null,
+    responseMode: poll.responseMode ?? resolvePollResponseMode(poll),
+    seriesId: poll.seriesId ?? null,
     status: resolveScheduledPollStatus(poll),
     ...(attempts ? { totalResponses: attempts.filter((attempt) => attempt.pollId === poll.id).length } : {}),
   }));
@@ -260,7 +281,9 @@ function buildPollSummary(
     (viewer?.sub && poll.createdBy && viewer.sub === poll.createdBy)
     || (viewer?.identifier && poll.creatorIdentifier && identifiersMatch(poll.creatorIdentifier, viewer.identifier)),
   );
-  const canViewResults = isCreator || Boolean(viewer?.isRegistered && hasSubmitted);
+  const isRecurringResultPublished = !poll.seriesId || poll.status === "completed";
+  const canViewResults = isRecurringResultPublished
+    && (isCreator || Boolean(viewer?.isRegistered && hasSubmitted));
   const summary: PollSummaryEntry[] = questions.map((question) => ({
     optionSelectionCounts: question.options.map(
       (_, optionIndex) => attempts.filter((attempt) => attempt.answers[question.id] === optionIndex).length,
@@ -448,6 +471,8 @@ export async function createScheduledPollInBackend(input: CreateScheduledPollInp
 
   const startsAtMs = new Date(input.startsAt).getTime();
   const endsAtMs = new Date(input.endsAt).getTime();
+  const recurrenceFrequency = input.recurrenceFrequency ?? null;
+  const recurrenceCycleCount = input.recurrenceCycleCount ?? null;
 
   if (Number.isNaN(startsAtMs)) {
     throw new Error("Choose a valid poll start date and time.");
@@ -457,8 +482,16 @@ export async function createScheduledPollInBackend(input: CreateScheduledPollInp
     throw new Error("Choose a valid poll end date and time.");
   }
 
-  if (endsAtMs <= startsAtMs) {
+  if (!recurrenceFrequency && endsAtMs <= startsAtMs) {
     throw new Error("Poll end time must be after the start time.");
+  }
+
+  if (recurrenceFrequency && (!Number.isInteger(recurrenceCycleCount) || (recurrenceCycleCount ?? 0) < 1 || (recurrenceCycleCount ?? 0) > 50)) {
+    throw new Error("Recurring polls require between 1 and 50 cycles.");
+  }
+
+  if (recurrenceFrequency && input.participantType === "open" && !input.openPollRequiresRegistration) {
+    throw new Error("Recurring polls require participant registration.");
   }
 
   const title = input.title.trim();
@@ -469,31 +502,48 @@ export async function createScheduledPollInBackend(input: CreateScheduledPollInp
 
   const anonymous = input.generateQrCode && input.participantType === "open" ? true : input.anonymous;
   const timestamp = new Date().toISOString();
-  const scheduledPoll: ScheduledPoll = {
+  const seriesId = recurrenceFrequency ? createEntityId("poll-series") : null;
+  const cycles = recurrenceFrequency
+    ? buildPollRecurrenceCycles({
+        cycleCount: recurrenceCycleCount ?? 1,
+        frequency: recurrenceFrequency,
+        startsAt: input.startsAt,
+      })
+    : [{ cycleIndex: 0, endsAt: input.endsAt, startsAt: input.startsAt }];
+  const scheduledPolls = cycles.map<ScheduledPoll>((cycle) => ({
     anonymous,
     branding: normalizeWorkspaceBranding(input.branding),
     createdAt: timestamp,
     createdBy: input.createdBy,
     creatorDisplayName: input.creatorDisplayName?.trim() || null,
     creatorIdentifier: input.creatorIdentifier?.trim() || null,
-    endsAt: input.endsAt,
+    endsAt: cycle.endsAt,
     id: createEntityId("poll"),
     openPollRequiresRegistration: input.participantType === "open" ? Boolean(input.openPollRequiresRegistration) : false,
     participantGroupIds,
     participantType: input.participantType,
     questionIds,
+    recurrenceCycleCount: recurrenceFrequency ? recurrenceCycleCount : null,
+    recurrenceCycleIndex: recurrenceFrequency ? cycle.cycleIndex : null,
+    recurrenceFrequency,
+    responseMode: resolvePollResponseMode(input),
+    seriesId,
     shareCode: input.generateQrCode
       ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
       : null,
-    startsAt: input.startsAt,
-    status: resolveScheduledPollStatus({ endsAt: input.endsAt, startsAt: input.startsAt }),
+    startsAt: cycle.startsAt,
+    status: resolveScheduledPollStatus(cycle),
     title,
     updatedAt: timestamp,
-  };
+  }));
 
-  await getDocumentClient().send(new PutCommand({
-    Item: scheduledPoll,
-    TableName: getPollTables().scheduledPolls,
+  await getDocumentClient().send(new TransactWriteCommand({
+    TransactItems: scheduledPolls.map((scheduledPoll) => ({
+      Put: {
+        Item: scheduledPoll,
+        TableName: getPollTables().scheduledPolls,
+      },
+    })),
   }));
 
   return listScheduledPollsFromBackend(input.createdBy);
@@ -541,6 +591,8 @@ export async function updateScheduledPollInBackend(input: UpdateScheduledPollInp
 
   const startsAtMs = new Date(input.startsAt).getTime();
   const endsAtMs = new Date(input.endsAt).getTime();
+  const recurrenceFrequency = input.recurrenceFrequency ?? null;
+  const recurrenceCycleCount = input.recurrenceCycleCount ?? null;
 
   if (Number.isNaN(startsAtMs)) {
     throw new Error("Choose a valid poll start date and time.");
@@ -550,8 +602,16 @@ export async function updateScheduledPollInBackend(input: UpdateScheduledPollInp
     throw new Error("Choose a valid poll end date and time.");
   }
 
-  if (endsAtMs <= startsAtMs) {
+  if (!recurrenceFrequency && endsAtMs <= startsAtMs) {
     throw new Error("Poll end time must be after the start time.");
+  }
+
+  if (recurrenceFrequency && (!Number.isInteger(recurrenceCycleCount) || (recurrenceCycleCount ?? 0) < 1 || (recurrenceCycleCount ?? 0) > 50)) {
+    throw new Error("Recurring polls require between 1 and 50 cycles.");
+  }
+
+  if (recurrenceFrequency && input.participantType === "open" && !input.openPollRequiresRegistration) {
+    throw new Error("Recurring polls require participant registration.");
   }
 
   const title = input.title.trim();
@@ -561,6 +621,77 @@ export async function updateScheduledPollInBackend(input: UpdateScheduledPollInp
   }
 
   const anonymous = input.generateQrCode && input.participantType === "open" ? true : input.anonymous;
+  const timestamp = new Date().toISOString();
+
+  if (existingPoll.seriesId) {
+    if (!recurrenceFrequency) {
+      throw new Error("Choose a recurrence frequency when editing a recurring poll.");
+    }
+
+    const nowMs = Date.now();
+    const seriesPolls = polls.filter((poll) => poll.seriesId === existingPoll.seriesId);
+    const preservedCycles = seriesPolls.filter((poll) => new Date(poll.startsAt).getTime() <= nowMs);
+    const futureCycles = seriesPolls.filter((poll) => new Date(poll.startsAt).getTime() > nowMs);
+    const generatedCycles = buildPollRecurrenceCycles({
+      cycleCount: recurrenceCycleCount ?? 1,
+      frequency: recurrenceFrequency,
+      startsAt: input.startsAt,
+    }).filter((cycle) => new Date(cycle.startsAt).getTime() > nowMs);
+    const latestPreservedEndMs = preservedCycles.reduce(
+      (latest, poll) => Math.max(latest, new Date(poll.endsAt).getTime()),
+      Number.NEGATIVE_INFINITY,
+    );
+
+    if (generatedCycles.some((cycle) => new Date(cycle.startsAt).getTime() < latestPreservedEndMs)) {
+      throw new Error("Future cycles must start after the active cycle ends.");
+    }
+
+    const replacementPolls = generatedCycles.map<ScheduledPoll>((cycle) => ({
+      ...existingPoll,
+      anonymous,
+      branding: normalizeWorkspaceBranding(input.branding) ?? existingPoll.branding ?? null,
+      creatorDisplayName: input.creatorDisplayName?.trim() || existingPoll.creatorDisplayName || null,
+      creatorIdentifier: input.creatorIdentifier?.trim() || existingPoll.creatorIdentifier || null,
+      endsAt: cycle.endsAt,
+      id: createEntityId("poll"),
+      openPollRequiresRegistration: input.participantType === "open" ? Boolean(input.openPollRequiresRegistration) : false,
+      participantGroupIds,
+      participantType: input.participantType,
+      questionIds,
+      recurrenceCycleCount,
+      recurrenceCycleIndex: cycle.cycleIndex,
+      recurrenceFrequency,
+      responseMode: resolvePollResponseMode(input),
+      shareCode: input.generateQrCode
+        ? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
+        : null,
+      startsAt: cycle.startsAt,
+      status: resolveScheduledPollStatus(cycle),
+      title,
+      updatedAt: timestamp,
+    }));
+    const transactItems = [
+      ...futureCycles.map((poll) => ({
+        Delete: {
+          Key: { id: poll.id },
+          TableName: getPollTables().scheduledPolls,
+        },
+      })),
+      ...replacementPolls.map((poll) => ({
+        Put: {
+          Item: poll,
+          TableName: getPollTables().scheduledPolls,
+        },
+      })),
+    ];
+
+    if (transactItems.length) {
+      await getDocumentClient().send(new TransactWriteCommand({ TransactItems: transactItems }));
+    }
+
+    return listScheduledPollsFromBackend(input.createdBy);
+  }
+
   const nextPoll: ScheduledPoll = {
     ...existingPoll,
     anonymous,
@@ -572,13 +703,17 @@ export async function updateScheduledPollInBackend(input: UpdateScheduledPollInp
     participantGroupIds,
     participantType: input.participantType,
     questionIds,
+    recurrenceCycleCount: null,
+    recurrenceCycleIndex: null,
+    recurrenceFrequency: null,
+    responseMode: resolvePollResponseMode(input),
     shareCode: input.generateQrCode
       ? existingPoll.shareCode ?? `TRAPIT-POLL-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
       : null,
     startsAt: input.startsAt,
     status: resolveScheduledPollStatus({ endsAt: input.endsAt, startsAt: input.startsAt }),
     title,
-    updatedAt: new Date().toISOString(),
+    updatedAt: timestamp,
   };
 
   await getDocumentClient().send(new PutCommand({
@@ -767,4 +902,41 @@ export async function recordRegisteredPollAttemptInBackend(input: {
   }
 
   return attempt;
+}
+
+export async function listCompletedPollSeriesResultsFromBackend(seriesId: string) {
+  const [polls, attempts, questions] = await Promise.all([
+    scanAllItems<ScheduledPoll>(getPollTables().scheduledPolls),
+    scanAllItems<PollAttempt>(getPollTables().attempts),
+    scanAllItems<PersistentPollQuestion>(getPollTables().questions),
+  ]);
+  const questionMap = new Map(questions.map((question) => [question.id, question]));
+
+  return hydrateScheduledPolls(polls)
+    .filter((poll) => poll.seriesId === seriesId && poll.status === "completed")
+    .sort((left, right) => (left.recurrenceCycleIndex ?? 0) - (right.recurrenceCycleIndex ?? 0))
+    .map((poll) => {
+      const pollAttempts = attempts.filter((attempt) => attempt.pollId === poll.id);
+      const summary = poll.questionIds
+        .map((questionId) => questionMap.get(questionId))
+        .filter((question): question is PersistentPollQuestion => Boolean(question))
+        .map((question) => ({
+          optionSelectionCounts: question.options.map((_, optionIndex) =>
+            pollAttempts.filter((attempt) => attempt.answers[question.id] === optionIndex).length),
+          options: question.options,
+          prompt: question.prompt,
+          questionId: question.id,
+          topic: question.topic,
+          totalResponses: pollAttempts.length,
+        }));
+
+      return {
+        endsAt: poll.endsAt,
+        label: `Instance ${(poll.recurrenceCycleIndex ?? 0) + 1}`,
+        pollId: poll.id,
+        startsAt: poll.startsAt,
+        summary,
+        totalResponses: pollAttempts.length,
+      };
+    });
 }

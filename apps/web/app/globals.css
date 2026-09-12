@@ -2781,8 +2781,21 @@ main {
 }
 
 .poll-result-option {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   font-weight: 600;
   line-height: 1.4;
+}
+
+.poll-result-row-highest {
+  border-left: 3px solid var(--accent);
+  padding-left: 10px;
+}
+
+.poll-result-row-highest .poll-result-bar-track {
+  background: rgba(184, 92, 56, 0.2);
 }
 
 .poll-result-meta {
@@ -2803,6 +2816,60 @@ main {
   min-width: 8px;
   border-radius: inherit;
   background: linear-gradient(90deg, #b85c38 0%, #d7a86e 100%);
+}
+
+.poll-unified-table-wrap {
+  overflow-x: auto;
+}
+
+.poll-unified-table {
+  min-width: 1320px;
+  table-layout: fixed;
+}
+
+.poll-unified-table th:nth-child(1),
+.poll-unified-table td:nth-child(1) {
+  width: 170px;
+}
+
+.poll-unified-table th:nth-child(2),
+.poll-unified-table td:nth-child(2),
+.poll-unified-table th:nth-child(3),
+.poll-unified-table td:nth-child(3),
+.poll-unified-table th:nth-child(4),
+.poll-unified-table td:nth-child(4) {
+  width: 180px;
+}
+
+.poll-unified-table th:nth-child(5),
+.poll-unified-table td:nth-child(5),
+.poll-unified-table th:nth-child(6),
+.poll-unified-table td:nth-child(6) {
+  width: 160px;
+}
+
+.poll-unified-table input,
+.poll-unified-table select {
+  box-sizing: border-box;
+  margin: 2px 0;
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+
+.poll-unified-table select[multiple] {
+  min-height: 88px;
+}
+
+.poll-scheduler-row td {
+  background: color-mix(in srgb, var(--surface) 92%, var(--accent));
+  vertical-align: top;
+}
+
+.poll-scheduler-row .button,
+.poll-scheduler-row .button-secondary {
+  margin: 2px 0;
+  width: 100%;
 }
 
 @media (max-width: 640px) {

@@ -17,6 +17,7 @@ import {
   type PollQuestionDraft,
   type PersistentPollQuestion,
   type PollParticipantType,
+  type PollRecurrenceFrequency,
   type ScheduledPoll,
   validatePollQuestionDraft,
   validateQuestionDraft,
@@ -81,6 +82,27 @@ Example:
 ${POLL_OCR_EXAMPLE}`;
 
 const SELF_TEST_GROUP_OPTION_ID = "__self-test__";
+
+const POLL_DURATION_OPTIONS = [
+  { label: "30 mins", value: "30" },
+  { label: "1 hr", value: "60" },
+  { label: "2 hrs", value: "120" },
+  { label: "4 hrs", value: "240" },
+  { label: "8 hrs", value: "480" },
+  { label: "1 day", value: "1440" },
+  { label: "2 days", value: "2880" },
+  { label: "Recurring Weekly", value: "recurring-weekly" },
+  { label: "Recurring Bi-weekly", value: "recurring-biweekly" },
+  { label: "Recurring Monthly", value: "recurring-monthly" },
+] as const;
+
+const POLL_START_TIME_OPTIONS = Array.from({ length: 48 }, (_, index) => {
+  const hours = Math.floor(index / 2);
+  const minutes = index % 2 ? "30" : "00";
+  const period = hours >= 12 ? "PM" : "AM";
+  const displayHours = hours % 12 || 12;
+  return { label: `${displayHours}:${minutes} ${period}`, value: `${String(hours).padStart(2, "0")}:${minutes}` };
+});
 
 const BUSINESS_WEEK_DAYS = [
   { key: "Mon", label: "M", name: "Monday" },
@@ -1243,6 +1265,12 @@ type UnifiedAdminPollListItem = {
   title: string;
 };
 
+type UnifiedAdminPollSeriesItem = UnifiedAdminPollListItem & {
+  cycles: UnifiedAdminPollListItem[];
+  overallStartsAt: string;
+  pendingCycleCount: number;
+};
+
 type ShuffledQuestion = {
   displayOptions: string[];
   originalOptionIndexes: number[];
@@ -1786,6 +1814,7 @@ export function AdminQuestionWorkspace({
   const [pollScheduleQuestionIds, setPollScheduleQuestionIds] = useState<string[]>([]);
   const [pollScheduleStartsAtInput, setPollScheduleStartsAtInput] = useState(createDefaultScheduleTime());
   const [pollScheduleDurationMinutes, setPollScheduleDurationMinutes] = useState("60");
+  const [pollScheduleRecurrenceCycleCount, setPollScheduleRecurrenceCycleCount] = useState("6");
   const [pollScheduleTitle, setPollScheduleTitle] = useState("");
   const [scheduledPolls, setScheduledPolls] = useState<ScheduledPoll[]>([]);
   const [testQrCodes, setTestQrCodes] = useState<Record<string, string>>({});
@@ -2558,6 +2587,7 @@ export function AdminQuestionWorkspace({
     setPollScheduleQuestionIds([]);
     setPollScheduleStartsAtInput(createDefaultScheduleTime());
     setPollScheduleDurationMinutes("60");
+    setPollScheduleRecurrenceCycleCount("6");
     setPollScheduleTitle("");
   }
 
@@ -2585,12 +2615,13 @@ export function AdminQuestionWorkspace({
     setPollScheduleTypedDrafts([]);
     setPollScheduleQuestionIds([...poll.questionIds]);
     setPollScheduleStartsAtInput(toDateTimeInputValue(poll.startsAt));
-    setPollScheduleDurationMinutes(
-      String(Math.max(1, Math.round((new Date(poll.endsAt).getTime() - new Date(poll.startsAt).getTime()) / 60000))),
-    );
+    setPollScheduleDurationMinutes(poll.recurrenceFrequency
+      ? `recurring-${poll.recurrenceFrequency}`
+      : String(Math.max(1, Math.round((new Date(poll.endsAt).getTime() - new Date(poll.startsAt).getTime()) / 60000))));
+    setPollScheduleRecurrenceCycleCount(String(poll.recurrenceCycleCount ?? 6));
     setPollScheduleTitle(poll.title);
     setPollFeedback(null);
-    setOpenSection("poll-schedule");
+    setOpenSection("history");
   }
 
   function handleStartEditingScheduledTest(test: ScheduledTest) {
@@ -4172,10 +4203,24 @@ export function AdminQuestionWorkspace({
       return;
     }
 
-    const durationMinutes = Number(pollScheduleDurationMinutes);
+    const recurrenceFrequency = pollScheduleDurationMinutes.startsWith("recurring-")
+      ? pollScheduleDurationMinutes.replace("recurring-", "") as PollRecurrenceFrequency
+      : null;
+    const recurrenceCycleCount = recurrenceFrequency ? Number(pollScheduleRecurrenceCycleCount) : null;
+    const durationMinutes = recurrenceFrequency ? 60 : Number(pollScheduleDurationMinutes);
 
     if (!Number.isFinite(durationMinutes) || durationMinutes < 1) {
-      setPollFeedback("Poll duration must be at least 1 minute.");
+      setPollFeedback("Choose a valid poll duration.");
+      return;
+    }
+
+    if (recurrenceFrequency && (!Number.isInteger(recurrenceCycleCount) || (recurrenceCycleCount ?? 0) < 1 || (recurrenceCycleCount ?? 0) > 50)) {
+      setPollFeedback("Recurring polls require between 1 and 50 cycles.");
+      return;
+    }
+
+    if (recurrenceFrequency && pollScheduleParticipantType === "open" && !pollScheduleOpenRequiresRegistration) {
+      setPollFeedback("Recurring polls require participant registration.");
       return;
     }
 
@@ -4187,17 +4232,12 @@ export function AdminQuestionWorkspace({
     const startsAt = new Date(pollScheduleStartsAtInput).toISOString();
     const endsAt = new Date(new Date(startsAt).getTime() + durationMinutes * 60 * 1000).toISOString();
 
-    const selectedQuestions = pollQuestions.filter((question) => pollScheduleQuestionIds.includes(question.id));
-    const selectedTopics = Array.from(
-      new Set([
-        ...selectedQuestions.map((question) => question.topic.trim()),
-        ...typedDrafts.map((draft) => draft.topic.trim()),
-      ].filter(Boolean)),
-    );
-    const title = pollScheduleTitle.trim()
-      || (selectedTopics.length === 1
-        ? selectedTopics[0]
-        : `${pollScheduleQuestionIds.length + typedDrafts.length} question poll`);
+    const title = pollScheduleTitle.trim();
+
+    if (!title) {
+      setPollFeedback("Poll topic is required.");
+      return;
+    }
 
     void mutateWorkspace(async () => {
       await readJson<PollsResponse>(
@@ -4214,6 +4254,8 @@ export function AdminQuestionWorkspace({
             participantType: pollScheduleParticipantType,
             pollId: editingScheduledPollId,
             questionIds: pollScheduleQuestionIds,
+            recurrenceCycleCount,
+            recurrenceFrequency,
             startsAt,
             title,
           }),
@@ -4758,6 +4800,35 @@ export function AdminQuestionWorkspace({
 
       return new Date(rightPoll.startsAt).getTime() - new Date(leftPoll.startsAt).getTime();
     });
+  const groupedPollSeriesMap = new Map<string, UnifiedAdminPollListItem[]>();
+
+  for (const poll of filteredMergedPolls) {
+    const resolvedPoll = poll.scheduledPoll ?? poll.participantPoll;
+    const seriesKey = resolvedPoll?.seriesId ?? poll.id;
+    groupedPollSeriesMap.set(seriesKey, [...(groupedPollSeriesMap.get(seriesKey) ?? []), poll]);
+  }
+
+  const unifiedPollSeriesRows = Array.from(groupedPollSeriesMap.entries()).map<UnifiedAdminPollSeriesItem>(([seriesKey, cycles]) => {
+    const sortedCycles = [...cycles].sort((left, right) =>
+      new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime(),
+    );
+    const representative = sortedCycles.find((cycle) => cycle.status === "live")
+      ?? sortedCycles.find((cycle) => cycle.status === "scheduled")
+      ?? sortedCycles[sortedCycles.length - 1];
+
+    return {
+      ...representative,
+      cycles: sortedCycles,
+      hasAdminScope: sortedCycles.some((cycle) => cycle.hasAdminScope),
+      hasParticipantScope: sortedCycles.some((cycle) => cycle.hasParticipantScope),
+      id: seriesKey,
+      overallStartsAt: sortedCycles[0]?.startsAt ?? representative.startsAt,
+      pendingCycleCount: sortedCycles.filter((cycle) => cycle.status === "scheduled").length,
+    };
+  }).sort((left, right) => {
+    const priorityDifference = adminTestStatusPriority[left.status] - adminTestStatusPriority[right.status];
+    return priorityDifference || new Date(right.overallStartsAt).getTime() - new Date(left.overallStartsAt).getTime();
+  });
   const testToggleLiveCount = filteredMergedTests.filter((test) => test.status === "live").length;
   const testToggleUpcomingCount = filteredMergedTests.filter((test) => test.status === "scheduled").length;
   const pollToggleLiveCount = filteredMergedPolls.filter((poll) => poll.status === "live").length;
@@ -8243,7 +8314,7 @@ export function AdminQuestionWorkspace({
         </div>
       ) : null}
 
-      {openSection === "poll-schedule" ? (
+      {openSection === "poll-schedule" && isPollAddQuestionOpen ? (
         <div className="apportion-modal-overlay" role="presentation" onClick={() => setOpenSection("history")}>
           <div aria-labelledby="schedule-poll-drawer-title" className={`apportion-floating-drawer panel${isPollAddQuestionOpen ? " is-question-authoring" : ""}`} role="dialog" onClick={(event) => event.stopPropagation()}>
             <div className="workspace-overflow-head">
@@ -8476,6 +8547,8 @@ export function AdminQuestionWorkspace({
             </div>
           </CollapsibleWorkspaceSection>
 
+          {!isPollAddQuestionOpen ? (
+          <>
           <div className="question-card form-stack">
             <div className="field">
               <label htmlFor="poll-title">Topic or purpose</label>
@@ -8788,6 +8861,8 @@ export function AdminQuestionWorkspace({
               <p className="muted-text">No polls scheduled yet.</p>
             </div>
           )}
+          </>
+          ) : null}
         </div>
           </div>
         </div>
@@ -8862,10 +8937,12 @@ export function AdminQuestionWorkspace({
 
                 if (resultsMode === "tests") {
                   setIsTestAddQuestionOpen(false);
+                  handleMenuSectionSelection(section);
                 } else {
                   setIsPollAddQuestionOpen(false);
+                  resetPollScheduleForm();
+                  setOpenSection("history");
                 }
-                handleMenuSectionSelection(section);
               }}
             >
               {resultsMode === "tests" ? "Schedule Test" : "Schedule Poll"}
@@ -9696,105 +9773,128 @@ export function AdminQuestionWorkspace({
                 <p className="muted-text">No tests match this view yet.</p>
               </div>
             )
-          ) : !activeParticipantTest && filteredMergedPolls.length ? (
+          ) : !activeParticipantTest ? (
             <div className="form-stack">
-              <div className="workspace-result-table-group">
-                <h3>Upcoming</h3>
-                {upcomingMergedPolls.length ? (
-                  <div className="leaderboard-table-wrap workspace-result-table-wrap">
-                    <table className="leaderboard-table">
-                      <thead>
-                        <tr>
-                          <th>Poll</th>
-                          <th>Started</th>
-                          <th>Ended</th>
-                          <th>Questions</th>
-                          <th>Response Mode</th>
-                          <th>Responses So Far</th>
-                          <th>Poll Scheduled By</th>
-                          <th>Status</th>
+              <div className="leaderboard-table-wrap workspace-result-table-wrap poll-unified-table-wrap">
+                <table className="leaderboard-table poll-unified-table">
+                  <thead>
+                    <tr>
+                      <th>Poll Topic</th>
+                      <th>Response Mode</th>
+                      <th>Duration</th>
+                      <th>Start Date and Time</th>
+                      <th>Questions</th>
+                      <th>Groups</th>
+                      <th>Responses So Far</th>
+                      <th>Poll Scheduled By</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="poll-scheduler-row">
+                      <td><input aria-label="Poll Topic" placeholder="Poll topic" value={pollScheduleTitle} onChange={(event) => setPollScheduleTitle(event.target.value)} /></td>
+                      <td>
+                        <select
+                          aria-label="Response Mode"
+                          value={pollScheduleParticipantType === "registered"
+                            ? (pollScheduleAnonymous ? "groups-anonymous" : "groups-named")
+                            : (pollScheduleOpenRequiresRegistration ? "open-registered-anonymous" : "open-unregistered-anonymous")}
+                          onChange={(event) => {
+                            const mode = event.target.value;
+                            const isOpen = mode.startsWith("open-");
+                            setPollScheduleParticipantType(isOpen ? "open" : "registered");
+                            setPollScheduleAnonymous(mode !== "groups-named");
+                            setPollScheduleGenerateQrCode(isOpen);
+                            setPollScheduleOpenRequiresRegistration(mode === "open-registered-anonymous");
+                          }}
+                        >
+                          <option value="groups-named">Groups only - Named</option>
+                          <option value="groups-anonymous">Groups only - Anonymous</option>
+                          <option value="open-registered-anonymous">Groups &amp; Open for all - Anonymous with Registration</option>
+                          <option disabled={pollScheduleDurationMinutes.startsWith("recurring-")} value="open-unregistered-anonymous">Groups &amp; Open for all - Anonymous without Registration</option>
+                        </select>
+                      </td>
+                      <td>
+                        <select aria-label="Duration" value={pollScheduleDurationMinutes} onChange={(event) => {
+                          const value = event.target.value;
+                          setPollScheduleDurationMinutes(value);
+                          if (value.startsWith("recurring-") && pollScheduleParticipantType === "open") {
+                            setPollScheduleOpenRequiresRegistration(true);
+                          }
+                        }}>
+                          {POLL_DURATION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        </select>
+                        {pollScheduleDurationMinutes.startsWith("recurring-") ? (
+                          <input aria-label="Number of cycles" min={1} max={50} type="number" value={pollScheduleRecurrenceCycleCount} onChange={(event) => setPollScheduleRecurrenceCycleCount(event.target.value)} />
+                        ) : null}
+                      </td>
+                      <td>
+                        <input aria-label="Start date" type="date" value={pollScheduleStartsAtInput.slice(0, 10)} onChange={(event) => setPollScheduleStartsAtInput(`${event.target.value}T${pollScheduleStartsAtInput.slice(11, 16) || "00:00"}`)} />
+                        <select aria-label="Start time" value={pollScheduleStartsAtInput.slice(11, 16)} onChange={(event) => setPollScheduleStartsAtInput(`${pollScheduleStartsAtInput.slice(0, 10)}T${event.target.value}`)}>
+                          {POLL_START_TIME_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        </select>
+                      </td>
+                      <td>
+                        <select aria-label="Questions" multiple value={pollScheduleQuestionIds} onChange={(event) => setPollScheduleQuestionIds(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>
+                          {pollQuestions.map((question) => <option key={question.id} value={question.id}>{question.prompt}</option>)}
+                        </select>
+                      </td>
+                      <td>
+                        <select aria-label="Groups" multiple value={pollScheduleGroupIds} onChange={(event) => setPollScheduleGroupIds(Array.from(event.currentTarget.selectedOptions, (option) => option.value))}>
+                          {participantGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}
+                        </select>
+                      </td>
+                      <td>0</td>
+                      <td>Creator<br /><span className="muted-text">{formatPhoneNumberForDisplay(currentAdminIdentifier, { showFullPhoneNumber: false })}</span></td>
+                      <td>
+                        <button className="button small-button" disabled={isMutating} type="button" onClick={handleSchedulePoll}>{editingScheduledPollId ? "Update" : "Schedule"}</button>
+                        {editingScheduledPollId ? <button className="button-secondary small-button" type="button" onClick={resetPollScheduleForm}>Cancel</button> : null}
+                      </td>
+                    </tr>
+                    {unifiedPollSeriesRows.map((row) => {
+                      const resolvedPoll = row.scheduledPoll ?? row.participantPoll;
+                      if (!resolvedPoll) return null;
+                      const pollPath = resolvedPoll.participantType === "registered" ? getRegisteredPollPath(resolvedPoll.id) : resolvedPoll.shareCode ? getPollAccessUrl(resolvedPoll.shareCode) : null;
+                      const completedResultCycle = [...row.cycles].reverse().find((cycle) => cycle.status === "completed");
+                      const completedResultPoll = completedResultCycle?.scheduledPoll ?? completedResultCycle?.participantPoll ?? null;
+                      const resultPollPath = completedResultPoll
+                        ? completedResultPoll.participantType === "registered"
+                          ? getRegisteredPollPath(completedResultPoll.id)
+                          : completedResultPoll.shareCode
+                            ? getPollAccessUrl(completedResultPoll.shareCode)
+                            : null
+                        : null;
+                      const editablePoll = row.cycles.find((cycle) => cycle.status === "scheduled" && cycle.scheduledPoll)?.scheduledPoll ?? null;
+                      const groupNames = resolvedPoll.participantGroupIds.map((groupId) => participantGroups.find((group) => group.id === groupId)?.name ?? groupId).join(", ");
+                      return (
+                        <tr key={`poll-series-${row.id}`}>
+                          <td>{row.title} {resolvedPoll.seriesId ? <span className="status-chip success">Recurring</span> : null}</td>
+                          <td>{resolvedPoll.responseMode === "groups-named" ? "Groups only - Named" : resolvedPoll.responseMode === "groups-anonymous" ? "Groups only - Anonymous" : resolvedPoll.responseMode === "open-registered-anonymous" ? "Open - Registration" : "Open - Guest"}</td>
+                          <td>{resolvedPoll.recurrenceFrequency ? <>{resolvedPoll.recurrenceFrequency === "biweekly" ? "Bi-weekly" : `${resolvedPoll.recurrenceFrequency[0].toUpperCase()}${resolvedPoll.recurrenceFrequency.slice(1)}`}<br /><span className="muted-text">{row.pendingCycleCount} pending</span></> : `${Math.max(1, Math.round((new Date(resolvedPoll.endsAt).getTime() - new Date(resolvedPoll.startsAt).getTime()) / 60000))} mins`}</td>
+                          <td>{formatShortDateTime(row.overallStartsAt)}</td>
+                          <td>{resolvedPoll.questionIds.length}</td>
+                          <td>{groupNames || "-"}</td>
+                          <td>{resolvedPoll.totalResponses ?? 0}</td>
+                          <td>{resolvedPoll.creatorDisplayName ?? formatPhoneNumberForDisplay(resolvedPoll.creatorIdentifier ?? resolvedPoll.createdBy, { showFullPhoneNumber: isSuperAdmin })}</td>
+                          <td>
+                            <div className="inline-actions">
+                              {row.status === "live" && pollPath ? <a className="status-chip success" href={pollPath} target="_blank" rel="noreferrer">Live</a> : null}
+                              {row.status === "scheduled" && !editablePoll ? <span className="status-chip warning">Upcoming</span> : null}
+                              {resultPollPath ? <a className="button-secondary small-button" href={resultPollPath} target="_blank" rel="noreferrer">Results</a> : null}
+                              {row.hasAdminScope && editablePoll ? <button className="button-secondary small-button" type="button" onClick={() => handleStartEditingPoll(editablePoll)}>Edit</button> : null}
+                            </div>
+                            <br /><span className="muted-text">Ends {formatShortDateTime(resolvedPoll.endsAt)}</span>
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {upcomingMergedPolls.map((poll) => {
-                          const resolvedPoll = poll.scheduledPoll ?? poll.participantPoll;
-                          const pollPath = resolvedPoll?.participantType === "registered"
-                            ? getRegisteredPollPath(resolvedPoll.id)
-                            : resolvedPoll?.shareCode
-                              ? getPollAccessUrl(resolvedPoll.shareCode)
-                              : null;
-
-                          return (
-                            <tr key={`upcoming-poll-${poll.id}`}>
-                              <td>{poll.title}</td>
-                              <td>{resolvedPoll ? formatShortDateTime(resolvedPoll.startsAt) : "-"}</td>
-                              <td>{resolvedPoll ? formatShortDateTime(resolvedPoll.endsAt) : "-"}</td>
-                              <td>{resolvedPoll?.questionIds.length ?? 0}</td>
-                              <td>{resolvedPoll ? `${resolvedPoll.participantType === "open" ? "Open" : "Groups"} / ${resolvedPoll.anonymous ? "Anonymous" : "Named"}` : "-"}</td>
-                              <td>{resolvedPoll?.totalResponses ?? 0}</td>
-                              <td>{resolvedPoll?.creatorDisplayName ?? formatPhoneNumberForDisplay(resolvedPoll?.creatorIdentifier ?? resolvedPoll?.createdBy, { showFullPhoneNumber: isSuperAdmin })}</td>
-                              <td>
-                                {poll.status === "live" && pollPath ? (
-                                  <a className="status-chip success" href={pollPath}>Live</a>
-                                ) : (
-                                  <span className="status-chip warning">Upcoming</span>
-                                )}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : <p className="muted-text">No upcoming polls.</p>}
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-
-              <div className="workspace-result-table-group">
-                <h3>Completed</h3>
-                {completedMergedPolls.length ? (
-                  <div className="leaderboard-table-wrap workspace-result-table-wrap">
-                    <table className="leaderboard-table">
-                      <thead>
-                        <tr>
-                          <th>Poll</th>
-                          <th>Started</th>
-                          <th>Ended</th>
-                          <th>Questions</th>
-                          <th>Response Mode</th>
-                          <th>Responses So Far</th>
-                          <th>Poll Scheduled By</th>
-                          <th>Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {completedMergedPolls.map((poll) => {
-                          const resolvedPoll = poll.scheduledPoll ?? poll.participantPoll;
-
-                          return (
-                            <tr key={`completed-poll-${poll.id}`}>
-                              <td>{poll.title}</td>
-                              <td>{resolvedPoll ? formatShortDateTime(resolvedPoll.startsAt) : "-"}</td>
-                              <td>{resolvedPoll ? formatShortDateTime(resolvedPoll.endsAt) : "-"}</td>
-                              <td>{resolvedPoll?.questionIds.length ?? 0}</td>
-                              <td>{resolvedPoll ? `${resolvedPoll.participantType === "open" ? "Open" : "Groups"} / ${resolvedPoll.anonymous ? "Anonymous" : "Named"}` : "-"}</td>
-                              <td>{resolvedPoll?.totalResponses ?? 0}</td>
-                              <td>{resolvedPoll?.creatorDisplayName ?? formatPhoneNumberForDisplay(resolvedPoll?.creatorIdentifier ?? resolvedPoll?.createdBy, { showFullPhoneNumber: isSuperAdmin })}</td>
-                              <td>
-                                <button className="button-secondary small-button" type="button" onClick={() => openPollResultDetails(poll.id)}>
-                                  View Results
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                ) : <p className="muted-text">No completed polls.</p>}
-              </div>
+              {pollFeedback ? <p className="muted-text">{pollFeedback}</p> : null}
 
             <div className="question-list">
-              {filteredMergedPolls.map((poll) => {
+              {false && filteredMergedPolls.map((poll) => {
                 const resolvedPoll = poll.scheduledPoll ?? poll.participantPoll;
 
                 if (!resolvedPoll) {

@@ -185,6 +185,28 @@ export function RestrictedUserDashboardWorkspace({
 
     return new Date(rightPoll.startsAt).getTime() - new Date(leftPoll.startsAt).getTime();
   });
+  const participantPollSeriesMap = new Map<string, ScheduledPoll[]>();
+
+  for (const poll of sortedAvailablePolls) {
+    const key = poll.seriesId ?? poll.id;
+    participantPollSeriesMap.set(key, [...(participantPollSeriesMap.get(key) ?? []), poll]);
+  }
+
+  const participantPollRows = Array.from(participantPollSeriesMap.entries()).map(([id, cycles]) => {
+    const sortedCycles = [...cycles].sort((left, right) => new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime());
+    const poll = sortedCycles.find((cycle) => cycle.status === "live")
+      ?? sortedCycles.find((cycle) => cycle.status === "scheduled")
+      ?? sortedCycles[sortedCycles.length - 1];
+    return {
+      id,
+      overallStartsAt: sortedCycles[0]?.startsAt ?? poll.startsAt,
+      pendingCycleCount: sortedCycles.filter((cycle) => cycle.status === "scheduled").length,
+      poll,
+    };
+  }).sort((left, right) => {
+    const priorityDifference = statusPriority[left.poll.status] - statusPriority[right.poll.status];
+    return priorityDifference || new Date(right.overallStartsAt).getTime() - new Date(left.overallStartsAt).getTime();
+  });
   const assessmentLogRows: AssessmentLogRow[] = [
     ...sortedAvailableTests.map((test) => {
       const historyEntry = historyByTestId.get(test.id);
@@ -670,50 +692,33 @@ export function RestrictedUserDashboardWorkspace({
 
               {resultsMode === "tests" ? (
                 <AssessmentLogTable rows={assessmentLogRows} />
-              ) : sortedAvailablePolls.length ? (
-                <div className="question-list">
-                  {sortedAvailablePolls.map((poll) => (
-                    (() => {
-                      const pollShareCode = poll.shareCode ?? null;
-                      const pollAccessPath = pollShareCode ? getPollAccessPath(pollShareCode) : null;
-                      const showPollOpenAction = Boolean(pollAccessPath);
-                      const showPollAccessDetails = showPollOpenAction && poll.status !== "completed";
-
-                      return (
-                        <article className="question-card" key={poll.id}>
-                          <div className="question-head">
-                            <strong>{poll.title}</strong>
-                            <div className="inline-actions">
-                              <span className="status-chip success">Participant</span>
-                              <span className={`status-chip ${poll.status === "live" ? "success" : "warning"}`}>
-                                {poll.status}
-                              </span>
-                            </div>
-                          </div>
-                          <p className="muted-text">Starts: {formatShortDateTime(poll.startsAt)}</p>
-                          <p className="muted-text">Ends: {formatShortDateTime(poll.endsAt)}</p>
-                          <p className="muted-text">Questions: {poll.questionIds.length}</p>
-                          <p className="muted-text">Poll link: {poll.shareCode ? (poll.openPollRequiresRegistration ? "Open, registration required" : "Open, guest responses allowed") : "Use group link"}</p>
-                          <p className="muted-text">Anonymity: {poll.anonymous ? "Anonymous" : "Named"}</p>
-                          {showPollAccessDetails ? <p className="muted-text">Access code: {pollShareCode}</p> : null}
-                          {showPollOpenAction ? (
-                            <div className="inline-actions">
-                              <a className="button-secondary small-button" href={pollAccessPath ?? undefined}>
-                                {poll.status === "live" ? "Respond to poll" : "Open poll page"}
-                              </a>
-                            </div>
-                          ) : null}
-                          {poll.status === "live" ? (
-                            <p className="muted-text">
-                              {poll.shareCode ? "This poll is live now. Open the poll page to answer the questions." : "This poll is live now."}
-                            </p>
-                          ) : poll.status === "scheduled" ? (
-                            <p className="muted-text">This poll has not started yet.</p>
-                          ) : null}
-                        </article>
-                      );
-                    })()
-                  ))}
+              ) : participantPollRows.length ? (
+                <div className="leaderboard-table-wrap workspace-result-table-wrap poll-unified-table-wrap">
+                  <table className="leaderboard-table poll-unified-table">
+                    <thead><tr><th>Poll Topic</th><th>Response Mode</th><th>Duration</th><th>Start Date and Time</th><th>Questions</th><th>Groups</th><th>Responses So Far</th><th>Poll Scheduled By</th><th>Status</th></tr></thead>
+                    <tbody>
+                      {participantPollRows.map(({ id, overallStartsAt, pendingCycleCount, poll }) => {
+                        const pollPath = poll.participantType === "registered" ? `/user/poll/${encodeURIComponent(poll.id)}` : poll.shareCode ? getPollAccessPath(poll.shareCode) : null;
+                        const responseMode = poll.responseMode === "groups-named" ? "Groups only - Named" : poll.responseMode === "groups-anonymous" ? "Groups only - Anonymous" : poll.responseMode === "open-registered-anonymous" ? "Open - Registration" : "Open - Guest";
+                        return (
+                          <tr key={id}>
+                            <td>{poll.title} {poll.seriesId ? <span className="status-chip success">Recurring</span> : null}</td>
+                            <td>{responseMode}</td>
+                            <td>{poll.recurrenceFrequency ? <>{poll.recurrenceFrequency === "biweekly" ? "Bi-weekly" : `${poll.recurrenceFrequency[0].toUpperCase()}${poll.recurrenceFrequency.slice(1)}`}<br /><span className="muted-text">{pendingCycleCount} pending</span></> : `${Math.max(1, Math.round((new Date(poll.endsAt).getTime() - new Date(poll.startsAt).getTime()) / 60000))} mins`}</td>
+                            <td>{formatShortDateTime(overallStartsAt)}</td>
+                            <td>{poll.questionIds.length}</td>
+                            <td>{poll.groupNames?.join(", ") || "-"}</td>
+                            <td>{poll.totalResponses ?? 0}</td>
+                            <td>{poll.creatorDisplayName ?? formatPhoneNumberForDisplay(poll.creatorIdentifier ?? poll.createdBy)}</td>
+                            <td>
+                              {poll.status === "scheduled" ? <span className="status-chip warning">Upcoming</span> : poll.status === "live" && !poll.hasSubmitted && pollPath ? <a className="status-chip success" href={pollPath} target="_blank" rel="noreferrer">Live</a> : <a className="button-secondary small-button" href={pollPath ?? undefined} target="_blank" rel="noreferrer">Results</a>}
+                              <br /><span className="muted-text">Ends {formatShortDateTime(poll.endsAt)}</span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               ) : (
                 <div className="empty-state">

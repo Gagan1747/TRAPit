@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getUserActor } from "../../../../../lib/user-api";
-import { getParticipantPollById } from "../../../../../lib/testing-store";
+import { getParticipantPollById, listCompletedPollSeriesResults } from "../../../../../lib/testing-store";
 
 function maskPhoneNumber(value: string | null) {
   if (!value) {
@@ -29,6 +29,10 @@ export async function GET(
 
   try {
     const payload = await getParticipantPollById(context.params.pollId, actor.identifier);
+    const seriesResults = await listCompletedPollSeriesResults(payload.poll, {
+      identifier: actor.identifier,
+      isRegistered: true,
+    });
 
     return NextResponse.json({
       actor: {
@@ -40,6 +44,7 @@ export async function GET(
         displayName: payload.poll.creatorDisplayName ?? null,
         maskedIdentifier: maskPhoneNumber(payload.poll.creatorIdentifier ?? null),
       },
+      seriesResults,
       ...payload,
     });
   } catch (error) {

@@ -274,7 +274,8 @@ function estimateQueueStart(input: {
   const now = new Date();
   const nowIst = new Date(now.getTime() + (IST_OFFSET_MINUTES * 60 * 1000));
   const nowMinutes = nowIst.getUTCHours() * 60 + nowIst.getUTCMinutes() + (nowIst.getUTCSeconds() / 60);
-  let estimateMinutes = Math.max(ranges[0].startMinutes, nowMinutes);
+  const isToday = input.serviceDateKey === getIstDateKey(now);
+  let estimateMinutes = isToday ? Math.max(ranges[0].startMinutes, nowMinutes) : ranges[0].startMinutes;
   let remainingServiceMinutes = Math.floor(input.activeCount / Math.max(1, input.appointmentsPerSlot)) * slotDurationMinutes;
 
   for (const range of ranges) {
@@ -460,12 +461,6 @@ export async function POST(
     const plannedAppointments: Array<{ justAddToList: boolean; serviceDateKey: string; startsAt: string }> = [];
 
     if (business.branding.justAddToList) {
-      const todayIstDateKey = getIstDateKey(new Date());
-
-      if (slotDateKey !== todayIstDateKey) {
-        throw new Error("Queue appointments can only be booked for today.");
-      }
-
       const activeCountsByDateKey = activeOwnerAppointments
         .reduce<Record<string, number>>((counts, appointment) => {
           counts[appointment.serviceDateKey] = (counts[appointment.serviceDateKey] ?? 0) + 1;
@@ -484,7 +479,7 @@ export async function POST(
         });
 
         if (!estimate) {
-          throw new Error("Queue booking is closed for today.");
+          throw new Error(`Queue booking is unavailable for ${recurringDateKey}.`);
         }
 
         plannedAppointments.push({

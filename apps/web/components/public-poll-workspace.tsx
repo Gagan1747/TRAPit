@@ -38,6 +38,14 @@ type PublicPollResponse = {
     prompt: string;
     topic: string;
   }>;
+  seriesResults: Array<{
+    endsAt: string;
+    label: string;
+    pollId: string;
+    startsAt: string;
+    summary: PublicPollResponse["summary"];
+    totalResponses: number | null;
+  }>;
   summary: Array<{
     optionSelectionCounts: number[];
     options: string[];
@@ -96,6 +104,7 @@ function PollWorkspace({ accessRequestPath, invitePath = "/poll", loadPath, stor
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [participantName, setParticipantName] = useState("");
   const [payload, setPayload] = useState<PublicPollResponse | null>(null);
+  const [selectedResultPollId, setSelectedResultPollId] = useState<string>("");
   const [startedAt, setStartedAt] = useState<string | null>(null);
   const activeQuestion =
     payload && currentQuestionIndex < payload.questions.length
@@ -119,6 +128,11 @@ function PollWorkspace({ accessRequestPath, invitePath = "/poll", loadPath, stor
     && payload.poll.openPollRequiresRegistration
     && !payload.actor.isRegistered,
   );
+  const selectedSeriesResult = payload?.seriesResults.find((result) => result.pollId === selectedResultPollId)
+    ?? payload?.seriesResults[payload.seriesResults.length - 1]
+    ?? null;
+  const visibleSummary = selectedSeriesResult?.summary ?? payload?.summary ?? [];
+  const canShowResults = Boolean(selectedSeriesResult || payload?.canViewResults);
   const signInPath = `/sign-in?redirect=${encodeURIComponent(invitePath)}`;
   const signUpPath = `/sign-up?redirect=${encodeURIComponent(invitePath)}`;
 
@@ -570,7 +584,25 @@ function PollWorkspace({ accessRequestPath, invitePath = "/poll", loadPath, stor
                   {isDetailsExpanded ? "-" : "+"}
                 </button>
               </div>
-              {!payload.canViewResults && payload.hasSubmitted && !payload.actor.isRegistered ? (
+              {payload.seriesResults.length ? (
+                <div className="field">
+                  <label htmlFor="poll-result-instance">Completed instance</label>
+                  <select
+                    id="poll-result-instance"
+                    value={selectedSeriesResult?.pollId ?? ""}
+                    onChange={(event) => setSelectedResultPollId(event.target.value)}
+                  >
+                    {payload.seriesResults.map((result) => (
+                      <option key={result.pollId} value={result.pollId}>
+                        {result.label} - {formatShortDateTime(result.startsAt)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+              {!canShowResults && payload.poll.seriesId && payload.hasSubmitted ? (
+                <p className="muted-text">Results available after this cycle ends.</p>
+              ) : !payload.canViewResults && payload.hasSubmitted && !payload.actor.isRegistered ? (
                 <p className="muted-text">
                   Your anonymous response was recorded. Results are only shown to the poll creator and registered participants who responded.
                 </p>
@@ -579,26 +611,31 @@ function PollWorkspace({ accessRequestPath, invitePath = "/poll", loadPath, stor
                   Results become visible here after you submit as a registered participant, or immediately if you are the poll creator.
                 </p>
               ) : null}
-              {payload.canViewResults ? (
+              {canShowResults ? (
                 <div className="question-list">
-                  {payload.summary.map((question) => (
+                  {visibleSummary.map((question) => (
                     <article className="question-card" key={`summary-${question.questionId}`}>
                       <div className="question-head">
                         <strong>{question.prompt}</strong>
                         {question.topic ? <span className="status-chip warning">{question.topic}</span> : null}
                       </div>
-                      <p className="muted-text">Live responses: {question.totalResponses}</p>
+                      <p className="muted-text">Responses: {question.totalResponses}</p>
                       <div className="poll-result-chart" role="list" aria-label={`${question.prompt} response distribution`}>
                         {question.options.map((option, optionIndex) => {
                           const count = question.optionSelectionCounts[optionIndex] ?? 0;
+                          const highestCount = Math.max(0, ...question.optionSelectionCounts);
+                          const isHighestOption = highestCount > 0 && count === highestCount;
                           const percentage = question.totalResponses
                             ? Math.round((count / question.totalResponses) * 100)
                             : 0;
 
                           return (
-                            <div className="poll-result-row" key={`${question.questionId}-summary-${optionIndex}`} role="listitem">
+                            <div className={`poll-result-row${isHighestOption ? " poll-result-row-highest" : ""}`} key={`${question.questionId}-summary-${optionIndex}`} role="listitem">
                               <div className="poll-result-row-head">
-                                <span className="poll-result-option">{option}</span>
+                                <span className="poll-result-option">
+                                  {option}
+                                  {isHighestOption ? <span className="status-chip success">Highest</span> : null}
+                                </span>
                                 <span className="poll-result-meta">
                                   {count} vote{count === 1 ? "" : "s"} ({percentage}%)
                                 </span>

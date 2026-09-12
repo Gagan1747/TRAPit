@@ -252,7 +252,8 @@ function estimateQueueStart(input: {
   const now = new Date();
   const nowIst = new Date(now.getTime() + (IST_OFFSET_MINUTES * 60 * 1000));
   const nowMinutes = nowIst.getUTCHours() * 60 + nowIst.getUTCMinutes() + (nowIst.getUTCSeconds() / 60);
-  let estimateMinutes = Math.max(ranges[0].startMinutes, nowMinutes);
+  const isToday = input.selectedDateKey === getIstDateKey(now);
+  let estimateMinutes = isToday ? Math.max(ranges[0].startMinutes, nowMinutes) : ranges[0].startMinutes;
   let remainingServiceMinutes = Math.floor(input.activeCount / Math.max(1, input.appointmentsPerSlot)) * input.slotDurationMinutes;
 
   for (const range of ranges) {
@@ -431,23 +432,35 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     const workingDays = parseWorkingDays(selectedLocation.workingDays);
     const today = createDateFromKey(getIstDateKey(new Date()));
 
-    if (payload.business.justAddToList) {
-      setSelectedDateKey(createDateKey(today));
-      return;
-    }
     const maxDate = new Date(today);
     maxDate.setMonth(today.getMonth() + 6);
     const dayCount = Math.ceil((maxDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000)) + 1;
     const closedDateKeys = new Set(payload.business.appointmentDateOverrides.closedDateKeys);
     const openedDateKeys = new Set(payload.business.appointmentDateOverrides.openedDateKeys);
+    const queueCountsByDate = Object.fromEntries(payload.queueCounts
+      .filter((entry) => entry.locationId === selectedLocation.id)
+      .map((entry) => [entry.dateKey, entry.count]));
     const nextWorkingDate = Array.from({ length: dayCount }, (_, offset) => {
       const date = new Date(today);
       date.setDate(today.getDate() + offset);
       return date;
     }).find((date) => {
       const key = createDateKey(date);
-      return !closedDateKeys.has(key)
+      const isWorkingDate = !closedDateKeys.has(key)
         && (workingDays.has(WEEKDAY_NAMES[date.getDay()]) || openedDateKeys.has(key));
+
+      if (!isWorkingDate || !payload.business.justAddToList) {
+        return isWorkingDate;
+      }
+
+      return Boolean(estimateQueueStart({
+        activeCount: queueCountsByDate[key] ?? 0,
+        appointmentsPerSlot: payload.business.appointmentsPerSlot,
+        selectedDateKey: key,
+        slotDurationMinutes: payload.business.slotDurationMinutes ?? 30,
+        workingHours: selectedLocation.workingHours,
+        workingHoursSecondWindow: selectedLocation.workingHoursSecondWindow,
+      }));
     });
 
     if (nextWorkingDate) {
@@ -629,7 +642,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   const queueEstimate = payload.business.justAddToList
     && selectedLocation
     && !closedDateKeys.has(selectedDateKey)
-    && (workingDays.has(WEEKDAY_NAMES[today.getDay()]) || openedDateKeys.has(selectedDateKey))
+    && (workingDays.has(WEEKDAY_NAMES[createDateFromKey(selectedDateKey).getDay()]) || openedDateKeys.has(selectedDateKey))
     ? estimateQueueStart({
         activeCount: queueCountsByDateKey[selectedDateKey] ?? 0,
         appointmentsPerSlot: payload.business.appointmentsPerSlot,
@@ -748,7 +761,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
               </div>
             ) : selectedLocation ? <p className="muted-text apportion-single-location">{selectedLocation.address}</p> : null}
 
-            {!payload.business.justAddToList ? (
+            {selectedLocation ? (
               <div className="apportion-week-calendar-shell">
                 <div className="apportion-week-calendar-head">
                   <button
@@ -775,10 +788,19 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                   {weekDates.map((date) => {
                     const dateKey = createDateKey(date);
                     const isWorkingDay = workingDays.has(WEEKDAY_NAMES[date.getDay()]);
-                    const isAvailableDate = !closedDateKeys.has(dateKey)
+                    const isDateInWindow = !closedDateKeys.has(dateKey)
                       && (isWorkingDay || openedDateKeys.has(dateKey))
                       && date >= today
                       && date <= maxBookableDate;
+                    const hasQueueCapacity = !payload.business.justAddToList || Boolean(estimateQueueStart({
+                      activeCount: queueCountsByDateKey[dateKey] ?? 0,
+                      appointmentsPerSlot: payload.business.appointmentsPerSlot,
+                      selectedDateKey: dateKey,
+                      slotDurationMinutes,
+                      workingHours: selectedLocation.workingHours,
+                      workingHoursSecondWindow: selectedLocation.workingHoursSecondWindow,
+                    }));
+                    const isAvailableDate = isDateInWindow && hasQueueCapacity;
                     const isSelected = dateKey === selectedDateKey;
 
                     return (
@@ -809,7 +831,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                 <label>{selectedDateLabel}</label>
                 <p className="muted-text">Queue size: {queueCountForSelectedDate}</p>
                 {queueEstimate ? <p className="muted-text">Estimated start time: {queueEstimate.label}</p> : null}
-                {selectedLocation && !queueEstimate ? <p className="muted-text apportion-queue-warning">Queue booking is closed for today.</p> : null}
+                {selectedLocation && !queueEstimate ? <p className="muted-text apportion-queue-warning">Queue booking is unavailable for this date.</p> : null}
               </div>
             ) : (
               <div className="field">

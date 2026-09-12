@@ -1,7 +1,7 @@
 import { getSessionDisplayName, getSessionIdentifier } from "@trapit/auth";
 import { NextResponse } from "next/server";
 
-import { getPollByShareCode, requestScheduledPollAccessByShareCode } from "../../../../../lib/testing-store";
+import { getPollByShareCode, listCompletedPollSeriesResults, requestScheduledPollAccessByShareCode } from "../../../../../lib/testing-store";
 import { getWebSession } from "../../../../../lib/session";
 
 async function getRegisteredActor() {
@@ -62,6 +62,9 @@ export async function GET(
       responseUserId: actor.identifier,
       sub: actor.sub,
     });
+    const seriesResults = actor.isRegistered
+      ? await listCompletedPollSeriesResults(payload.poll, actor)
+      : [];
 
     return NextResponse.json({
       actor: {
@@ -73,6 +76,7 @@ export async function GET(
         displayName: payload.poll.creatorDisplayName ?? null,
         maskedIdentifier: maskPhoneNumber(payload.poll.creatorIdentifier ?? null),
       },
+      seriesResults,
       ...payload,
     });
   } catch (error) {

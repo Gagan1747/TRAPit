@@ -109,6 +109,20 @@ export type PersistentPollQuestion = PollQuestionDraft & {
 
 export type PollParticipantType = "open" | "registered";
 
+export type PollResponseMode =
+  | "groups-named"
+  | "groups-anonymous"
+  | "open-registered-anonymous"
+  | "open-unregistered-anonymous";
+
+export type PollRecurrenceFrequency = "weekly" | "biweekly" | "monthly";
+
+export type PollRecurrenceCycle = {
+  cycleIndex: number;
+  endsAt: string;
+  startsAt: string;
+};
+
 export type AppointmentLocation = {
   address: string;
   id: string;
@@ -152,11 +166,18 @@ export type ScheduledPoll = {
   creatorDisplayName?: string | null;
   creatorIdentifier?: string | null;
   endsAt: string;
+  groupNames?: string[];
+  hasSubmitted?: boolean;
   id: string;
   openPollRequiresRegistration?: boolean;
   participantGroupIds: string[];
   participantType: PollParticipantType;
   questionIds: string[];
+  recurrenceCycleCount?: number | null;
+  recurrenceCycleIndex?: number | null;
+  recurrenceFrequency?: PollRecurrenceFrequency | null;
+  responseMode?: PollResponseMode;
+  seriesId?: string | null;
   shareCode: string | null;
   startsAt: string;
   status: ScheduledTestStatus;
@@ -917,6 +938,71 @@ export function resolveScheduledPollStatus(
   }
 
   return "live";
+}
+
+function addPollRecurrencePeriod(value: Date, frequency: PollRecurrenceFrequency) {
+  const next = new Date(value);
+
+  if (frequency === "weekly" || frequency === "biweekly") {
+    next.setUTCDate(next.getUTCDate() + (frequency === "weekly" ? 7 : 14));
+    return next;
+  }
+
+  const originalDay = next.getUTCDate();
+  next.setUTCDate(1);
+  next.setUTCMonth(next.getUTCMonth() + 1);
+  const finalDayOfMonth = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0)).getUTCDate();
+  next.setUTCDate(Math.min(originalDay, finalDayOfMonth));
+  return next;
+}
+
+export function buildPollRecurrenceCycles(input: {
+  cycleCount: number;
+  frequency: PollRecurrenceFrequency;
+  startsAt: string;
+}): PollRecurrenceCycle[] {
+  const firstStart = new Date(input.startsAt);
+
+  if (Number.isNaN(firstStart.getTime())) {
+    throw new Error("Choose a valid poll start date and time.");
+  }
+
+  if (!Number.isInteger(input.cycleCount) || input.cycleCount < 1) {
+    throw new Error("Recurring polls require at least one cycle.");
+  }
+
+  const cycles: PollRecurrenceCycle[] = [];
+  let cycleStart = firstStart;
+
+  for (let cycleIndex = 0; cycleIndex < input.cycleCount; cycleIndex += 1) {
+    const cycleEnd = addPollRecurrencePeriod(cycleStart, input.frequency);
+    cycles.push({
+      cycleIndex,
+      endsAt: cycleEnd.toISOString(),
+      startsAt: cycleStart.toISOString(),
+    });
+    cycleStart = cycleEnd;
+  }
+
+  return cycles;
+}
+
+export function findActivePollRecurrenceCycle(
+  cycles: PollRecurrenceCycle[],
+  nowMs = Date.now(),
+) {
+  return cycles.find((cycle) => {
+    const startsAtMs = new Date(cycle.startsAt).getTime();
+    const endsAtMs = new Date(cycle.endsAt).getTime();
+    return startsAtMs <= nowMs && nowMs < endsAtMs;
+  }) ?? null;
+}
+
+export function countPendingPollRecurrenceCycles(
+  cycles: PollRecurrenceCycle[],
+  nowMs = Date.now(),
+) {
+  return cycles.filter((cycle) => new Date(cycle.startsAt).getTime() > nowMs).length;
 }
 
 export function createParticipantProfile(input: {

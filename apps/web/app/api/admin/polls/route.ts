@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { type PollParticipantType, type PollQuestionDraft, type WorkspaceBranding } from "@trapit/testing";
+import { type PollParticipantType, type PollQuestionDraft, type PollRecurrenceFrequency, type WorkspaceBranding } from "@trapit/testing";
 
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 import { assertCanCreatePollQuestions, assertCanSchedulePoll } from "../../../../lib/user-category-limits";
@@ -38,6 +38,8 @@ type PollBody =
       participantGroupIds?: string[];
       participantType?: PollParticipantType;
       questionIds?: string[];
+      recurrenceCycleCount?: number | null;
+      recurrenceFrequency?: PollRecurrenceFrequency | null;
       startsAt?: string;
       title?: string;
     }
@@ -53,6 +55,8 @@ type PollBody =
       participantType?: PollParticipantType;
       pollId?: string;
       questionIds?: string[];
+      recurrenceCycleCount?: number | null;
+      recurrenceFrequency?: PollRecurrenceFrequency | null;
       startsAt?: string;
       title?: string;
     };
@@ -179,6 +183,8 @@ export async function POST(request: Request) {
         participantGroupIds: body.participantGroupIds ?? [],
         participantType: body.participantType ?? "registered",
         questionIds: [...selectedQuestionIds, ...resolvedCreatedQuestionIds],
+        recurrenceCycleCount: body.recurrenceCycleCount ?? null,
+        recurrenceFrequency: body.recurrenceFrequency ?? null,
         startsAt: body.startsAt,
         title: body.title,
       });
@@ -238,6 +244,8 @@ export async function POST(request: Request) {
         participantType: body.participantType ?? "registered",
         pollId: body.pollId,
         questionIds: [...selectedQuestionIds, ...resolvedCreatedQuestionIds],
+        recurrenceCycleCount: body.recurrenceCycleCount ?? null,
+        recurrenceFrequency: body.recurrenceFrequency ?? null,
         startsAt: body.startsAt,
         title: body.title,
       });
