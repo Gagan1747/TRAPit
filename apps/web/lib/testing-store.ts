@@ -1,5 +1,7 @@
 import "server-only";
 
+import { isAppointmentBusinessProfileComplete } from "./appointment-locations";
+
 import {
   buildGameLeaderboard,
   buildTestLeaderboards,
@@ -442,7 +444,7 @@ export async function listWorkspaceAppointmentBusinesses() {
       const name = branding.instituteName.trim();
       const address = branding.address?.trim() ?? "";
 
-      if (!appointmentShareCode) {
+      if (!appointmentShareCode || !isAppointmentBusinessProfileComplete(branding)) {
         return null;
       }
 

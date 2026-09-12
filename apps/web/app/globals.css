@@ -656,8 +656,19 @@ main {
 .business-field-card {
   padding: 14px;
   border: 1px solid rgba(81, 55, 133, 0.12);
-  border-radius: 18px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.58);
+}
+
+.business-location-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.business-location-remove {
+  flex: 0 0 auto;
 }
 
 .field-label {
@@ -3572,7 +3583,7 @@ button:disabled {
 .business-exception-calendar {
   display: grid;
   gap: 10px;
-  max-width: 520px;
+  min-width: 0;
 }
 
 .business-exception-calendar-head {
@@ -3583,28 +3594,33 @@ button:disabled {
   text-align: center;
 }
 
-.business-exception-weekdays,
 .business-exception-grid {
   display: grid;
-  grid-template-columns: repeat(7, minmax(34px, 1fr));
+  grid-template-columns: repeat(7, minmax(64px, 1fr));
   gap: 6px;
-}
-
-.business-exception-weekdays span {
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-  text-align: center;
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
 .business-exception-date {
-  aspect-ratio: 1;
+  display: grid;
+  min-height: 68px;
   min-width: 0;
-  padding: 4px;
+  padding: 8px 4px;
+  place-items: center;
   border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface-soft);
   color: var(--muted);
+}
+
+.business-exception-date span {
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.business-exception-date strong {
+  font-size: 1rem;
 }
 
 .business-exception-date.is-active {

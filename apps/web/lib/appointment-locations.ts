@@ -1,9 +1,10 @@
-import { type AppointmentLocation } from "@trapit/testing";
+import { type AppointmentLocation, type WorkspaceBranding } from "@trapit/testing";
 
 const MINUTES_PER_DAY = 24 * 60;
 const MINUTES_PER_WEEK = 7 * MINUTES_PER_DAY;
 const IST_OFFSET_MINUTES = (5 * 60) + 30;
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const SLOT_DURATION_MINUTES = new Set([5, 10, 15, 30, 45, 60, 120, 180, 240]);
 
 type WeeklyInterval = {
   end: number;
@@ -173,5 +174,26 @@ export function validateAppointmentLocations(locations: AppointmentLocation[] | 
 
   if (overlaps) {
     throw new Error(`${locations[0].name} and ${locations[1].name} working hours cannot overlap.`);
+  }
+}
+
+export function validateAppointmentBusinessProfile(branding: WorkspaceBranding) {
+  if (!branding.instituteName.trim()) {
+    throw new Error("Enter a business name.");
+  }
+
+  validateAppointmentLocations(branding.appointmentLocations);
+
+  if (!branding.slotDurationMinutes || !SLOT_DURATION_MINUTES.has(branding.slotDurationMinutes)) {
+    throw new Error("Choose a slot duration.");
+  }
+}
+
+export function isAppointmentBusinessProfileComplete(branding: WorkspaceBranding) {
+  try {
+    validateAppointmentBusinessProfile(branding);
+    return true;
+  } catch {
+    return false;
   }
 }

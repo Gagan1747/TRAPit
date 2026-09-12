@@ -425,7 +425,7 @@ export async function createApportionAppointment(input: {
     throw new Error("Choose a valid appointment date and time.");
   }
 
-  if (startsAt.getTime() <= Date.now()) {
+  if (!input.justAddToList && startsAt.getTime() <= Date.now()) {
     throw new Error("Choose a future appointment time.");
   }
 

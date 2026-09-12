@@ -33,6 +33,7 @@ import {
   type WorkspaceBranding,
 } from "@trapit/testing";
 import { Fragment, type DragEvent, useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime, formatShortDateTimeIst } from "../lib/date-format";
@@ -840,6 +841,15 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
     : null;
   const appointmentShareCode = branding?.appointmentShareCode?.trim() || null;
   const appointmentNotesPrompt = branding?.appointmentNotesPrompt?.trim() || DEFAULT_APPOINTMENT_NOTES_PROMPT;
+  const appointmentDateOverrides = branding?.appointmentDateOverrides ?? { closedDateKeys: [], openedDateKeys: [] };
+  const appointmentLocations = (branding?.appointmentLocations ?? []).map((location, index) => ({
+    address: location.address.trim(),
+    id: location.id.trim() || `location-${index + 1}`,
+    name: location.name.trim() || `Location ${index + 1}`,
+    workingDays: location.workingDays.trim(),
+    workingHours: location.workingHours.trim(),
+    workingHoursSecondWindow: location.workingHoursSecondWindow.trim(),
+  }));
   const breakHours = branding?.breakHours.trim() ?? "";
   const justAddToList = branding?.justAddToList === true;
   const recurringBookingsEnabled = branding?.recurringBookingsEnabled === true;
@@ -869,6 +879,8 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
   return {
     address,
     advanceBookingWeeks,
+    appointmentDateOverrides,
+    appointmentLocations,
     appointmentShareCode,
     appointmentNotesPrompt,
     appointmentsPerSlot,
@@ -1718,6 +1730,7 @@ export function AdminQuestionWorkspace({
     workingHoursSecondWindow: "",
   });
   const [isBusinessSecondWindowOpen, setIsBusinessSecondWindowOpen] = useState(false);
+  const [isBusinessSecondLocationSecondWindowOpen, setIsBusinessSecondLocationSecondWindowOpen] = useState(false);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const [importPreview, setImportPreview] = useState<BulkImportPreview | null>(null);
   const [importText, setImportText] = useState("");
@@ -1850,6 +1863,7 @@ export function AdminQuestionWorkspace({
     setBusinessWorkingHoursSecondWindow(firstLocation?.workingHoursSecondWindow ?? branding?.workingHoursSecondWindow ?? "");
     setBusinessDateOverrides(branding?.appointmentDateOverrides ?? { closedDateKeys: [], openedDateKeys: [] });
     setIsBusinessSecondWindowOpen(Boolean(firstLocation?.workingHoursSecondWindow ?? branding?.workingHoursSecondWindow));
+    setIsBusinessSecondLocationSecondWindowOpen(Boolean(secondLocation?.workingHoursSecondWindow));
     setBusinessSecondLocation({
       address: secondLocation?.address ?? "",
       enabled: Boolean(secondLocation),
@@ -3943,8 +3957,13 @@ export function AdminQuestionWorkspace({
       return;
     }
 
-    if (slotDurationMinutes !== null && ![5, 10, 15, 30, 45, 60, 120, 180, 240].includes(slotDurationMinutes)) {
-      setBrandingFeedback("Choose a valid slot duration.");
+    if (!brandingInstituteName.trim()) {
+      setBrandingFeedback("Enter a business name.");
+      return;
+    }
+
+    if (slotDurationMinutes === null || ![5, 10, 15, 30, 45, 60, 120, 180, 240].includes(slotDurationMinutes)) {
+      setBrandingFeedback("Choose a slot duration.");
       return;
     }
 
@@ -4103,6 +4122,7 @@ export function AdminQuestionWorkspace({
     setBusinessWorkingHoursSecondWindow("");
     setBusinessDateOverrides({ closedDateKeys: [], openedDateKeys: [] });
     setIsBusinessSecondWindowOpen(false);
+    setIsBusinessSecondLocationSecondWindowOpen(false);
 
     try {
       const payload = await readJson<BrandingResponse>(
@@ -4951,6 +4971,9 @@ export function AdminQuestionWorkspace({
             setBrandingInstituteName(event.target.value);
           }}
         />
+      </div>
+      <div className="field business-field-card">
+        <span className="field-label">Address 1</span>
         <label htmlFor="branding-address">Address</label>
         <textarea
           id="branding-address"
@@ -4962,8 +4985,6 @@ export function AdminQuestionWorkspace({
             setBrandingAddress(event.target.value);
           }}
         />
-      </div>
-      <div className="field business-field-card">
         <span className="field-label">Working days</span>
         <div className="business-day-grid" role="group" aria-label="Working days">
           {BUSINESS_WEEK_DAYS.map((day) => {
@@ -4983,9 +5004,7 @@ export function AdminQuestionWorkspace({
             );
           })}
         </div>
-      </div>
-      <div className="field business-field-card">
-        <span className="field-label">Working hours</span>
+        <span className="field-label">Operating Hours 1</span>
         <BusinessTimeRangeSelector
           blockedRanges={[businessWorkingHoursSecondWindow, businessSecondLocation.workingHours, businessSecondLocation.workingHoursSecondWindow].filter(Boolean)}
           label="working hours"
@@ -5002,48 +5021,43 @@ export function AdminQuestionWorkspace({
             type="button"
             onClick={() => setIsBusinessSecondWindowOpen((isOpen) => !isOpen)}
           >
-            {isBusinessSecondWindowOpen ? "Hide second slot" : "Add second slot"}
+              {isBusinessSecondWindowOpen ? "Hide Operating Hours 2" : "Add Operating Hours 2"}
           </button>
           <button className="button-secondary small-button" type="button" onClick={() => {
             markBrandingDraftDirty();
             setBusinessWorkingHoursSecondWindow("");
             setIsBusinessSecondWindowOpen(false);
           }}>
-            Clear second slot
+            Clear Operating Hours 2
           </button>
         </div>
         {isBusinessSecondWindowOpen ? (
-          <BusinessTimeRangeSelector
-            blockedRanges={[businessWorkingHours, businessSecondLocation.workingHours, businessSecondLocation.workingHoursSecondWindow].filter(Boolean)}
-            label="second working slot"
-            value={businessWorkingHoursSecondWindow}
-            onChange={(value) => {
-              markBrandingDraftDirty();
-              setBusinessWorkingHoursSecondWindow(value);
-            }}
-          />
+          <>
+            <span className="field-label">Operating Hours 2</span>
+            <BusinessTimeRangeSelector
+              blockedRanges={[businessWorkingHours, businessSecondLocation.workingHours, businessSecondLocation.workingHoursSecondWindow].filter(Boolean)}
+              label="Operating Hours 2"
+              value={businessWorkingHoursSecondWindow}
+              onChange={(value) => {
+                markBrandingDraftDirty();
+                setBusinessWorkingHoursSecondWindow(value);
+              }}
+            />
+          </>
         ) : null}
-      </div>
-      <div className="field business-field-card">
-        <span className="field-label">Leave and schedule calendar</span>
-        <BusinessDateExceptionCalendar
-          value={businessDateOverrides}
-          workingDays={businessWorkingDays}
-          onChange={(value) => {
-            markBrandingDraftDirty();
-            setBusinessDateOverrides(value);
-          }}
-        />
       </div>
       {businessSecondLocation.enabled ? (
         <div className="field business-field-card">
-          <div className="business-second-window-actions">
-            <span className="field-label">Additional address</span>
+          <div className="business-location-card-head">
+            <span className="field-label">Address 2</span>
             <button
-              className="button-secondary small-button"
+              aria-label="Remove Address 2"
+              className="button-secondary icon-button business-location-remove"
+              title="Remove Address 2"
               type="button"
               onClick={() => {
                 markBrandingDraftDirty();
+                setIsBusinessSecondLocationSecondWindowOpen(false);
                 setBusinessSecondLocation({
                   address: "",
                   enabled: false,
@@ -5054,10 +5068,10 @@ export function AdminQuestionWorkspace({
                 });
               }}
             >
-              Remove location
+              <X aria-hidden="true" size={18} />
             </button>
           </div>
-          <label htmlFor="business-location-two-address">Additional address</label>
+          <label htmlFor="business-location-two-address">Address</label>
           <textarea
             id="business-location-two-address"
             placeholder="Enter business address"
@@ -5086,38 +5100,75 @@ export function AdminQuestionWorkspace({
               );
             })}
           </div>
+          <span className="field-label">Operating Hours 1</span>
           <BusinessTimeRangeSelector
             blockedRanges={[businessWorkingHours, businessWorkingHoursSecondWindow, businessSecondLocation.workingHoursSecondWindow].filter(Boolean)}
-            label="additional address working hours"
+            label="Address 2 Operating Hours 1"
             value={businessSecondLocation.workingHours}
             onChange={(value) => {
               markBrandingDraftDirty();
               setBusinessSecondLocation((current) => ({ ...current, workingHours: value }));
             }}
           />
-          <BusinessTimeRangeSelector
-            blockedRanges={[businessWorkingHours, businessWorkingHoursSecondWindow, businessSecondLocation.workingHours].filter(Boolean)}
-            label="additional address second slot"
-            value={businessSecondLocation.workingHoursSecondWindow}
-            onChange={(value) => {
-              markBrandingDraftDirty();
-              setBusinessSecondLocation((current) => ({ ...current, workingHoursSecondWindow: value }));
-            }}
-          />
+          <div className="business-second-window-actions">
+            <button
+              className="button-secondary small-button"
+              type="button"
+              onClick={() => {
+                markBrandingDraftDirty();
+                if (isBusinessSecondLocationSecondWindowOpen) {
+                  setBusinessSecondLocation((current) => ({ ...current, workingHoursSecondWindow: "" }));
+                }
+                setIsBusinessSecondLocationSecondWindowOpen((isOpen) => !isOpen);
+              }}
+            >
+              {isBusinessSecondLocationSecondWindowOpen ? "Clear Operating Hours 2" : "Add Operating Hours 2"}
+            </button>
+          </div>
+          {isBusinessSecondLocationSecondWindowOpen ? (
+            <>
+              <span className="field-label">Operating Hours 2</span>
+              <BusinessTimeRangeSelector
+                blockedRanges={[businessWorkingHours, businessWorkingHoursSecondWindow, businessSecondLocation.workingHours].filter(Boolean)}
+                label="Address 2 Operating Hours 2"
+                value={businessSecondLocation.workingHoursSecondWindow}
+                onChange={(value) => {
+                  markBrandingDraftDirty();
+                  setBusinessSecondLocation((current) => ({ ...current, workingHoursSecondWindow: value }));
+                }}
+              />
+            </>
+          ) : null}
         </div>
       ) : (
-        <button
-          className="button-secondary"
-          type="button"
-          onClick={() => {
-            markBrandingDraftDirty();
-            setBusinessSecondLocation((current) => ({ ...current, enabled: true }));
-          }}
-        >
-          Add another address
-        </button>
+        <div className="field business-field-card">
+          <span className="field-label">Address 2</span>
+          <button
+            className="button-secondary"
+            type="button"
+            onClick={() => {
+              markBrandingDraftDirty();
+              setIsBusinessSecondLocationSecondWindowOpen(false);
+              setBusinessSecondLocation((current) => ({ ...current, enabled: true }));
+            }}
+          >
+            Add Address 2
+          </button>
+        </div>
       )}
       <div className="field business-field-card">
+        <span className="field-label">Leave and schedule calendar</span>
+        <BusinessDateExceptionCalendar
+          value={businessDateOverrides}
+          workingDays={businessWorkingDays}
+          onChange={(value) => {
+            markBrandingDraftDirty();
+            setBusinessDateOverrides(value);
+          }}
+        />
+      </div>
+      <div className="field business-field-card">
+        <span className="field-label">Slot configuration</span>
         <label htmlFor="business-appointments-per-slot">Appointments per slot</label>
         <select
           className="select-field"
@@ -5177,7 +5228,6 @@ export function AdminQuestionWorkspace({
           <option value="standard">Standard slots (show remaining)</option>
           <option value="queue">Queue only</option>
         </select>
-        <p className="muted-text">If opening and closing times are the same, the booking page treats the business as open for 24 hours starting from that time.</p>
       </div>
       <div className="field business-field-card">
         <span className="field-label">Logo or business image</span>

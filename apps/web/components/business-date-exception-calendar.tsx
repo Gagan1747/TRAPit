@@ -28,17 +28,21 @@ function parseWorkingDays(value: string) {
 }
 
 export function BusinessDateExceptionCalendar({ onChange, value, workingDays }: BusinessDateExceptionCalendarProps) {
-  const [monthOffset, setMonthOffset] = useState(0);
+  const [weekOffset, setWeekOffset] = useState(0);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const month = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
-  const lastDay = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
   const maxDate = new Date(today.getFullYear(), today.getMonth() + 6, today.getDate());
   const workingDayIndexes = parseWorkingDays(workingDays);
-  const cells = [
-    ...Array.from({ length: month.getDay() }, () => null),
-    ...Array.from({ length: lastDay }, (_, index) => new Date(month.getFullYear(), month.getMonth(), index + 1)),
-  ];
+  const weekStartDate = new Date(today);
+  weekStartDate.setDate(today.getDate() + (weekOffset * 7));
+  const dates = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(weekStartDate);
+    date.setDate(weekStartDate.getDate() + index);
+    return date;
+  });
+  const nextWeekStart = new Date(weekStartDate);
+  nextWeekStart.setDate(weekStartDate.getDate() + 7);
+  const rangeLabel = `${dates[0].toLocaleDateString(undefined, { day: "numeric", month: "short" })} - ${dates[6].toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`;
 
   function toggleDate(date: Date) {
     const key = dateKey(date);
@@ -63,20 +67,16 @@ export function BusinessDateExceptionCalendar({ onChange, value, workingDays }: 
   return (
     <div className="business-exception-calendar">
       <div className="business-exception-calendar-head">
-        <button aria-label="Previous month" className="button-secondary icon-button" disabled={monthOffset === 0} type="button" onClick={() => setMonthOffset((current) => Math.max(0, current - 1))}>
+        <button aria-label="Previous week" className="button-secondary icon-button" disabled={weekOffset === 0} type="button" onClick={() => setWeekOffset((current) => Math.max(0, current - 1))}>
           <ChevronLeft aria-hidden="true" size={18} />
         </button>
-        <strong>{month.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</strong>
-        <button aria-label="Next month" className="button-secondary icon-button" disabled={monthOffset === 6} type="button" onClick={() => setMonthOffset((current) => Math.min(6, current + 1))}>
+        <strong>{rangeLabel}</strong>
+        <button aria-label="Next week" className="button-secondary icon-button" disabled={nextWeekStart > maxDate} type="button" onClick={() => setWeekOffset((current) => current + 1)}>
           <ChevronRight aria-hidden="true" size={18} />
         </button>
       </div>
-      <div className="business-exception-weekdays" aria-hidden="true">
-        {WEEKDAYS.map((day) => <span key={day}>{day.slice(0, 2)}</span>)}
-      </div>
       <div className="business-exception-grid">
-        {cells.map((date, index) => {
-          if (!date) return <span key={`blank-${index}`} />;
+        {dates.map((date) => {
           const key = dateKey(date);
           const isBaselineActive = workingDayIndexes.has(date.getDay());
           const isClosed = value.closedDateKeys.includes(key);
@@ -93,7 +93,8 @@ export function BusinessDateExceptionCalendar({ onChange, value, workingDays }: 
               type="button"
               onClick={() => toggleDate(date)}
             >
-              {date.getDate()}
+              <span>{WEEKDAYS[date.getDay()].slice(0, 3)}</span>
+              <strong>{date.getDate()}</strong>
             </button>
           );
         })}

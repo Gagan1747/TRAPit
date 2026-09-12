@@ -1,7 +1,7 @@
 import { type WorkspaceBranding } from "@trapit/testing";
 import { NextResponse } from "next/server";
 
-import { validateAppointmentLocations } from "../../../../lib/appointment-locations";
+import { validateAppointmentBusinessProfile } from "../../../../lib/appointment-locations";
 import { getWorkspaceBranding, updateWorkspaceBranding } from "../../../../lib/testing-store";
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
 
   try {
     if (body.branding) {
-      validateAppointmentLocations(body.branding.appointmentLocations);
+      validateAppointmentBusinessProfile(body.branding);
       validateAppointmentDateOverrides(body.branding);
       validatePromotionalImages(body.branding.promotionalImageDataUrls);
     }
