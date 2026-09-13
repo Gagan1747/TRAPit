@@ -24,6 +24,7 @@ function validateAppointmentDateOverrides(branding: WorkspaceBranding) {
   const values = [
     ...(branding.appointmentDateOverrides?.closedDateKeys ?? []),
     ...(branding.appointmentDateOverrides?.openedDateKeys ?? []),
+    ...(branding.appointmentDateHoursOverrides ?? []).map((entry) => entry.dateKey),
   ];
   const today = new Date();
   const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;

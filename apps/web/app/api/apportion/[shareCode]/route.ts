@@ -6,6 +6,7 @@ import { createApportionAppointment, listApportionAppointmentsForOwner, listAppo
 import { publishWorkspaceEvent } from "../../../../lib/realtime-events";
 import { getWebSession } from "../../../../lib/session";
 import { getWorkspaceBrandingByAppointmentShareCode } from "../../../../lib/testing-store";
+import { resolveAppointmentLocationSchedule } from "../../../../lib/appointment-locations";
 
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const WEEKDAY_KEYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
@@ -336,9 +337,11 @@ export async function GET(
     business: {
       address: business.branding.address,
       advanceBookingWeeks: business.branding.advanceBookingWeeks ?? 4,
+      appointmentDateHoursOverrides: business.branding.appointmentDateHoursOverrides ?? [],
       appointmentDateOverrides: business.branding.appointmentDateOverrides ?? { closedDateKeys: [], openedDateKeys: [] },
       appointmentNotesPrompt: business.branding.appointmentNotesPrompt,
       appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
+      appointmentWeeklyHoursOverrides: business.branding.appointmentWeeklyHoursOverrides ?? [],
       imageDataUrl: business.branding.imageDataUrl,
       justAddToList: business.branding.justAddToList === true,
       locations: business.branding.appointmentLocations ?? [],
@@ -400,14 +403,22 @@ export async function POST(
     return NextResponse.json({ error: "Choose a business location before booking." }, { status: 400 });
   }
 
-  const locationBranding: WorkspaceBranding = {
-    ...business.branding,
-    address: location.address,
-    workingDays: location.workingDays,
-    workingHours: location.workingHours,
-    workingHoursSecondWindow: location.workingHoursSecondWindow,
-  };
   const slotDateKey = body.slotDateKey?.trim() || getIstDateKey(new Date());
+  const getLocationBranding = (serviceDateKey: string): WorkspaceBranding => {
+    const effectiveLocation = resolveAppointmentLocationSchedule(business.branding, location.id, serviceDateKey);
+
+    if (!effectiveLocation) {
+      throw new Error("This location is closed on the selected date.");
+    }
+
+    return {
+      ...business.branding,
+      address: effectiveLocation.address,
+      workingDays: effectiveLocation.workingDays,
+      workingHours: effectiveLocation.workingHours,
+      workingHoursSecondWindow: effectiveLocation.workingHoursSecondWindow,
+    };
+  };
   const recurrence = body.recurrence?.mode === "weekly"
     ? {
         endDateKey: body.recurrence.endDateKey?.trim() ?? "",
@@ -431,6 +442,7 @@ export async function POST(
   const cautionMessages = new Set<string>();
 
   try {
+    const locationBranding = getLocationBranding(slotDateKey);
     validateBookingDate(locationBranding, slotDateKey);
     const [ownerAppointments, requesterAppointments] = await Promise.all([
       listApportionAppointmentsForOwner(business.ownerIdentifier),
@@ -468,13 +480,14 @@ export async function POST(
         }, {});
 
       for (const recurringDateKey of slotDateKeys) {
-        validateBookingDate(locationBranding, recurringDateKey);
+        const recurringLocationBranding = getLocationBranding(recurringDateKey);
+        validateBookingDate(recurringLocationBranding, recurringDateKey);
 
         const activeCount = activeCountsByDateKey[recurringDateKey] ?? 0;
         const estimate = estimateQueueStart({
           activeCount,
           appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
-          branding: locationBranding,
+          branding: recurringLocationBranding,
           serviceDateKey: recurringDateKey,
         });
 
@@ -510,7 +523,8 @@ export async function POST(
       }, {});
 
       for (const recurringDateKey of slotDateKeys) {
-        validateBookingDate(locationBranding, recurringDateKey);
+        const recurringLocationBranding = getLocationBranding(recurringDateKey);
+        validateBookingDate(recurringLocationBranding, recurringDateKey);
         const recurringStartsAt = createUtcSlotIso(recurringDateKey, selectedSlot.dayOffset, selectedSlot.minutesOfDay);
 
         if (!recurringStartsAt) {
@@ -518,7 +532,7 @@ export async function POST(
         }
 
         const recurringStartDate = new Date(recurringStartsAt);
-        validateRequestedSlot(locationBranding, recurringStartDate, recurringDateKey);
+        validateRequestedSlot(recurringLocationBranding, recurringStartDate, recurringDateKey);
         const appointmentsPerSlot = business.branding.appointmentsPerSlot ?? 1;
 
         if ((activeCountsBySlot[recurringStartsAt] ?? 0) >= appointmentsPerSlot) {

@@ -48,6 +48,45 @@ function selectedWeekdays(value: string) {
   return WEEKDAYS.flatMap((day, index) => normalized.includes(day.toLowerCase()) || normalized.includes(day.slice(0, 3).toLowerCase()) ? [index] : []);
 }
 
+function weekdayForDateKey(serviceDateKey: string) {
+  const match = serviceDateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  return Number.isNaN(date.getTime()) ? null : date.getUTCDay();
+}
+
+export function resolveAppointmentLocationSchedule(
+  branding: WorkspaceBranding,
+  locationId: string,
+  serviceDateKey: string,
+) {
+  const location = branding.appointmentLocations?.find((entry) => entry.id === locationId);
+  const weekday = weekdayForDateKey(serviceDateKey);
+
+  if (!location || weekday === null || branding.appointmentDateOverrides?.closedDateKeys.includes(serviceDateKey)) {
+    return null;
+  }
+
+  const dateOverride = branding.appointmentDateHoursOverrides?.find((entry) => entry.dateKey === serviceDateKey);
+  if (dateOverride) {
+    const hours = dateOverride.locations.find((entry) => entry.locationId === locationId);
+    return hours ? { ...location, ...hours, workingDays: WEEKDAYS[weekday] } : null;
+  }
+
+  const weeklyOverride = branding.appointmentWeeklyHoursOverrides?.find((entry) => entry.weekday === weekday);
+  if (weeklyOverride) {
+    const hours = weeklyOverride.locations.find((entry) => entry.locationId === locationId);
+    return hours ? { ...location, ...hours, workingDays: WEEKDAYS[weekday] } : null;
+  }
+
+  const isLegacyOpenedDate = branding.appointmentDateOverrides?.openedDateKeys.includes(serviceDateKey) ?? false;
+  return isLegacyOpenedDate || selectedWeekdays(location.workingDays).includes(weekday) ? location : null;
+}
+
 function splitAcrossWeek(start: number, end: number): WeeklyInterval[] {
   if (end <= MINUTES_PER_WEEK) {
     return [{ end, start }];
@@ -177,12 +216,63 @@ export function validateAppointmentLocations(locations: AppointmentLocation[] | 
   }
 }
 
+export function validateAppointmentHoursOverrides(branding: WorkspaceBranding) {
+  const locationIds = new Set((branding.appointmentLocations ?? []).map((location) => location.id));
+  const overrideGroups = [
+    ...(branding.appointmentWeeklyHoursOverrides ?? []).map((entry) => ({ key: `weekday-${entry.weekday}`, locations: entry.locations })),
+    ...(branding.appointmentDateHoursOverrides ?? []).map((entry) => ({ key: entry.dateKey, locations: entry.locations })),
+  ];
+
+  for (const group of overrideGroups) {
+    if (!group.locations.length) {
+      throw new Error("Choose at least one location for custom leave-day hours.");
+    }
+
+    const seenLocationIds = new Set<string>();
+    const locationIntervals = group.locations.map((hours) => {
+      if (!locationIds.has(hours.locationId) || seenLocationIds.has(hours.locationId)) {
+        throw new Error("Leave-day hours must reference each configured location only once.");
+      }
+      seenLocationIds.add(hours.locationId);
+
+      const ranges = [hours.workingHours, hours.workingHoursSecondWindow]
+        .filter((value) => value.trim())
+        .map((value) => parseRange(value));
+
+      if (!hours.workingHours.trim() || ranges.some((range) => !range)) {
+        throw new Error("Complete each selected location's leave-day hours.");
+      }
+
+      const intervals = ranges.map((range) => ({
+        end: range!.start + range!.duration,
+        start: range!.start,
+      }));
+      if (intervals.some((first, firstIndex) => intervals.some((second, secondIndex) =>
+        firstIndex < secondIndex && first.start < second.end && second.start < first.end,
+      ))) {
+        throw new Error("Leave-day hour windows for one location cannot overlap.");
+      }
+
+      return intervals;
+    });
+
+    if (locationIntervals.length > 1 && locationIntervals[0].some((first) =>
+      locationIntervals.slice(1).some((intervals) => intervals.some((second) =>
+        first.start < second.end && second.start < first.end,
+      )),
+    )) {
+      throw new Error("Business locations cannot have overlapping leave-day hours on the same day.");
+    }
+  }
+}
+
 export function validateAppointmentBusinessProfile(branding: WorkspaceBranding) {
   if (!branding.instituteName.trim()) {
     throw new Error("Enter a business name.");
   }
 
   validateAppointmentLocations(branding.appointmentLocations);
+  validateAppointmentHoursOverrides(branding);
 
   if (!branding.slotDurationMinutes || !SLOT_DURATION_MINUTES.has(branding.slotDurationMinutes)) {
     throw new Error("Choose a slot duration.");

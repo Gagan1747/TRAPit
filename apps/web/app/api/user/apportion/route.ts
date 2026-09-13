@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { validateAppointmentLocationSlot } from "../../../../lib/appointment-locations";
+import { resolveAppointmentLocationSchedule, validateAppointmentLocationSlot } from "../../../../lib/appointment-locations";
 import { cancelApportionAppointment, listApportionAppointmentsForOwner, listApportionAppointmentsForRequester, updateApportionAppointment } from "../../../../lib/apportion-store";
 import { publishWorkspaceEvent } from "../../../../lib/realtime-events";
 import { getOrCreateWorkspaceAppointmentShareCode, getWorkspaceBranding, listWorkspaceAppointmentBusinesses } from "../../../../lib/testing-store";
@@ -135,7 +135,11 @@ export async function PATCH(request: Request) {
       }
 
       const ownerBranding = await getWorkspaceBranding(appointment.ownerIdentifier);
-      const location = ownerBranding?.appointmentLocations?.find((location) => location.id === appointment.locationId);
+      const location = ownerBranding && resolveAppointmentLocationSchedule(
+        ownerBranding,
+        appointment.locationId,
+        body.nextServiceDateKey ?? "",
+      );
 
       if (!location) {
         throw new Error("This appointment location is no longer available for rescheduling.");

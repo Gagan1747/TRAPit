@@ -3647,6 +3647,37 @@ button:disabled {
   opacity: 0.55;
 }
 
+.business-leave-hours-editor,
+.business-leave-date-editor {
+  gap: 12px;
+}
+
+.business-leave-day {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+
+.business-leave-day summary {
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.business-leave-day > .form-stack,
+.business-leave-date-editor {
+  margin-top: 10px;
+}
+
+.business-leave-location {
+  display: grid;
+  gap: 10px;
+  padding: 10px 0 10px 12px;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.business-leave-location .checkbox-row {
+  margin: 0;
+}
+
 .business-exception-calendar {
   display: grid;
   gap: 10px;

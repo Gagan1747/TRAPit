@@ -1,7 +1,10 @@
 "use client";
 
+import type { AppointmentDateHoursOverride, AppointmentLocation, AppointmentLocationHoursOverride } from "@trapit/testing";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
+
+import { BusinessTimeRangeSelector } from "./business-time-range-selector";
 
 type DateOverrides = {
   closedDateKeys: string[];
@@ -9,7 +12,10 @@ type DateOverrides = {
 };
 
 type BusinessDateExceptionCalendarProps = {
+  dateHoursOverrides: AppointmentDateHoursOverride[];
+  locations: AppointmentLocation[];
   onChange: (value: DateOverrides) => void;
+  onDateHoursOverridesChange: (value: AppointmentDateHoursOverride[]) => void;
   value: DateOverrides;
   workingDays: string;
 };
@@ -27,8 +33,39 @@ function parseWorkingDays(value: string) {
   ));
 }
 
-export function BusinessDateExceptionCalendar({ onChange, value, workingDays }: BusinessDateExceptionCalendarProps) {
+function updateDateLocationHours(
+  value: AppointmentDateHoursOverride[],
+  selectedDateKey: string,
+  locationId: string,
+  update: Partial<AppointmentLocationHoursOverride> | null,
+) {
+  const existing = value.find((entry) => entry.dateKey === selectedDateKey);
+  const locations = existing?.locations ?? [];
+  const nextLocations = update === null
+    ? locations.filter((entry) => entry.locationId !== locationId)
+    : locations.some((entry) => entry.locationId === locationId)
+      ? locations.map((entry) => entry.locationId === locationId ? { ...entry, ...update } : entry)
+      : [...locations, { locationId, workingHours: "", workingHoursSecondWindow: "", ...update }];
+
+  if (!nextLocations.length) {
+    return value.filter((entry) => entry.dateKey !== selectedDateKey);
+  }
+
+  return existing
+    ? value.map((entry) => entry.dateKey === selectedDateKey ? { ...entry, locations: nextLocations } : entry)
+    : [...value, { dateKey: selectedDateKey, locations: nextLocations }];
+}
+
+export function BusinessDateExceptionCalendar({
+  dateHoursOverrides,
+  locations,
+  onChange,
+  onDateHoursOverridesChange,
+  value,
+  workingDays,
+}: BusinessDateExceptionCalendarProps) {
   const [weekOffset, setWeekOffset] = useState(0);
+  const [selectedDateKey, setSelectedDateKey] = useState<string | null>(null);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const maxDate = new Date(today.getFullYear(), today.getMonth() + 6, today.getDate());
@@ -51,17 +88,29 @@ export function BusinessDateExceptionCalendar({ onChange, value, workingDays }: 
     const isOpened = value.openedDateKeys.includes(key);
 
     if (isBaselineActive) {
+      const willClose = !isClosed;
       onChange({
-        closedDateKeys: isClosed ? value.closedDateKeys.filter((entry) => entry !== key) : [...value.closedDateKeys, key],
+        closedDateKeys: willClose ? [...value.closedDateKeys, key] : value.closedDateKeys.filter((entry) => entry !== key),
         openedDateKeys: value.openedDateKeys.filter((entry) => entry !== key),
       });
+      if (willClose) {
+        onDateHoursOverridesChange(dateHoursOverrides.filter((entry) => entry.dateKey !== key));
+        setSelectedDateKey((current) => current === key ? null : current);
+      }
       return;
     }
 
+    const willOpen = !isOpened;
     onChange({
       closedDateKeys: value.closedDateKeys.filter((entry) => entry !== key),
-      openedDateKeys: isOpened ? value.openedDateKeys.filter((entry) => entry !== key) : [...value.openedDateKeys, key],
+      openedDateKeys: willOpen ? [...value.openedDateKeys, key] : value.openedDateKeys.filter((entry) => entry !== key),
     });
+    if (willOpen) {
+      setSelectedDateKey(key);
+    } else {
+      onDateHoursOverridesChange(dateHoursOverrides.filter((entry) => entry.dateKey !== key));
+      setSelectedDateKey((current) => current === key ? null : current);
+    }
   }
 
   return (
@@ -99,7 +148,59 @@ export function BusinessDateExceptionCalendar({ onChange, value, workingDays }: 
           );
         })}
       </div>
-      <p className="muted-text">Highlighted dates are working days. Select a date to open or close it for the whole business.</p>
+      {selectedDateKey && value.openedDateKeys.includes(selectedDateKey) ? (
+        <div className="form-stack business-leave-date-editor">
+          <strong>Custom hours for {selectedDateKey}</strong>
+          {locations.map((location) => {
+            const hours = dateHoursOverrides
+              .find((entry) => entry.dateKey === selectedDateKey)
+              ?.locations.find((entry) => entry.locationId === location.id);
+            return (
+              <div className="business-leave-location" key={location.id}>
+                <label className="checkbox-row">
+                  <input
+                    checked={Boolean(hours)}
+                    type="checkbox"
+                    onChange={(event) => onDateHoursOverridesChange(updateDateLocationHours(
+                      dateHoursOverrides,
+                      selectedDateKey,
+                      location.id,
+                      event.target.checked ? { workingHours: "", workingHoursSecondWindow: "" } : null,
+                    ))}
+                  />
+                  <span>{location.name}</span>
+                </label>
+                {hours ? (
+                  <div className="form-stack">
+                    <BusinessTimeRangeSelector
+                      label={`${location.name} leave-day hours`}
+                      value={hours.workingHours}
+                      onChange={(workingHours) => onDateHoursOverridesChange(updateDateLocationHours(
+                        dateHoursOverrides,
+                        selectedDateKey,
+                        location.id,
+                        { workingHours },
+                      ))}
+                    />
+                    <BusinessTimeRangeSelector
+                      blockedRanges={hours.workingHours ? [hours.workingHours] : []}
+                      label={`${location.name} leave-day hours 2`}
+                      value={hours.workingHoursSecondWindow}
+                      onChange={(workingHoursSecondWindow) => onDateHoursOverridesChange(updateDateLocationHours(
+                        dateHoursOverrides,
+                        selectedDateKey,
+                        location.id,
+                        { workingHoursSecondWindow },
+                      ))}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      <p className="muted-text">Mark leave dates by de-selecting working dates</p>
     </div>
   );
 }

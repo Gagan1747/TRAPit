@@ -78,6 +78,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
   const [identifier, setIdentifier] = useState(defaultParticipantIdentifier ?? "");
   const [isLoading, setIsLoading] = useState(true);
   const [isMutating, setIsMutating] = useState(false);
+  const [optimisticSubmittedQuestionIndex, setOptimisticSubmittedQuestionIndex] = useState<number | null>(null);
   const [participantName, setParticipantName] = useState("");
   const [remainingMs, setRemainingMs] = useState(0);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | null>(null);
@@ -102,7 +103,6 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
       clockOffsetRef.current = new Date(payload.serverNow).getTime() - Date.now();
       setGame(payload.game);
       setParticipantName((currentName) => currentName || payload.game.displayName);
-      setSelectedOptionIndex(null);
       if (!options?.silent) {
         setFeedback(null);
       }
@@ -134,6 +134,11 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
 
     return () => source.close();
   }, [gameId, identifier]);
+
+  useEffect(() => {
+    setSelectedOptionIndex(null);
+    setOptimisticSubmittedQuestionIndex(null);
+  }, [game?.currentQuestion?.id, game?.currentQuestionIndex]);
 
   useEffect(() => {
     const activeDeadline = game?.countdownDeadline ?? game?.questionDeadline;
@@ -198,11 +203,13 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
       return;
     }
 
+    const submittedQuestionIndex = game.currentQuestionIndex;
+    setOptimisticSubmittedQuestionIndex(submittedQuestionIndex);
     setIsMutating(true);
     try {
       const payload = await readJson<{ answer: GameAnswer }>(
         await fetch(`/api/user/games/${encodeURIComponent(gameId)}/answer${getQuery()}`, {
-          body: JSON.stringify({ optionIndex: selectedOptionIndex, questionIndex: game.currentQuestionIndex }),
+          body: JSON.stringify({ optionIndex: selectedOptionIndex, questionIndex: submittedQuestionIndex }),
           headers: { "Content-Type": "application/json" },
           method: "POST",
         }),
@@ -210,6 +217,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
       setFeedback(`Answered (${payload.answer.points >= 0 ? "+" : ""}${payload.answer.points})`);
       await loadGame({ silent: true });
     } catch (error) {
+      setOptimisticSubmittedQuestionIndex((current) => current === submittedQuestionIndex ? null : current);
       setFeedback(error instanceof Error ? error.message : "Unable to submit the answer.");
     } finally {
       setIsMutating(false);
@@ -382,6 +390,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
   const hasAnswered = game.currentQuestionIndex !== null && game.ownAnswers.some(
     (answer) => answer.questionIndex === game.currentQuestionIndex,
   );
+  const isSubmitted = hasAnswered || optimisticSubmittedQuestionIndex === game.currentQuestionIndex;
   const latestOwnAnswer = game.ownAnswers[game.ownAnswers.length - 1];
 
   return (
@@ -404,7 +413,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
                 <button
                   aria-pressed={selectedOptionIndex === optionIndex}
                   className={`role-option game-answer-option${selectedOptionIndex === optionIndex ? " is-selected" : ""}`}
-                  disabled={game.viewerMode === "spectator" || hasAnswered || isMutating}
+                  disabled={game.viewerMode === "spectator" || isSubmitted || isMutating}
                   key={`${game.currentQuestion?.id}-${optionIndex}`}
                   type="button"
                   onClick={() => setSelectedOptionIndex(optionIndex)}
@@ -414,8 +423,8 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
               ))}
             </div>
             {game.viewerMode === "participant" ? (
-              <button className="button" disabled={selectedOptionIndex === null || hasAnswered || isMutating} type="button" onClick={() => void submitAnswer()}>
-                {hasAnswered ? "Answer submitted" : "Submit answer"}
+              <button className="button" disabled={selectedOptionIndex === null || isSubmitted || isMutating} type="button" onClick={() => void submitAnswer()}>
+                {isSubmitted ? "Submitted" : "Submit"}
               </button>
             ) : <p className="status-chip warning">Watching as spectator</p>}
           </div>

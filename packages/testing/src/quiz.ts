@@ -132,6 +132,22 @@ export type AppointmentLocation = {
   workingDays: string;
 };
 
+export type AppointmentLocationHoursOverride = {
+  locationId: string;
+  workingHours: string;
+  workingHoursSecondWindow: string;
+};
+
+export type AppointmentDateHoursOverride = {
+  dateKey: string;
+  locations: AppointmentLocationHoursOverride[];
+};
+
+export type AppointmentWeeklyHoursOverride = {
+  locations: AppointmentLocationHoursOverride[];
+  weekday: number;
+};
+
 export type WorkspaceBranding = {
   address: string;
   advanceBookingWeeks: number | null;
@@ -140,8 +156,10 @@ export type WorkspaceBranding = {
     openedDateKeys: string[];
   };
   appointmentShareCode: string | null;
+  appointmentDateHoursOverrides?: AppointmentDateHoursOverride[];
   appointmentLocations?: AppointmentLocation[];
   appointmentNotesPrompt: string;
+  appointmentWeeklyHoursOverrides?: AppointmentWeeklyHoursOverride[];
   appointmentsPerSlot: number | null;
   breakHours: string;
   imageDataUrl: string | null;
@@ -886,6 +904,40 @@ export function normalizeWorkspaceBranding(
       workingHours: location.workingHours?.trim() ?? "",
       workingHoursSecondWindow: location.workingHoursSecondWindow?.trim() ?? "",
     }));
+  const locationIds = new Set(appointmentLocations.map((location) => location.id));
+  const normalizeOverrideLocations = (locations: AppointmentLocationHoursOverride[] | undefined) =>
+    (locations ?? [])
+      .map((location) => ({
+        locationId: location.locationId?.trim() ?? "",
+        workingHours: location.workingHours?.trim() ?? "",
+        workingHoursSecondWindow: location.workingHoursSecondWindow?.trim() ?? "",
+      }))
+      .filter((location, index, values) =>
+        locationIds.has(location.locationId)
+        && Boolean(location.workingHours)
+        && values.findIndex((candidate) => candidate.locationId === location.locationId) === index,
+      );
+  const appointmentDateHoursOverrides = (branding.appointmentDateHoursOverrides ?? [])
+    .map((override) => ({
+      dateKey: override.dateKey?.trim() ?? "",
+      locations: normalizeOverrideLocations(override.locations),
+    }))
+    .filter((override, index, values) =>
+      validDateKey.test(override.dateKey)
+      && override.locations.length > 0
+      && values.findIndex((candidate) => candidate.dateKey === override.dateKey) === index,
+    );
+  const appointmentWeeklyHoursOverrides = (branding.appointmentWeeklyHoursOverrides ?? [])
+    .map((override) => ({
+      locations: normalizeOverrideLocations(override.locations),
+      weekday: Number.isInteger(override.weekday) ? override.weekday : -1,
+    }))
+    .filter((override, index, values) =>
+      override.weekday >= 0
+      && override.weekday <= 6
+      && override.locations.length > 0
+      && values.findIndex((candidate) => candidate.weekday === override.weekday) === index,
+    );
   const primaryLocation = appointmentLocations[0];
   const showRemainingBookings = branding.showRemainingBookings === true;
   const appointmentsPerSlot = Number.isFinite(branding.appointmentsPerSlot) && branding.appointmentsPerSlot && branding.appointmentsPerSlot > 0
@@ -903,9 +955,11 @@ export function normalizeWorkspaceBranding(
     address: primaryLocation?.address ?? address,
     advanceBookingWeeks,
 		appointmentDateOverrides: { closedDateKeys, openedDateKeys },
+		appointmentDateHoursOverrides,
 		appointmentLocations,
     appointmentShareCode,
     appointmentNotesPrompt,
+		appointmentWeeklyHoursOverrides,
     appointmentsPerSlot,
     breakHours,
     imageDataUrl,

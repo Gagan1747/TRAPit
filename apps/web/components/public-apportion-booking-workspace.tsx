@@ -19,8 +19,16 @@ type BookingPayload = {
       closedDateKeys: string[];
       openedDateKeys: string[];
     };
+    appointmentDateHoursOverrides: Array<{
+      dateKey: string;
+      locations: Array<{ locationId: string; workingHours: string; workingHoursSecondWindow: string }>;
+    }>;
     appointmentNotesPrompt: string;
     appointmentsPerSlot: number;
+    appointmentWeeklyHoursOverrides: Array<{
+      locations: Array<{ locationId: string; workingHours: string; workingHoursSecondWindow: string }>;
+      weekday: number;
+    }>;
     imageDataUrl: string | null;
     justAddToList: boolean;
     locations: Array<{
@@ -58,6 +66,34 @@ type CalendarCell =
   | { key: string; label: string; type: "month" }
   | { date: Date; key: string; type: "date" }
   | { key: string; type: "blank" };
+
+type BookingLocation = BookingPayload["business"]["locations"][number];
+
+function resolveEffectiveLocation(
+  business: BookingPayload["business"],
+  location: BookingLocation,
+  serviceDateKey: string,
+) {
+  if (business.appointmentDateOverrides.closedDateKeys.includes(serviceDateKey)) {
+    return null;
+  }
+
+  const dateOverride = business.appointmentDateHoursOverrides.find((entry) => entry.dateKey === serviceDateKey);
+  if (dateOverride) {
+    const hours = dateOverride.locations.find((entry) => entry.locationId === location.id);
+    return hours ? { ...location, ...hours } : null;
+  }
+
+  const date = createDateFromKey(serviceDateKey);
+  const weeklyOverride = business.appointmentWeeklyHoursOverrides.find((entry) => entry.weekday === date.getDay());
+  if (weeklyOverride) {
+    const hours = weeklyOverride.locations.find((entry) => entry.locationId === location.id);
+    return hours ? { ...location, ...hours } : null;
+  }
+
+  const isWorkingDay = parseWorkingDays(location.workingDays).has(WEEKDAY_NAMES[date.getDay()]);
+  return isWorkingDay || business.appointmentDateOverrides.openedDateKeys.includes(serviceDateKey) ? location : null;
+}
 
 async function readJson<T>(response: Response): Promise<T> {
   const payload = (await response.json()) as T & { error?: string };
@@ -429,14 +465,11 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       return;
     }
 
-    const workingDays = parseWorkingDays(selectedLocation.workingDays);
     const today = createDateFromKey(getIstDateKey(new Date()));
 
     const maxDate = new Date(today);
     maxDate.setMonth(today.getMonth() + 6);
     const dayCount = Math.ceil((maxDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000)) + 1;
-    const closedDateKeys = new Set(payload.business.appointmentDateOverrides.closedDateKeys);
-    const openedDateKeys = new Set(payload.business.appointmentDateOverrides.openedDateKeys);
     const queueCountsByDate = Object.fromEntries(payload.queueCounts
       .filter((entry) => entry.locationId === selectedLocation.id)
       .map((entry) => [entry.dateKey, entry.count]));
@@ -446,8 +479,8 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       return date;
     }).find((date) => {
       const key = createDateKey(date);
-      const isWorkingDate = !closedDateKeys.has(key)
-        && (workingDays.has(WEEKDAY_NAMES[date.getDay()]) || openedDateKeys.has(key));
+      const effectiveLocation = resolveEffectiveLocation(payload.business, selectedLocation, key);
+      const isWorkingDate = Boolean(effectiveLocation);
 
       if (!isWorkingDate || !payload.business.justAddToList) {
         return isWorkingDate;
@@ -458,8 +491,8 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
         appointmentsPerSlot: payload.business.appointmentsPerSlot,
         selectedDateKey: key,
         slotDurationMinutes: payload.business.slotDurationMinutes ?? 30,
-        workingHours: selectedLocation.workingHours,
-        workingHoursSecondWindow: selectedLocation.workingHoursSecondWindow,
+        workingHours: effectiveLocation?.workingHours ?? "",
+        workingHoursSecondWindow: effectiveLocation?.workingHoursSecondWindow ?? "",
       }));
     });
 
@@ -592,7 +625,9 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   const today = createDateFromKey(getIstDateKey(new Date()));
   today.setHours(0, 0, 0, 0);
   const selectedLocation = payload.business.locations.find((location) => location.id === selectedLocationId) ?? null;
-  const workingDays = parseWorkingDays(selectedLocation?.workingDays ?? "none");
+  const effectiveSelectedLocation = selectedLocation
+    ? resolveEffectiveLocation(payload.business, selectedLocation, selectedDateKey)
+    : null;
   const slotDurationMinutes = payload.business.slotDurationMinutes ?? 30;
   const slotCountsByIso = Object.fromEntries(payload.slotCounts
     .filter((slot) => slot.locationId === selectedLocationId)
@@ -611,12 +646,12 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     date.setDate(weekStartDate.getDate() + dayOffset);
     return date;
   });
-  const workingHoursText = [selectedLocation?.workingHours, selectedLocation?.workingHoursSecondWindow].filter(Boolean).join(" and ");
-  const availableSlots = (selectedLocation ? buildSlotStartsForDate({
+  const workingHoursText = [effectiveSelectedLocation?.workingHours, effectiveSelectedLocation?.workingHoursSecondWindow].filter(Boolean).join(" and ");
+  const availableSlots = (effectiveSelectedLocation ? buildSlotStartsForDate({
     selectedDateKey,
     slotDurationMinutes,
-    workingHours: selectedLocation.workingHours,
-    workingHoursSecondWindow: selectedLocation.workingHoursSecondWindow,
+    workingHours: effectiveSelectedLocation.workingHours,
+    workingHoursSecondWindow: effectiveSelectedLocation.workingHoursSecondWindow,
   }) : []).map((slot) => {
     const startsAt = slot.startsAt;
     const isPast = new Date(startsAt).getTime() <= Date.now();
@@ -640,16 +675,14 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     .map(normalizeImageDataUrl)
     .filter((imageUrl) => !failedPromotionalImages.includes(imageUrl));
   const queueEstimate = payload.business.justAddToList
-    && selectedLocation
-    && !closedDateKeys.has(selectedDateKey)
-    && (workingDays.has(WEEKDAY_NAMES[createDateFromKey(selectedDateKey).getDay()]) || openedDateKeys.has(selectedDateKey))
+    && effectiveSelectedLocation
     ? estimateQueueStart({
         activeCount: queueCountsByDateKey[selectedDateKey] ?? 0,
         appointmentsPerSlot: payload.business.appointmentsPerSlot,
         selectedDateKey,
         slotDurationMinutes,
-        workingHours: selectedLocation.workingHours,
-        workingHoursSecondWindow: selectedLocation.workingHoursSecondWindow,
+        workingHours: effectiveSelectedLocation.workingHours,
+        workingHoursSecondWindow: effectiveSelectedLocation.workingHoursSecondWindow,
       })
     : null;
   const queueCountForSelectedDate = queueCountsByDateKey[selectedDateKey] ?? 0;
@@ -787,9 +820,8 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                 <div className="apportion-calendar" aria-label="Appointment calendar">
                   {weekDates.map((date) => {
                     const dateKey = createDateKey(date);
-                    const isWorkingDay = workingDays.has(WEEKDAY_NAMES[date.getDay()]);
-                    const isDateInWindow = !closedDateKeys.has(dateKey)
-                      && (isWorkingDay || openedDateKeys.has(dateKey))
+                    const effectiveDateLocation = resolveEffectiveLocation(payload.business, selectedLocation, dateKey);
+                    const isDateInWindow = Boolean(effectiveDateLocation)
                       && date >= today
                       && date <= maxBookableDate;
                     const hasQueueCapacity = !payload.business.justAddToList || Boolean(estimateQueueStart({
@@ -797,8 +829,8 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                       appointmentsPerSlot: payload.business.appointmentsPerSlot,
                       selectedDateKey: dateKey,
                       slotDurationMinutes,
-                      workingHours: selectedLocation.workingHours,
-                      workingHoursSecondWindow: selectedLocation.workingHoursSecondWindow,
+                      workingHours: effectiveDateLocation?.workingHours ?? "",
+                      workingHoursSecondWindow: effectiveDateLocation?.workingHoursSecondWindow ?? "",
                     }));
                     const isAvailableDate = isDateInWindow && hasQueueCapacity;
                     const isSelected = dateKey === selectedDateKey;

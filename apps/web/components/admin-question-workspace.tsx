@@ -12,6 +12,8 @@ import {
   getScheduledTestEndTime,
   type GroupJoinRequest,
   type GameLeaderboardEntry,
+  type AppointmentDateHoursOverride,
+  type AppointmentWeeklyHoursOverride,
   type ObjectiveQuestion,
   type PollBulkImportPreview,
   type PollQuestionDraft,
@@ -43,6 +45,7 @@ import { AnswerStatusIndicator } from "./answer-status-indicator";
 import { AssessmentLogTable, type AssessmentLogRow } from "./assessment-log-table";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
 import { BusinessDateExceptionCalendar } from "./business-date-exception-calendar";
+import { BusinessLeaveHoursEditor } from "./business-leave-hours-editor";
 import { BusinessTimeRangeSelector } from "./business-time-range-selector";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 import { FloatingWindowCloseButton } from "./floating-window-close-button";
@@ -864,6 +867,8 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
   const appointmentShareCode = branding?.appointmentShareCode?.trim() || null;
   const appointmentNotesPrompt = branding?.appointmentNotesPrompt?.trim() || DEFAULT_APPOINTMENT_NOTES_PROMPT;
   const appointmentDateOverrides = branding?.appointmentDateOverrides ?? { closedDateKeys: [], openedDateKeys: [] };
+  const appointmentDateHoursOverrides = branding?.appointmentDateHoursOverrides ?? [];
+  const appointmentWeeklyHoursOverrides = branding?.appointmentWeeklyHoursOverrides ?? [];
   const appointmentLocations = (branding?.appointmentLocations ?? []).map((location, index) => ({
     address: location.address.trim(),
     id: location.id.trim() || `location-${index + 1}`,
@@ -901,10 +906,12 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
   return {
     address,
     advanceBookingWeeks,
+    appointmentDateHoursOverrides,
     appointmentDateOverrides,
     appointmentLocations,
     appointmentShareCode,
     appointmentNotesPrompt,
+    appointmentWeeklyHoursOverrides,
     appointmentsPerSlot,
     breakHours,
     imageDataUrl,
@@ -1749,6 +1756,8 @@ export function AdminQuestionWorkspace({
   const [businessWorkingHours, setBusinessWorkingHours] = useState("");
   const [businessWorkingHoursSecondWindow, setBusinessWorkingHoursSecondWindow] = useState("");
   const [businessDateOverrides, setBusinessDateOverrides] = useState({ closedDateKeys: [] as string[], openedDateKeys: [] as string[] });
+  const [businessDateHoursOverrides, setBusinessDateHoursOverrides] = useState<AppointmentDateHoursOverride[]>([]);
+  const [businessWeeklyHoursOverrides, setBusinessWeeklyHoursOverrides] = useState<AppointmentWeeklyHoursOverride[]>([]);
   const [businessSecondLocation, setBusinessSecondLocation] = useState({
     address: "",
     enabled: false,
@@ -1891,6 +1900,8 @@ export function AdminQuestionWorkspace({
     setBusinessWorkingHours(firstLocation?.workingHours ?? branding?.workingHours ?? "");
     setBusinessWorkingHoursSecondWindow(firstLocation?.workingHoursSecondWindow ?? branding?.workingHoursSecondWindow ?? "");
     setBusinessDateOverrides(branding?.appointmentDateOverrides ?? { closedDateKeys: [], openedDateKeys: [] });
+    setBusinessDateHoursOverrides(branding?.appointmentDateHoursOverrides ?? []);
+    setBusinessWeeklyHoursOverrides(branding?.appointmentWeeklyHoursOverrides ?? []);
     setIsBusinessSecondWindowOpen(Boolean(firstLocation?.workingHoursSecondWindow ?? branding?.workingHoursSecondWindow));
     setIsBusinessSecondLocationSecondWindowOpen(Boolean(secondLocation?.workingHoursSecondWindow));
     setBusinessSecondLocation({
@@ -4014,6 +4025,7 @@ export function AdminQuestionWorkspace({
     const nextBranding = normalizeBrandingInput({
       address: brandingAddress,
       advanceBookingWeeks,
+      appointmentDateHoursOverrides: businessDateHoursOverrides,
       appointmentDateOverrides: businessDateOverrides,
       appointmentLocations: [
         {
@@ -4035,6 +4047,7 @@ export function AdminQuestionWorkspace({
       ],
       appointmentNotesPrompt: businessAppointmentNotesPrompt,
       appointmentShareCode: businessAppointmentShareCode ?? workspaceBranding?.appointmentShareCode ?? null,
+      appointmentWeeklyHoursOverrides: businessWeeklyHoursOverrides,
       appointmentsPerSlot,
       breakHours: "",
       imageDataUrl: brandingImageDataUrl,
@@ -4152,6 +4165,8 @@ export function AdminQuestionWorkspace({
     setBusinessWorkingHours("");
     setBusinessWorkingHoursSecondWindow("");
     setBusinessDateOverrides({ closedDateKeys: [], openedDateKeys: [] });
+    setBusinessDateHoursOverrides([]);
+    setBusinessWeeklyHoursOverrides([]);
     setIsBusinessSecondWindowOpen(false);
     setIsBusinessSecondLocationSecondWindowOpen(false);
 
@@ -5228,13 +5243,30 @@ export function AdminQuestionWorkspace({
         </div>
       )}
       <div className="field business-field-card">
+        <span className="field-label">Weekly off working hours</span>
+        <BusinessLeaveHoursEditor
+          locations={brandingPreview?.appointmentLocations ?? []}
+          value={businessWeeklyHoursOverrides}
+          onChange={(value) => {
+            markBrandingDraftDirty();
+            setBusinessWeeklyHoursOverrides(value);
+          }}
+        />
+      </div>
+      <div className="field business-field-card">
         <span className="field-label">Leave and schedule calendar</span>
         <BusinessDateExceptionCalendar
+          dateHoursOverrides={businessDateHoursOverrides}
+          locations={brandingPreview?.appointmentLocations ?? []}
           value={businessDateOverrides}
           workingDays={businessWorkingDays}
           onChange={(value) => {
             markBrandingDraftDirty();
             setBusinessDateOverrides(value);
+          }}
+          onDateHoursOverridesChange={(value) => {
+            markBrandingDraftDirty();
+            setBusinessDateHoursOverrides(value);
           }}
         />
       </div>
