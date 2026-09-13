@@ -928,6 +928,12 @@ main {
   display: block;
   color: currentColor;
   flex-shrink: 0;
+  transition: transform 160ms ease;
+}
+
+.apportion-link-actions .icon-button:hover .apportion-action-icon,
+.apportion-link-actions .icon-button:focus-visible .apportion-action-icon {
+  transform: translateY(-1px) scale(1.06);
 }
 
 .business-logo-dropzone {
@@ -1083,17 +1089,34 @@ main {
   min-height: 420px;
   aspect-ratio: 4 / 5;
   overflow: hidden;
-  border: 1px solid rgba(81, 55, 133, 0.16);
   border-radius: 8px;
-  background: rgba(81, 55, 133, 0.08);
+  background: color-mix(in srgb, var(--surface-soft) 82%, transparent);
 }
 
-.apportion-promotion-carousel > img,
+.apportion-carousel-stage {
+  position: absolute;
+  inset: 0;
+}
+
+.apportion-carousel-slide {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 600ms ease-in-out;
+}
+
+.apportion-carousel-slide.is-active {
+  opacity: 1;
+}
+
 .apportion-promotion-empty {
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
 }
 
 .apportion-promotion-empty {
@@ -1150,6 +1173,12 @@ main {
 
 .apportion-carousel-indicators button.is-active {
   background: #fff;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .apportion-carousel-slide {
+    transition: none;
+  }
 }
 
 .apportion-booking-right-column {
@@ -3369,11 +3398,23 @@ button:disabled {
 .game-countdown {
   display: grid;
   place-items: center;
-  width: 64px;
-  height: 64px;
+  width: 86px;
+  min-width: 86px;
+  height: 58px;
   border: 2px solid var(--accent, #5b4cc4);
-  border-radius: 50%;
-  font-size: 1.35rem;
+  border-radius: 8px;
+  background: #211a35;
+  color: #ffffff;
+  font-size: 1.45rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.game-countdown.is-preparing {
+  width: 132px;
+  min-width: 132px;
+  padding: 0 10px;
+  font-size: 0.88rem;
+  text-align: center;
 }
 
 .game-answer-grid,
@@ -3386,13 +3427,56 @@ button:disabled {
 
 .game-answer-option {
   width: 100%;
-  min-height: 52px;
+  min-height: 64px;
+  padding: 14px 16px;
+  border: 2px solid var(--border-color, #d8dbe5);
+  background: #ffffff;
+  color: #18151f;
+  font-size: 1.08rem;
+  font-weight: 650;
+  line-height: 1.45;
   text-align: left;
 }
 
 .game-answer-option.is-selected {
   border-color: var(--accent, #5b4cc4);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #5b4cc4) 20%, transparent);
+  background: color-mix(in srgb, var(--accent, #5b4cc4) 12%, white);
+  box-shadow: inset 5px 0 0 var(--accent, #5b4cc4), 0 0 0 2px color-mix(in srgb, var(--accent, #5b4cc4) 24%, transparent);
+}
+
+.game-answer-option:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent, #5b4cc4) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.game-answer-option:disabled.is-selected {
+  opacity: 1;
+}
+
+.game-answer-action-bar {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  min-height: 58px;
+}
+
+.game-submit-button {
+  min-width: 180px;
+  min-height: 58px;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+@media (max-width: 520px) {
+  .game-answer-action-bar {
+    display: grid;
+    grid-template-columns: minmax(86px, auto) minmax(0, 1fr);
+  }
+
+  .game-submit-button {
+    width: 100%;
+    min-width: 0;
+  }
 }
 
 .game-lobby-participant,

@@ -516,7 +516,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
 
     const intervalId = window.setInterval(() => {
       setCarouselIndex((current) => (current + 1) % imageCount);
-    }, 5000);
+    }, 8000);
 
     return () => window.clearInterval(intervalId);
   }, [failedPromotionalImages, payload]);
@@ -719,16 +719,18 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
         <div className="apportion-booking-grid">
           <div className="apportion-promotion-carousel" aria-label="Business promotional images">
             {promotionalImageDataUrls.length ? (
-              <img
-                alt={`Business promotion ${carouselIndex + 1} of ${promotionalImageDataUrls.length}`}
-                src={promotionalImageDataUrls[carouselIndex]}
-                onError={() => {
-                  const failedImageUrl = promotionalImageDataUrls[carouselIndex];
-                  if (failedImageUrl) {
-                    setFailedPromotionalImages((current) => current.includes(failedImageUrl) ? current : [...current, failedImageUrl]);
-                  }
-                }}
-              />
+              <div className="apportion-carousel-stage">
+                {promotionalImageDataUrls.map((imageUrl, index) => (
+                  <img
+                    alt={index === carouselIndex ? `Business promotion ${index + 1} of ${promotionalImageDataUrls.length}` : ""}
+                    aria-hidden={index !== carouselIndex}
+                    className={`apportion-carousel-slide${index === carouselIndex ? " is-active" : ""}`}
+                    key={imageUrl}
+                    src={imageUrl}
+                    onError={() => setFailedPromotionalImages((current) => current.includes(imageUrl) ? current : [...current, imageUrl])}
+                  />
+                ))}
+              </div>
             ) : (
               <div className="apportion-promotion-empty">
                 <strong>{payload.business.name || "Business appointment"}</strong>

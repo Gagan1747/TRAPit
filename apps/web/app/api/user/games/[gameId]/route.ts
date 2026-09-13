@@ -69,6 +69,14 @@ export async function GET(request: Request, context: { params: { gameId: string 
   const acceptedParticipants = game.participants
     .filter((entry) => entry.acceptedAt)
     .sort((left, right) => new Date(left.acceptedAt as string).getTime() - new Date(right.acceptedAt as string).getTime());
+  const poolName = workspace.pools.find((pool) => pool.id === game.poolId)?.name ?? "Unknown pool";
+  const groupName = workspace.participantGroups.find((group) => group.id === game.participantGroupId)?.name ?? "Unknown group";
+  const creatorProfile = workspace.participants.find((profile) =>
+    participantIdentifiersMatch(profile.identifier, game.creatorIdentifier),
+  );
+  const creatorParticipant = game.participants.find((entry) =>
+    participantIdentifiersMatch(entry.identifier, game.creatorIdentifier),
+  );
 
   return NextResponse.json({
     game: {
@@ -93,7 +101,16 @@ export async function GET(request: Request, context: { params: { gameId: string 
         identifier: entry.identifier,
         label: entry.label,
       })),
+      preparationDeadline: game.preparationDeadline,
       questionDeadline: game.questionDeadline,
+      resultMetadata: {
+        creatorName: creatorProfile?.label?.trim()
+          || creatorParticipant?.label?.trim()
+          || game.creatorIdentifier,
+        groupName,
+        poolName,
+        startedAt: game.startedAt,
+      },
       recentDeltas: game.answers.slice(-6).map((answer) => ({
         answeredAt: answer.answeredAt,
         participantIdentifier: answer.participantIdentifier,

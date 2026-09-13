@@ -3,6 +3,7 @@
 import type { GameAnswer, GameCreatorRole, GameLeaderboardEntry } from "@trapit/testing";
 import { useEffect, useRef, useState } from "react";
 
+import { formatShortDateTime } from "../lib/date-format";
 import { AnswerStatusIndicator } from "./answer-status-indicator";
 
 type GameState = {
@@ -21,8 +22,15 @@ type GameState = {
   ownAnswers: GameAnswer[];
   participantCount: number;
   participants: Array<{ acceptedAt: string; identifier: string; label: string }>;
+  preparationDeadline: string | null;
   questionDeadline: string | null;
   recentDeltas: Array<{ answeredAt: string; participantIdentifier: string; points: number }>;
+  resultMetadata: {
+    creatorName: string;
+    groupName: string;
+    poolName: string;
+    startedAt: string | null;
+  };
   reviewQuestions: Array<{
     answer: GameAnswer | null;
     correctOptionIndex: number;
@@ -84,6 +92,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
   const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | null>(null);
   const clockOffsetRef = useRef(0);
   const deadlineRefreshRef = useRef(false);
+  const readyQuestionRef = useRef<string | null>(null);
 
   function getQuery() {
     return !authConfigured && identifier.trim()
@@ -141,7 +150,47 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
   }, [game?.currentQuestion?.id, game?.currentQuestionIndex]);
 
   useEffect(() => {
-    const activeDeadline = game?.countdownDeadline ?? game?.questionDeadline;
+    if (
+      game?.status !== "ongoing"
+      || game.viewerMode !== "participant"
+      || !game.currentQuestion
+      || game.currentQuestionIndex === null
+      || game.questionDeadline
+    ) {
+      return;
+    }
+
+    const readyKey = `${game.currentQuestionIndex}:${game.currentQuestion.id}`;
+    if (readyQuestionRef.current === readyKey) {
+      return;
+    }
+    readyQuestionRef.current = readyKey;
+
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(async () => {
+        try {
+          await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/ready${getQuery()}`, {
+            body: JSON.stringify({ questionIndex: game.currentQuestionIndex }),
+            headers: { "Content-Type": "application/json" },
+            method: "POST",
+          }));
+          await loadGame({ silent: true });
+        } catch (error) {
+          readyQuestionRef.current = null;
+          setFeedback(error instanceof Error ? error.message : "Unable to start the question timer.");
+        }
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [game?.currentQuestion?.id, game?.currentQuestionIndex, game?.questionDeadline, game?.status, game?.viewerMode, gameId]);
+
+  useEffect(() => {
+    const activeDeadline = game?.countdownDeadline ?? game?.questionDeadline ?? game?.preparationDeadline;
 
     if (!activeDeadline) {
       setRemainingMs(0);
@@ -164,7 +213,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
     tick();
     const intervalId = window.setInterval(tick, 250);
     return () => window.clearInterval(intervalId);
-  }, [game?.countdownDeadline, game?.questionDeadline]);
+  }, [game?.countdownDeadline, game?.preparationDeadline, game?.questionDeadline]);
 
   async function runAction(action: "accept" | "start") {
     setIsMutating(true);
@@ -344,6 +393,17 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
     return (
       <div className="game-page-stack">
         {userBanner}
+        <div className="leaderboard-table-wrap test-results-summary-wrap">
+          <table className="leaderboard-table test-results-summary-table">
+            <thead><tr><th>Scheduled date</th><th>Question Pool</th><th>Groups</th><th>Test creator name</th></tr></thead>
+            <tbody><tr>
+              <td>{game.resultMetadata.startedAt ? formatShortDateTime(game.resultMetadata.startedAt) : "Not started"}</td>
+              <td>{game.resultMetadata.poolName}</td>
+              <td>{game.resultMetadata.groupName}</td>
+              <td>{game.resultMetadata.creatorName}</td>
+            </tr></tbody>
+          </table>
+        </div>
         <div className="game-runner-layout">
           <section className="workspace-card game-question-panel">
             <p className="eyebrow">{game.isMissed ? "Missed game" : "Completed game"}</p>
@@ -383,6 +443,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
           </section>
           <GameLeaderboard game={game} />
         </div>
+        <p className="apportion-identity-mark">www.TRAPit.in</p>
       </div>
     );
   }
@@ -403,7 +464,6 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
             <p className="eyebrow">Question {(game.currentQuestionIndex ?? 0) + 1} of 20</p>
             <h1>{game.title}</h1>
           </div>
-          <strong className="game-countdown">{Math.ceil(remainingMs / 1000)}s</strong>
         </div>
         {game.currentQuestion ? (
           <div className="form-stack">
@@ -423,10 +483,20 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
               ))}
             </div>
             {game.viewerMode === "participant" ? (
-              <button className="button" disabled={selectedOptionIndex === null || isSubmitted || isMutating} type="button" onClick={() => void submitAnswer()}>
-                {isSubmitted ? "Submitted" : "Submit"}
-              </button>
-            ) : <p className="status-chip warning">Watching as spectator</p>}
+              <div className="game-answer-action-bar">
+                <strong className={`game-countdown${game.questionDeadline ? "" : " is-preparing"}`} aria-live="polite">
+                  {game.questionDeadline ? `${Math.ceil(remainingMs / 1000)}s` : "Preparing timer..."}
+                </strong>
+                <button className="button game-submit-button" disabled={selectedOptionIndex === null || isSubmitted || isMutating || !game.questionDeadline} type="button" onClick={() => void submitAnswer()}>
+                  {isSubmitted ? "Submitted" : "Submit"}
+                </button>
+              </div>
+            ) : (
+              <div className="game-answer-action-bar">
+                <strong className={`game-countdown${game.questionDeadline ? "" : " is-preparing"}`}>{game.questionDeadline ? `${Math.ceil(remainingMs / 1000)}s` : "Preparing timer..."}</strong>
+                <p className="status-chip warning">Watching as spectator</p>
+              </div>
+            )}
           </div>
         ) : <p className="muted-text">Preparing the next question...</p>}
           {feedback ? <p className="muted-text">{feedback}</p> : latestOwnAnswer?.kind === "timeout" ? <p className="muted-text">Previous question timed out ({latestOwnAnswer.points})</p> : null}

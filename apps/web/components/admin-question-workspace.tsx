@@ -36,7 +36,7 @@ import {
   type WorkspaceBranding,
 } from "@trapit/testing";
 import { Fragment, type DragEvent, useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Check, Copy, ExternalLink, QrCode, X } from "lucide-react";
 import QRCode from "qrcode";
 
 import { formatShortDate, formatShortDateTime, formatShortDateTimeIst } from "../lib/date-format";
@@ -125,47 +125,6 @@ const DEFAULT_BUSINESS_START_MINUTES = 10 * 60;
 const DEFAULT_BUSINESS_END_MINUTES = 18 * 60;
 const DEFAULT_APPOINTMENT_NOTES_PROMPT = "Share a brief about appointment purpose";
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
-
-function ApportionCopyIcon() {
-  return (
-    <svg aria-hidden="true" className="apportion-action-icon" viewBox="0 0 24 24">
-      <rect fill="none" height="12" rx="2" stroke="currentColor" strokeWidth="2" width="12" x="8" y="8" />
-      <path d="M6 16H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
-      <path d="M13 12h8M17 8l4 4-4 4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-    </svg>
-  );
-}
-
-function ApportionOpenIcon() {
-  return (
-    <svg aria-hidden="true" className="apportion-action-icon" viewBox="0 0 24 24">
-      <path d="M14 4h6v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-      <path d="M10 14 20 4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-      <rect fill="none" height="15" rx="3" stroke="currentColor" strokeWidth="2" width="15" x="3" y="6" />
-    </svg>
-  );
-}
-
-function ApportionQrDownloadIcon() {
-  return (
-    <svg aria-hidden="true" className="apportion-action-icon" viewBox="0 0 24 24">
-      <rect fill="none" height="6" rx="1" stroke="currentColor" strokeWidth="2" width="6" x="3" y="3" />
-      <rect fill="none" height="6" rx="1" stroke="currentColor" strokeWidth="2" width="6" x="15" y="3" />
-      <rect fill="none" height="6" rx="1" stroke="currentColor" strokeWidth="2" width="6" x="3" y="15" />
-      <path d="M15 15h2v2h-2zM19 15h2v4h-2zM15 19h4v2h-4z" fill="currentColor" />
-      <path d="M20 10v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2" />
-      <path d="m17.5 13.5 2.5 2.5 2.5-2.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" />
-    </svg>
-  );
-}
-
-function ApportionCopiedIcon() {
-  return (
-    <svg aria-hidden="true" className="apportion-action-icon" viewBox="0 0 24 24">
-      <path d="M5 13.5 9.5 18 19 7" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.4" />
-    </svg>
-  );
-}
 
 type TestRepeatMode = "none" | "daily" | "weekly" | "monthly";
 
@@ -1766,8 +1725,6 @@ export function AdminQuestionWorkspace({
     workingHours: "",
     workingHoursSecondWindow: "",
   });
-  const [isBusinessSecondWindowOpen, setIsBusinessSecondWindowOpen] = useState(false);
-  const [isBusinessSecondLocationSecondWindowOpen, setIsBusinessSecondLocationSecondWindowOpen] = useState(false);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const [importPreview, setImportPreview] = useState<BulkImportPreview | null>(null);
   const [importText, setImportText] = useState("");
@@ -1902,8 +1859,6 @@ export function AdminQuestionWorkspace({
     setBusinessDateOverrides(branding?.appointmentDateOverrides ?? { closedDateKeys: [], openedDateKeys: [] });
     setBusinessDateHoursOverrides(branding?.appointmentDateHoursOverrides ?? []);
     setBusinessWeeklyHoursOverrides(branding?.appointmentWeeklyHoursOverrides ?? []);
-    setIsBusinessSecondWindowOpen(Boolean(firstLocation?.workingHoursSecondWindow ?? branding?.workingHoursSecondWindow));
-    setIsBusinessSecondLocationSecondWindowOpen(Boolean(secondLocation?.workingHoursSecondWindow));
     setBusinessSecondLocation({
       address: secondLocation?.address ?? "",
       enabled: Boolean(secondLocation),
@@ -4107,41 +4062,6 @@ export function AdminQuestionWorkspace({
     });
   }
 
-  function handleBusinessTimeDropdownChange(windowName: "first" | "second", boundary: "end" | "start", value: string) {
-    markBrandingDraftDirty();
-    const currentRange = windowName === "first"
-      ? parseBusinessTimeRange(businessWorkingHours)
-      : parseBusinessTimeRange(businessWorkingHoursSecondWindow || "2:00 PM - 6:00 PM");
-    const nextMinutes = parseBusinessTime(value);
-
-    if (nextMinutes === null) {
-      return;
-    }
-
-    if (windowName === "second") {
-      setIsBusinessSecondWindowOpen(true);
-    }
-
-    const nextRange = boundary === "start"
-      ? {
-          endMinutes: currentRange.endMinutes,
-          startMinutes: nextMinutes,
-        }
-      : {
-          endMinutes: nextMinutes,
-          startMinutes: currentRange.startMinutes,
-        };
-
-    const nextValue = formatBusinessTimeRange(nextRange.startMinutes, nextRange.endMinutes);
-
-    if (windowName === "first") {
-      setBusinessWorkingHours(nextValue);
-      return;
-    }
-
-    setBusinessWorkingHoursSecondWindow(nextValue);
-  }
-
   function handleBrandingDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setIsBrandingDragActive(false);
@@ -4167,8 +4087,6 @@ export function AdminQuestionWorkspace({
     setBusinessDateOverrides({ closedDateKeys: [], openedDateKeys: [] });
     setBusinessDateHoursOverrides([]);
     setBusinessWeeklyHoursOverrides([]);
-    setIsBusinessSecondWindowOpen(false);
-    setIsBusinessSecondLocationSecondWindowOpen(false);
 
     try {
       const payload = await readJson<BrandingResponse>(
@@ -5021,7 +4939,7 @@ export function AdminQuestionWorkspace({
             type="button"
             onClick={() => void handleCopyLink("business-panel", businessAppointmentUrl)}
           >
-            {copiedLinkKey === "business-panel" ? <ApportionCopiedIcon /> : <ApportionCopyIcon />}
+            {copiedLinkKey === "business-panel" ? <Check aria-hidden="true" className="apportion-action-icon" /> : <Copy aria-hidden="true" className="apportion-action-icon" />}
           </button>
           <a
             aria-label="Open booking page"
@@ -5031,7 +4949,7 @@ export function AdminQuestionWorkspace({
             target="_blank"
             title="Open booking page"
           >
-            <ApportionOpenIcon />
+            <ExternalLink aria-hidden="true" className="apportion-action-icon" />
           </a>
           {businessAppointmentQrCode ? (
             <a
@@ -5041,7 +4959,7 @@ export function AdminQuestionWorkspace({
               href={businessAppointmentQrCode}
               title="Download QR code"
             >
-              <ApportionQrDownloadIcon />
+              <QrCode aria-hidden="true" className="apportion-action-icon" />
             </a>
           ) : null}
         </div>
@@ -5100,37 +5018,16 @@ export function AdminQuestionWorkspace({
             setBusinessWorkingHours(value);
           }}
         />
-        <div className="business-second-window-actions">
-          <button
-            aria-expanded={isBusinessSecondWindowOpen}
-            className="button-secondary small-button"
-            type="button"
-            onClick={() => setIsBusinessSecondWindowOpen((isOpen) => !isOpen)}
-          >
-              {isBusinessSecondWindowOpen ? "Hide Operating Hours 2" : "Add Operating Hours 2"}
-          </button>
-          <button className="button-secondary small-button" type="button" onClick={() => {
+        <span className="field-label">Operating Hours 2</span>
+        <BusinessTimeRangeSelector
+          blockedRanges={[businessWorkingHours, businessSecondLocation.workingHours, businessSecondLocation.workingHoursSecondWindow].filter(Boolean)}
+          label="Operating Hours 2"
+          value={businessWorkingHoursSecondWindow}
+          onChange={(value) => {
             markBrandingDraftDirty();
-            setBusinessWorkingHoursSecondWindow("");
-            setIsBusinessSecondWindowOpen(false);
-          }}>
-            Clear Operating Hours 2
-          </button>
-        </div>
-        {isBusinessSecondWindowOpen ? (
-          <>
-            <span className="field-label">Operating Hours 2</span>
-            <BusinessTimeRangeSelector
-              blockedRanges={[businessWorkingHours, businessSecondLocation.workingHours, businessSecondLocation.workingHoursSecondWindow].filter(Boolean)}
-              label="Operating Hours 2"
-              value={businessWorkingHoursSecondWindow}
-              onChange={(value) => {
-                markBrandingDraftDirty();
-                setBusinessWorkingHoursSecondWindow(value);
-              }}
-            />
-          </>
-        ) : null}
+            setBusinessWorkingHoursSecondWindow(value);
+          }}
+        />
       </div>
       {businessSecondLocation.enabled ? (
         <div className="field business-field-card">
@@ -5143,7 +5040,6 @@ export function AdminQuestionWorkspace({
               type="button"
               onClick={() => {
                 markBrandingDraftDirty();
-                setIsBusinessSecondLocationSecondWindowOpen(false);
                 setBusinessSecondLocation({
                   address: "",
                   enabled: false,
@@ -5196,35 +5092,16 @@ export function AdminQuestionWorkspace({
               setBusinessSecondLocation((current) => ({ ...current, workingHours: value }));
             }}
           />
-          <div className="business-second-window-actions">
-            <button
-              className="button-secondary small-button"
-              type="button"
-              onClick={() => {
-                markBrandingDraftDirty();
-                if (isBusinessSecondLocationSecondWindowOpen) {
-                  setBusinessSecondLocation((current) => ({ ...current, workingHoursSecondWindow: "" }));
-                }
-                setIsBusinessSecondLocationSecondWindowOpen((isOpen) => !isOpen);
-              }}
-            >
-              {isBusinessSecondLocationSecondWindowOpen ? "Clear Operating Hours 2" : "Add Operating Hours 2"}
-            </button>
-          </div>
-          {isBusinessSecondLocationSecondWindowOpen ? (
-            <>
-              <span className="field-label">Operating Hours 2</span>
-              <BusinessTimeRangeSelector
-                blockedRanges={[businessWorkingHours, businessWorkingHoursSecondWindow, businessSecondLocation.workingHours].filter(Boolean)}
-                label="Address 2 Operating Hours 2"
-                value={businessSecondLocation.workingHoursSecondWindow}
-                onChange={(value) => {
-                  markBrandingDraftDirty();
-                  setBusinessSecondLocation((current) => ({ ...current, workingHoursSecondWindow: value }));
-                }}
-              />
-            </>
-          ) : null}
+          <span className="field-label">Operating Hours 2</span>
+          <BusinessTimeRangeSelector
+            blockedRanges={[businessWorkingHours, businessWorkingHoursSecondWindow, businessSecondLocation.workingHours].filter(Boolean)}
+            label="Address 2 Operating Hours 2"
+            value={businessSecondLocation.workingHoursSecondWindow}
+            onChange={(value) => {
+              markBrandingDraftDirty();
+              setBusinessSecondLocation((current) => ({ ...current, workingHoursSecondWindow: value }));
+            }}
+          />
         </div>
       ) : (
         <div className="field business-field-card">
@@ -5234,7 +5111,6 @@ export function AdminQuestionWorkspace({
             type="button"
             onClick={() => {
               markBrandingDraftDirty();
-              setIsBusinessSecondLocationSecondWindowOpen(false);
               setBusinessSecondLocation((current) => ({ ...current, enabled: true }));
             }}
           >
@@ -5999,7 +5875,7 @@ export function AdminQuestionWorkspace({
                                 rel="noopener noreferrer"
                                 target="_blank"
                               >
-                                <ApportionOpenIcon />
+                                <ExternalLink aria-hidden="true" className="apportion-action-icon" />
                                 Open booking page
                               </a>
                             ) : null}

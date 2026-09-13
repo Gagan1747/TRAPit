@@ -4,6 +4,7 @@ export const GAME_QUESTION_COUNT = 20;
 export const LEGACY_GAME_QUESTION_DURATION_MS = 15_000;
 export const GAME_QUESTION_DURATION_MS = 30_000;
 export const GAME_LAUNCH_COUNTDOWN_MS = 60_000;
+export const GAME_QUESTION_READY_FALLBACK_MS = 5_000;
 export const GAME_CORRECT_POINTS = [50, 30, 10, 5, 5] as const;
 export const GAME_INCORRECT_POINTS = -5;
 
@@ -324,9 +325,11 @@ export type ScheduledGame = {
   participants: GameParticipant[];
   poolId: string;
   presentedQuestions?: GamePresentedQuestion[];
+  questionPreparedAt?: string[];
+  questionReadyParticipantIdentifiers?: string[][];
   questionStartedAt?: string[];
   questionIds: string[];
-  rulesVersion?: 1 | 2;
+  rulesVersion?: 1 | 2 | 3;
   startedAt: string | null;
   title: string;
   updatedAt: string;
@@ -428,7 +431,7 @@ export function getGameQuestionPoints(correctPosition: number | null) {
 }
 
 export function getGameQuestionDurationMs(game: Pick<ScheduledGame, "rulesVersion">) {
-  return game.rulesVersion === 2
+  return game.rulesVersion === 2 || game.rulesVersion === 3
     ? GAME_QUESTION_DURATION_MS
     : LEGACY_GAME_QUESTION_DURATION_MS;
 }
@@ -441,14 +444,17 @@ export function getNextGameQuestionStartedAt(
 }
 
 export function getGameStatus(
-  game: Pick<ScheduledGame, "completedAt" | "countdownStartedAt" | "questionStartedAt" | "rulesVersion" | "startedAt">,
+  game: Pick<ScheduledGame, "completedAt" | "countdownStartedAt" | "questionPreparedAt" | "questionStartedAt" | "rulesVersion" | "startedAt">,
   nowMs = Date.now(),
 ): ScheduledGameStatus {
   if (game.completedAt) {
     return "completed";
   }
 
-  if (game.rulesVersion === 2 && game.countdownStartedAt && !game.startedAt) {
+  if ((game.rulesVersion === 2 || game.rulesVersion === 3) && game.countdownStartedAt && !game.startedAt) {
+    if (game.rulesVersion === 3 && game.questionPreparedAt?.length) {
+      return "ongoing";
+    }
     return "countdown";
   }
 
@@ -456,7 +462,7 @@ export function getGameStatus(
     return "upcoming";
   }
 
-  if (game.rulesVersion === 2) {
+  if (game.rulesVersion === 2 || game.rulesVersion === 3) {
     const finalQuestionStartedAt = game.questionStartedAt?.[GAME_QUESTION_COUNT - 1];
     return finalQuestionStartedAt
       && nowMs >= new Date(finalQuestionStartedAt).getTime() + GAME_QUESTION_DURATION_MS
@@ -471,14 +477,14 @@ export function getGameStatus(
 }
 
 export function getGameQuestionIndex(
-  game: Pick<ScheduledGame, "completedAt" | "countdownStartedAt" | "questionStartedAt" | "rulesVersion" | "startedAt">,
+  game: Pick<ScheduledGame, "completedAt" | "countdownStartedAt" | "questionPreparedAt" | "questionStartedAt" | "rulesVersion" | "startedAt">,
   nowMs = Date.now(),
 ) {
   if (!game.startedAt || getGameStatus(game, nowMs) !== "ongoing") {
     return null;
   }
 
-  if (game.rulesVersion === 2) {
+  if (game.rulesVersion === 2 || game.rulesVersion === 3) {
     const questionStartedAt = game.questionStartedAt ?? [];
 
     for (let index = Math.min(questionStartedAt.length, GAME_QUESTION_COUNT) - 1; index >= 0; index -= 1) {
@@ -496,11 +502,28 @@ export function getGameQuestionIndex(
   );
 }
 
+export function getGamePresentedQuestionIndex(
+  game: Pick<ScheduledGame, "completedAt" | "countdownStartedAt" | "questionPreparedAt" | "questionStartedAt" | "rulesVersion" | "startedAt">,
+  nowMs = Date.now(),
+) {
+  if (game.rulesVersion !== 3) {
+    return getGameQuestionIndex(game, nowMs);
+  }
+
+  if (game.completedAt || getGameStatus(game, nowMs) !== "ongoing") {
+    return null;
+  }
+
+  return game.questionPreparedAt?.length
+    ? Math.min(game.questionPreparedAt.length, GAME_QUESTION_COUNT) - 1
+    : null;
+}
+
 export function getGameQuestionDeadline(
-  game: Pick<ScheduledGame, "completedAt" | "countdownStartedAt" | "questionStartedAt" | "rulesVersion" | "startedAt">,
+  game: Pick<ScheduledGame, "completedAt" | "countdownStartedAt" | "questionPreparedAt" | "questionStartedAt" | "rulesVersion" | "startedAt">,
   questionIndex: number,
 ) {
-  if (game.rulesVersion === 2) {
+  if (game.rulesVersion === 2 || game.rulesVersion === 3) {
     const questionStartedAt = game.questionStartedAt?.[questionIndex];
     return questionStartedAt
       ? new Date(new Date(questionStartedAt).getTime() + GAME_QUESTION_DURATION_MS).toISOString()

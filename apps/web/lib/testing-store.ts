@@ -20,8 +20,10 @@ import {
   GAME_LAUNCH_COUNTDOWN_MS,
   GAME_QUESTION_COUNT,
   GAME_QUESTION_DURATION_MS,
+  GAME_QUESTION_READY_FALLBACK_MS,
   getGameQuestionDeadline,
   getGameQuestionIndex,
+  getGamePresentedQuestionIndex,
   getGameQuestionPoints,
   getNextGameQuestionStartedAt,
   getGameStatus,
@@ -455,7 +457,11 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
           label: participant.label?.trim() || participant.identifier,
         })),
         questionIds: dedupe(game.questionIds ?? []).slice(0, GAME_QUESTION_COUNT),
-        questionStartedAt: rulesVersion === 2
+        questionPreparedAt: rulesVersion === 3 ? (game.questionPreparedAt ?? []) : undefined,
+        questionReadyParticipantIdentifiers: rulesVersion === 3
+          ? (game.questionReadyParticipantIdentifiers ?? [])
+          : undefined,
+        questionStartedAt: rulesVersion === 2 || rulesVersion === 3
           ? (game.questionStartedAt ?? (game.startedAt ? [game.startedAt] : []))
           : undefined,
         rulesVersion,
@@ -4575,7 +4581,7 @@ function advanceGameLifecycle(game: ScheduledGame, now: Date) {
     return;
   }
 
-  if (game.rulesVersion !== 2) {
+  if (game.rulesVersion !== 2 && game.rulesVersion !== 3) {
     if (getGameStatus(game, now.getTime()) === "completed") {
       game.completedAt = now.toISOString();
       game.updatedAt = game.completedAt;
@@ -4588,6 +4594,86 @@ function advanceGameLifecycle(game: ScheduledGame, now: Date) {
   }
 
   const launchAtMs = new Date(game.countdownStartedAt).getTime() + GAME_LAUNCH_COUNTDOWN_MS;
+
+  if (game.rulesVersion === 3) {
+    const questionPreparedAt = game.questionPreparedAt ?? (game.questionPreparedAt = []);
+    const questionReadyParticipantIdentifiers = game.questionReadyParticipantIdentifiers
+      ?? (game.questionReadyParticipantIdentifiers = []);
+    const questionStartedAt = game.questionStartedAt ?? (game.questionStartedAt = []);
+
+    if (!questionPreparedAt.length) {
+      if (now.getTime() < launchAtMs) {
+        return;
+      }
+
+      questionPreparedAt[0] = new Date(launchAtMs).toISOString();
+      questionReadyParticipantIdentifiers[0] = [];
+      game.updatedAt = questionPreparedAt[0];
+      return;
+    }
+
+    const questionIndex = questionPreparedAt.length - 1;
+    const acceptedParticipants = getAcceptedGameParticipants(game);
+
+    if (!questionStartedAt[questionIndex]) {
+      const readyIdentifiers = questionReadyParticipantIdentifiers[questionIndex] ?? [];
+      const allAcceptedReady = acceptedParticipants.length > 0 && acceptedParticipants.every((participant) =>
+        readyIdentifiers.some((identifier) => identifiersMatch(identifier, participant.identifier)),
+      );
+      const fallbackAtMs = new Date(questionPreparedAt[questionIndex]).getTime() + GAME_QUESTION_READY_FALLBACK_MS;
+
+      if (!allAcceptedReady && now.getTime() < fallbackAtMs) {
+        return;
+      }
+
+      questionStartedAt[questionIndex] = now.toISOString();
+      game.startedAt ??= questionStartedAt[questionIndex];
+      game.updatedAt = questionStartedAt[questionIndex];
+      return;
+    }
+
+    const questionAnswers = game.answers.filter((answer) => answer.questionIndex === questionIndex);
+    const allAcceptedAnswered = acceptedParticipants.length > 0 && acceptedParticipants.every((participant) =>
+      questionAnswers.some((answer) => identifiersMatch(answer.participantIdentifier, participant.identifier)),
+    );
+    const deadlineMs = new Date(questionStartedAt[questionIndex]).getTime() + GAME_QUESTION_DURATION_MS;
+
+    if (!allAcceptedAnswered && now.getTime() < deadlineMs) {
+      return;
+    }
+
+    const transitionAt = allAcceptedAnswered ? now.getTime() : deadlineMs;
+
+    if (!allAcceptedAnswered) {
+      for (const participant of acceptedParticipants) {
+        if (questionAnswers.some((answer) => identifiersMatch(answer.participantIdentifier, participant.identifier))) {
+          continue;
+        }
+        game.answers.push({
+          answeredAt: new Date(deadlineMs).toISOString(),
+          isCorrect: false,
+          kind: "timeout",
+          optionIndex: null,
+          participantIdentifier: participant.identifier,
+          points: GAME_INCORRECT_POINTS,
+          questionIndex,
+          responsePosition: null,
+        });
+      }
+    }
+
+    if (questionIndex === GAME_QUESTION_COUNT - 1) {
+      game.completedAt = new Date(transitionAt).toISOString();
+      game.updatedAt = game.completedAt;
+      return;
+    }
+
+    questionPreparedAt[questionIndex + 1] = new Date(transitionAt).toISOString();
+    questionReadyParticipantIdentifiers[questionIndex + 1] = [];
+    game.updatedAt = questionPreparedAt[questionIndex + 1];
+    return;
+  }
+
   const questionStartedAt = game.questionStartedAt ?? (game.questionStartedAt = []);
 
   if (!game.startedAt) {
@@ -4667,21 +4753,30 @@ export type AvailableGame = ScheduledGame & {
   countdownDeadline: string | null;
   currentQuestionIndex: number | null;
   leaderboard: GameLeaderboardEntry[];
+  preparationDeadline: string | null;
   questionDeadline: string | null;
   status: ReturnType<typeof getGameStatus>;
 };
 
 function hydrateGame(game: ScheduledGame, nowMs = Date.now()): AvailableGame {
-  const currentQuestionIndex = getGameQuestionIndex(game, nowMs);
+  const currentQuestionIndex = getGamePresentedQuestionIndex(game, nowMs);
 
   return {
     ...game,
     acceptedCount: getAcceptedGameParticipants(game).length,
-    countdownDeadline: game.countdownStartedAt && !game.startedAt
+    countdownDeadline: game.countdownStartedAt && !game.startedAt && !game.questionPreparedAt?.length
       ? new Date(new Date(game.countdownStartedAt).getTime() + GAME_LAUNCH_COUNTDOWN_MS).toISOString()
       : null,
     currentQuestionIndex,
     leaderboard: buildGameLeaderboard(game),
+    preparationDeadline: game.rulesVersion === 3
+      && currentQuestionIndex !== null
+      && game.questionPreparedAt?.[currentQuestionIndex]
+      && !game.questionStartedAt?.[currentQuestionIndex]
+      ? new Date(
+          new Date(game.questionPreparedAt[currentQuestionIndex]).getTime() + GAME_QUESTION_READY_FALLBACK_MS,
+        ).toISOString()
+      : null,
     questionDeadline: currentQuestionIndex === null
       ? null
       : getGameQuestionDeadline(game, currentQuestionIndex),
@@ -4784,9 +4879,11 @@ export async function createScheduledGame(input: {
       participants,
       poolId: pool.id,
       presentedQuestions,
+      questionPreparedAt: [],
+      questionReadyParticipantIdentifiers: [],
       questionStartedAt: [],
       questionIds: presentedQuestions.map((question) => question.id),
-      rulesVersion: 2,
+      rulesVersion: 3,
       startedAt: null,
       title: input.title?.trim() || `${group.name} game`,
       updatedAt: timestamp,
@@ -4815,6 +4912,43 @@ export async function listGamesForParticipant(participantIdentifier: string) {
 export async function getGameForParticipant(gameId: string, participantIdentifier: string) {
   const games = await listGamesForParticipant(participantIdentifier);
   return games.find((game) => game.id === gameId) ?? null;
+}
+
+export async function recordGameQuestionReady(input: {
+  gameId: string;
+  participantIdentifier: string;
+  questionIndex: number;
+}) {
+  return withSerializedGameMutation((state) => {
+    const game = state.games.find((entry) => entry.id === input.gameId);
+
+    if (!game || game.rulesVersion !== 3) {
+      throw new Error("Game readiness is unavailable.");
+    }
+
+    const participant = findGameParticipant(game, input.participantIdentifier);
+    if (!participant?.acceptedAt) {
+      throw new Error("Only accepted participants can mark a question ready.");
+    }
+
+    advanceGameLifecycle(game, new Date());
+    const presentedQuestionIndex = getGamePresentedQuestionIndex(game);
+    if (presentedQuestionIndex === null || presentedQuestionIndex !== input.questionIndex) {
+      throw new Error("This question is no longer preparing.");
+    }
+
+    const readyByQuestion = game.questionReadyParticipantIdentifiers
+      ?? (game.questionReadyParticipantIdentifiers = []);
+    const readyIdentifiers = readyByQuestion[input.questionIndex]
+      ?? (readyByQuestion[input.questionIndex] = []);
+    if (!readyIdentifiers.some((identifier) => identifiersMatch(identifier, participant.identifier))) {
+      readyIdentifiers.push(participant.identifier);
+      game.updatedAt = new Date().toISOString();
+    }
+
+    advanceGameLifecycle(game, new Date());
+    return hydrateGame(game);
+  });
 }
 
 export async function acceptGame(gameId: string, participantIdentifier: string, participantName: string) {

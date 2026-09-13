@@ -8,6 +8,7 @@ import {
   getNextGameQuestionStartedAt,
   getGameQuestionDeadline,
   getGameQuestionIndex,
+  getGamePresentedQuestionIndex,
   getGameStatus,
   participantIdentifiersMatch,
   type ScheduledGame,
@@ -69,6 +70,36 @@ describe("versioned game lifecycle", () => {
     expect(GAME_QUESTION_DURATION_MS).toBe(30_000);
     expect(getGameQuestionIndex(game, Date.parse("2026-09-04T10:01:13.000Z"))).toBe(1);
     expect(getGameQuestionDeadline(game, 1)).toBe("2026-09-04T10:01:42.000Z");
+  });
+
+  it("presents a version-3 question before its timer starts", () => {
+    const game = createGame({
+      countdownStartedAt: "2026-09-04T10:00:00.000Z",
+      questionPreparedAt: ["2026-09-04T10:01:00.000Z"],
+      questionReadyParticipantIdentifiers: [[]],
+      rulesVersion: 3,
+    });
+    const now = Date.parse("2026-09-04T10:01:01.000Z");
+
+    expect(getGameStatus(game, now)).toBe("ongoing");
+    expect(getGamePresentedQuestionIndex(game, now)).toBe(0);
+    expect(getGameQuestionIndex(game, now)).toBeNull();
+    expect(getGameQuestionDeadline(game, 0)).toBeNull();
+  });
+
+  it("starts a version-3 deadline only from the persisted timer start", () => {
+    const game = createGame({
+      countdownStartedAt: "2026-09-04T10:00:00.000Z",
+      questionPreparedAt: ["2026-09-04T10:01:00.000Z"],
+      questionReadyParticipantIdentifiers: [["player@example.com"]],
+      questionStartedAt: ["2026-09-04T10:01:03.000Z"],
+      rulesVersion: 3,
+      startedAt: "2026-09-04T10:01:03.000Z",
+    });
+
+    expect(getGamePresentedQuestionIndex(game, Date.parse("2026-09-04T10:01:04.000Z"))).toBe(0);
+    expect(getGameQuestionIndex(game, Date.parse("2026-09-04T10:01:04.000Z"))).toBe(0);
+    expect(getGameQuestionDeadline(game, 0)).toBe("2026-09-04T10:01:33.000Z");
   });
 
   it("starts the next question when a delayed transition is observed", () => {
