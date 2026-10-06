@@ -16,6 +16,7 @@ import {
   getPublicWebAuthSetupMessage,
   isPublicWebAuthConfigured,
 } from "../lib/public-auth-config";
+import { getSafeAuthReturnPath } from "../lib/auth-return-path";
 import { markNotificationPromptOpportunity } from "./browser-push-prompt";
 
 type AuthFormProps = {
@@ -61,11 +62,7 @@ async function readAuthResponse<T>(response: Response, fallbackMessage: string):
 export function AuthForm({ mode }: AuthFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectPath = (() => {
-    const redirectValue = searchParams.get("redirect")?.trim() ?? "";
-
-    return redirectValue.startsWith("/") ? redirectValue : "";
-  })();
+  const redirectPath = getSafeAuthReturnPath(searchParams.get("redirect"));
   const redirectQuery = redirectPath ? `?redirect=${encodeURIComponent(redirectPath)}` : "";
   const initialSignUpHint = searchParams.get("signup") === "retry"
     ? "If your earlier SMS code expired or got lost, enter your phone number below, resend the OTP, and confirm the account."

@@ -255,7 +255,9 @@ curl http://127.0.0.1:3000
 
 The app includes an internal worker endpoint that sends free push notifications for tests and polls starting within the next 15 minutes. Mobile reminders use Expo push tokens. Web reminders use browser Web Push subscriptions. This has no per-message Renflair/SMS cost, but users must open the mobile app or web dashboard once and allow notifications so their token/subscription can be registered.
 
-Add a cron job on the EC2 instance to call the worker every five minutes:
+The same authenticated endpoint also catches up Apportion slot-end queue conversions, service-day Missed transitions, durable provider leave cancellations and pending notification retries. It runs inside the existing web process; cron must not run a separate script that writes the appointment files. Keep exactly one web app process while persistence is file-backed.
+
+Add a cron job on the EC2 instance to call the worker every minute:
 
 ```bash
 crontab -e
@@ -264,7 +266,7 @@ crontab -e
 Add this line, replacing the secret with the same `TRAPIT_NOTIFICATION_WORKER_SECRET` value from `apps/web/.env.production`:
 
 ```cron
-*/5 * * * * curl -fsS -X POST https://trapit.in/api/internal/notifications/run -H "Authorization: Bearer REPLACE_WITH_TRAPIT_NOTIFICATION_WORKER_SECRET" >/tmp/trapit-notifications.log 2>&1
+* * * * * curl --connect-timeout 10 --max-time 55 -fsS -X POST https://trapit.in/api/internal/notifications/run -H "Authorization: Bearer REPLACE_WITH_TRAPIT_NOTIFICATION_WORKER_SECRET" >/tmp/trapit-notifications.log 2>&1
 ```
 
 To test manually after deployment:
@@ -274,6 +276,8 @@ curl -i -X POST https://trapit.in/api/internal/notifications/run -H "Authorizati
 ```
 
 The response includes `tokensChecked`, `browserSubscriptionsChecked`, and `sent`. Duplicate reminders are prevented by `notification-state.json` under `TRAPIT_DATA_DIR`.
+
+Replace the previous five-minute entry rather than adding a second job. Missed runs catch up on the next successful call; normal transition latency is up to roughly one minute. Overlapping worker requests are serialized in the app process. Successful push deliveries are recorded per device so ordinary retries do not repeat them, but a crash between delivery and recording can still redeliver a push. In-app notices remain durable without notification permission; browser delivery requires subscriptions and VAPID configuration.
 
 ## 8. Configure Nginx reverse proxy
 

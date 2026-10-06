@@ -8,7 +8,7 @@ import { isSuperAdminIdentifier } from "../../lib/workspace-actor";
 export default async function UserPage({
   searchParams,
 }: {
-  searchParams?: { tab?: string; view?: string };
+  searchParams?: { appointmentId?: string; tab?: string; view?: string };
 }) {
   const session = await requireWebSession(["user", "admin"]);
   const authConfigured = isWebAuthConfigured();
@@ -34,6 +34,7 @@ export default async function UserPage({
           currentActorRole={session.role === "admin" ? "admin" : "user"}
           currentAdminIdentifier={sessionIdentifier}
           currentUserCategory={session.userCategory}
+          initialAppointmentId={searchParams?.appointmentId}
           initialOpenSection="apportion"
           isSuperAdmin={isSuperAdmin}
           previousSignInAt={previousSignInAt}

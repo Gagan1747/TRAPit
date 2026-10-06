@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="TRAPit">
+  <rect width="128" height="128" rx="24" fill="#173b4f"/>
+  <path d="M20 35h88v16H74v43H54V51H20z" fill="#fff"/>
+  <circle cx="96" cy="83" r="10" fill="#4ed6b2"/>
+</svg>

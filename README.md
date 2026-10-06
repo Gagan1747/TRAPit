@@ -95,6 +95,74 @@ The current scaffold now includes real Cognito-backed handlers:
 - Slot Selection and Queue Only bookings both use the location calendar and support dates up to six months ahead.
 - Queue Only dates are disabled when the location is closed or the day's working-window capacity is full. Today's estimate starts from the current IST time; future estimates start from opening time.
 
+### Apportion roles, services and addresses
+
+- Pro businesses allow four active service rows; Pro Max allows ten. The owner's editable Consultation counts toward the limit; Admin delegation does not. Disabled rows remain stored without consuming active quota. After a downgrade, only the first eligible active rows accept new bookings; existing appointments and history remain available.
+- A registered person can provide one service per business. Staff assignments activate immediately, consume one of the provider's two address slots per linked address, and lock the owner's address against staff edits. Admin-only delegation consumes no address slot.
+- Assigned staff, including Free users, can manage their own linked hours, leave dates and global queue/capacity/duration settings through Business Panel. They cannot create a personal business or personal branding on Free. Provider booking settings apply across assignments; saved appointments retain their original settings snapshot.
+- Owners and delegates can configure services; only owners appoint delegates. Assigned providers control their bookings, while owners retain read-only visibility. Unassigned services route controls to the delegate, or to the owner when there is no delegate.
+- Staff opt-out removes only the selected linked address. Today's appointments remain with delegate/owner fallback; future appointments are cancelled with durable in-app notifications and browser push retries where subscriptions exist. Pending opt-outs are retried by panel access and the existing notification worker.
+- Legacy profiles migrate to Consultation without changing existing share codes, media, appointment IDs or history. The migration is repeatable and stored on subsequent mutations. Back up persistent data before deployment.
+- Address deletion and provider reassignment are intentionally blocked with a conflict until their booking-transfer policy is implemented. Reducing master hours clips linked provider schedules and creates durable recipient notifications; existing bookings are preserved.
+- Persistence and realtime events remain single-process. Run one web app instance against the file-backed stores; these locks do not provide cross-process or distributed transactions.
+
+### Business Panel and schedules
+
+- Each address supports Sunday-first daily schedules with two windows, overnight hours and explicit 24-hour windows. Untouched active days follow the first active day's hours; customized days retain their own hours. Legacy schedules and date overrides remain readable.
+- Staff edit only their own linked schedules within master hours. Same-person address overlaps are rejected, including overnight and week-boundary overlaps. Owners see linked schedules against service rows.
+- Mark Leaves stores personal dates across all explicitly assigned services and addresses. Owner leave affects Consultation, not the whole business or unassigned services. The calendar only closes or reopens normally scheduled dates. New bookings and reschedules are blocked on leave; same-day bookings are preserved and future bookings are cancelled by the lifecycle integration.
+- New configurations start with queue mode, capacity one and ten-minute slots. Existing booking modes and durations are retained. Business Panel has a viewport-level header, one scrolling body and owner save/clear actions.
+- In-app schedule notifications persist even without browser push permission. Browser delivery uses the existing subscription worker and requires configured VAPID keys.
+
+### Booking page and access
+
+- Personal booking links show personal and permitted linked-business addresses together. Linked addresses expose only the provider's assigned service; booking writes one canonical appointment visible to that provider and the owning business. Personal branding remains separate from the linked business's schedule and booking rules.
+- Address cards show Open Now during operating hours and the next bookable time with remaining capacity. Closed addresses show the next available booking. Service choices use cards for up to four services and a dropdown above four.
+- Calendars start Sunday, disable past dates and use daily schedules and personal leave. Standard booking shows six available times per page, in two columns on mobile; queue booking has no time-slot picker. Capacity-one bookings hide remaining-count labels.
+- Unauthenticated links open the common landing page with a validated local return path preserved through sign-in and sign-up. Successful bookings link to the active dashboard ticket.
+- New QR downloads retain the existing destination and use high error correction with a centered TRAPit logo. Automated tests decode the branded QR image.
+- Opening the verified caller's Business Panel does not require listing Cognito users. Registered-user lookup and administrative directory operations still require valid AWS credentials and IAM permissions.
+
+### Appointment logs, actions and messaging
+
+- Active and completed logs group appointments by canonical address and service, with six appointments per page. Active appointments are chronological within each group; completed appointments use reverse completion order. Done entries retain their completion timestamp.
+- Done and Absent actions are restricted to the current controlling provider. Customers can cancel active appointments and reschedule future standard appointments. A provider can mark an active appointment Done without a separate presence action.
+- Notes open an append-only conversation. Only the customer and current controlling provider can send messages; owners and delegates with visibility are read-only when they are not the controller. The server authenticates the author and validates trimmed messages of 1–2000 characters.
+- Completed, missed, cancelled and legacy terminal absent appointments have read-only message history. New Absent actions leave appointments active in the queue with messaging available. Legacy booking notes migrate once into the initial customer message without removing the original note or appointment metadata.
+- Re preserves the first originally booked time and every later history entry, including when an appointment returns to its original time. History popups and the Notes drawer render outside dashboard containers to avoid clipping on mobile.
+- Legacy terminal rejected records remain unchanged. New Absent actions use the active queue behavior described below.
+
+### Lifecycle and notifications
+
+- Queues are partitioned by business owner, address, service and service day. Queue Absent moves back four positions, capped at the tail. Standard Absent and an unfinished slot reaching its saved end time move to the queue tail, retain the crossed-out booked time and show no replacement fixed-time estimate.
+- Bookings save slot-end and queue-expiry boundaries using their booked duration and effective service schedule. Later schedule/settings changes do not overwrite those boundaries. Legacy active records acquire missing boundaries on migration.
+- Daytime queues expire at IST midnight. Overnight and 24-hour bookings remain active until the first IST midnight strictly after their service window or booked slot ends. Catch-up never expires future service dates early, and repeated checks append no duplicate transition history or notices.
+- Personal leave preserves the day on which leave was marked. Newly closed future dates cancel active bookings only for the explicitly assigned provider across their linked addresses/businesses. Durable leave intents save the original cutoff, recover after restart and check that dates remain closed; reopening does not restore bookings already cancelled.
+- Queue conversion, Absent movement, Missed expiry and future-leave cancellation persist recipient notices for the customer, owner, historical assigned provider and current controller as applicable. Existing schedule-clipping notifications remain enabled. Push retries use the existing worker; in-app notices do not require browser permission.
+- The authenticated notification worker also runs lifecycle catch-up and leave recovery. Deploy the one-minute cron entry in `infra/ec2/README.md`; this local implementation does not install a production cron job. Both worker and store mutation queues remain process-local: use one web instance, not independent file-writing cron scripts.
+- Address deletion and provider reassignment remain guarded; their transfer policy is not changed by these lifecycle rules.
+
+### Search and invitations
+
+- Add Appointment provides one business-name or full-owner-phone search for all users. Results link to the existing public booking page; booking no longer takes place inside the search drawer.
+- Only the business owner on their own public page can look up a registered customer by full phone and send an invitation. Staff and Admin delegation do not grant this permission. Targets are verified again on submission. Invitation identity matching distinguishes international numbers; ten-digit local aliases refer only to India.
+- Owners can invite one appointment or up to six total occurrences using selected weekly weekdays or monthly dates. Only valid working dates and matching service times are planned. Missing monthly dates use that month's last day, with duplicates removed. Ordinary customers retain direct self-booking without recurrence.
+- A pending series appears as one outgoing Pending Acceptance row and one incoming invitation with Accept/Decline. Pending invitations do not reserve capacity. Acceptance rechecks all remaining occurrences within one serialized appointment mutation; a full or invalid occurrence prevents partial booking. Accepted series become individual canonical appointments.
+- The acceptance deadline is the first planned appointment's saved end time, allowing acceptance after its start but before its end. Standard invitations retain their saved duration; accepted queue estimates are rebuilt using current hours and queue counts. Declined, Expired and cancelled invitations appear in completed invitation logs.
+- Future provider leave removes only affected pending occurrences. Remaining dates stay pending with a recomputed deadline; an empty series closes with notifications. Recovery preserves unaffected occurrences even if a prior read expired the original first date. Same-day leave keeps existing invitations.
+- Invitation notices share the durable appointment outbox and existing one-minute worker. Registered-user lookup requires the configured Cognito directory permissions in authenticated deployments.
+- Appointment capacity writes are atomic in one web process. Directory schedule changes are not covered by a cross-file transaction, so a configuration update concurrent with acceptance can take effect after the acceptance's validated snapshot. Keep the single-instance deployment limitation.
+
+Sections 1 through 6 are implemented locally; they have not been deployed by this implementation.
+
+Focused checks:
+
+```bash
+corepack pnpm --filter @trapit/testing test
+corepack pnpm run typecheck
+corepack pnpm --filter @trapit/web build
+```
+
 ## Multiplayer games
 
 - Creating a web game opens a dedicated waiting-room tab. The creator must choose to join as a competitor or watch as a spectator before starting.

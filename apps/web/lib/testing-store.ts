@@ -30,6 +30,7 @@ import {
   getIncorrectCount,
   getScheduledTestEndTime,
   normalizeWorkspaceBranding,
+  migrateApportionDirectory,
   normalizeDraft,
   normalizePollQuestionDraft,
   participantIdentifiersMatch as identifiersMatch,
@@ -71,6 +72,7 @@ import {
 } from "@trapit/testing";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import {
   createPollQuestionsInBackend,
@@ -112,6 +114,12 @@ function resolveStorePath() {
 }
 
 const STORE_PATH = resolveStorePath();
+const workspaceQueueGlobal = globalThis as typeof globalThis & {
+  trapitWorkspaceQueues?: Map<string, { writes: Promise<void>; mutations: Promise<void> }>;
+};
+const workspaceQueues = workspaceQueueGlobal.trapitWorkspaceQueues ??= new Map();
+const workspaceQueue = workspaceQueues.get(STORE_PATH) ?? { writes: Promise.resolve(), mutations: Promise.resolve() };
+workspaceQueues.set(STORE_PATH, workspaceQueue);
 
 type CriticalDataSummary = {
   attempts: number;
@@ -435,7 +443,14 @@ function normalizeWorkspaceAppointmentShareCodesByActor(
 }
 
 function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspaceState {
+  const workspaceBrandingByActor = normalizeWorkspaceBrandingByActor(parsed.workspaceBrandingByActor);
+  const apportionDirectory = migrateApportionDirectory(workspaceBrandingByActor, parsed.apportionDirectory);
+  for (const [provider, settings] of Object.entries(apportionDirectory.providerSettings)) {
+    const key = Object.keys(workspaceBrandingByActor).find((entry) => identifiersMatch(entry, provider));
+    if (key) workspaceBrandingByActor[key] = { ...workspaceBrandingByActor[key], ...settings };
+  }
   return {
+    apportionDirectory,
     attempts: parsed.attempts ?? [],
     games: (parsed.games ?? []).map((game) => {
       const rulesVersion = game.rulesVersion ?? (game.startedAt || game.completedAt ? 1 : 2);
@@ -551,40 +566,39 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
     })),
     workspaceAppointmentShareCodesByActor: normalizeWorkspaceAppointmentShareCodesByActor(parsed.workspaceAppointmentShareCodesByActor),
     workspaceBranding: normalizeWorkspaceBranding(parsed.workspaceBranding),
-    workspaceBrandingByActor: normalizeWorkspaceBrandingByActor(parsed.workspaceBrandingByActor),
+    workspaceBrandingByActor,
   };
 }
 
 export async function getOrCreateWorkspaceAppointmentShareCode(actorKey?: string | null) {
-  const state = await readStore();
-  const normalizedActorKey = normalizeBrandingActorKey(actorKey);
+  return withSerializedTestingMutation((state) => {
+    const normalizedActorKey = resolveBrandingActorKey(state, actorKey);
 
-  if (!normalizedActorKey) {
-    return null;
-  }
+    if (!normalizedActorKey) {
+      return null;
+    }
 
-  const existingShareCode = state.workspaceAppointmentShareCodesByActor[normalizedActorKey]
-    ?? state.workspaceBrandingByActor[normalizedActorKey]?.appointmentShareCode
-    ?? null;
-  const shareCode = existingShareCode ?? `TRAPIT-APPT-${createEntityId("access").replace(/-/g, "").toUpperCase()}`;
+    const existingShareCode = state.workspaceAppointmentShareCodesByActor[normalizedActorKey]
+      ?? state.workspaceBrandingByActor[normalizedActorKey]?.appointmentShareCode
+      ?? null;
+    const shareCode = existingShareCode ?? `TRAPIT-APPT-${createEntityId("access").replace(/-/g, "").toUpperCase()}`;
 
-  state.workspaceAppointmentShareCodesByActor[normalizedActorKey] = shareCode;
+    state.workspaceAppointmentShareCodesByActor[normalizedActorKey] = shareCode;
 
-  if (state.workspaceBrandingByActor[normalizedActorKey]?.appointmentShareCode !== shareCode) {
-    state.workspaceBrandingByActor[normalizedActorKey] = {
-      ...state.workspaceBrandingByActor[normalizedActorKey],
-      appointmentShareCode: shareCode,
-    };
-  }
+    if (state.workspaceBrandingByActor[normalizedActorKey]?.appointmentShareCode !== shareCode) {
+      state.workspaceBrandingByActor[normalizedActorKey] = {
+        ...state.workspaceBrandingByActor[normalizedActorKey],
+        appointmentShareCode: shareCode,
+      };
+    }
 
-  await writeStore(state);
-
-  return shareCode;
+    return shareCode;
+  });
 }
 
 export async function getWorkspaceBranding(actorKey?: string | null) {
   const state = await readStore();
-  const normalizedActorKey = normalizeBrandingActorKey(actorKey);
+  const normalizedActorKey = resolveBrandingActorKey(state, actorKey);
 
   if (!normalizedActorKey) {
     return null;
@@ -650,9 +664,26 @@ export async function updateWorkspaceBranding(
   branding: WorkspaceBranding | null,
   actorKey?: string | null,
 ) {
-  const state = await readStore();
-  const normalizedBranding = normalizeWorkspaceBranding(branding);
-  const normalizedActorKey = normalizeBrandingActorKey(actorKey);
+  return withSerializedTestingMutation(async (state) => {
+    const { prepareApportionBrandingMutation } = await import("./apportion-directory");
+    const prepared = await prepareApportionBrandingMutation(state, branding, actorKey);
+    return mutateWorkspaceBrandingState(state, prepared, actorKey);
+  });
+}
+
+export function mutateWorkspaceBrandingState(
+  state: TestingWorkspaceState,
+  branding: WorkspaceBranding | null,
+  actorKey?: string | null,
+) {
+  let normalizedBranding = normalizeWorkspaceBranding(branding);
+  const normalizedActorKey = resolveBrandingActorKey(state, actorKey);
+  const settingsKey = normalizedActorKey
+    ? Object.keys(state.apportionDirectory?.providerSettings ?? {}).find((key) => identifiersMatch(key, normalizedActorKey))
+    : undefined;
+  if (normalizedBranding && settingsKey) {
+    normalizedBranding = { ...normalizedBranding, ...state.apportionDirectory!.providerSettings[settingsKey] };
+  }
   const existingBranding = normalizedActorKey
     ? state.workspaceBrandingByActor[normalizedActorKey] ?? null
     : state.workspaceBranding;
@@ -667,7 +698,7 @@ export async function updateWorkspaceBranding(
   const brandingWithShareCode = normalizedBranding
     ? {
         ...normalizedBranding,
-        appointmentShareCode: normalizedBranding.appointmentShareCode ?? ownerShareCode ?? existingBranding?.appointmentShareCode ?? null,
+        appointmentShareCode: ownerShareCode ?? normalizedBranding.appointmentShareCode ?? existingBranding?.appointmentShareCode ?? null,
       }
     : null;
 
@@ -678,8 +709,6 @@ export async function updateWorkspaceBranding(
   } else {
     delete state.workspaceBrandingByActor[normalizedActorKey];
   }
-
-  await writeStore(state);
 
   if (!normalizedActorKey) {
     return null;
@@ -1203,17 +1232,30 @@ async function readStore(): Promise<TestingWorkspaceState> {
   }
 }
 
-async function writeStore(state: TestingWorkspaceState) {
-  await ensureStoreDirectory();
-  const nextSummary = summarizeCriticalData(state);
+function writeStore(state: TestingWorkspaceState, changedFields?: Set<keyof TestingWorkspaceState>) {
+  const operation = workspaceQueue.writes.then(() => persistStore(state, changedFields));
+  workspaceQueue.writes = operation.then(() => undefined, () => undefined);
+  return operation;
+}
 
-  if (process.env.TRAPIT_ALLOW_DESTRUCTIVE_DATA_WRITE !== "1") {
+async function persistStore(state: TestingWorkspaceState, changedFields?: Set<keyof TestingWorkspaceState>) {
+  await ensureStoreDirectory();
+
     try {
       const currentContent = await readFile(STORE_PATH, "utf8");
       const currentState = normalizeState(JSON.parse(currentContent) as Partial<TestingWorkspaceState>);
+      if (changedFields) {
+        state = { ...currentState, ...Object.fromEntries([...changedFields].map((field) => [field, state[field]])) };
+      } else {
+        state.apportionDirectory = currentState.apportionDirectory;
+        state.workspaceBranding = currentState.workspaceBranding;
+        state.workspaceBrandingByActor = currentState.workspaceBrandingByActor;
+        state.workspaceAppointmentShareCodesByActor = currentState.workspaceAppointmentShareCodesByActor;
+      }
       const currentSummary = summarizeCriticalData(currentState);
+      const nextSummary = summarizeCriticalData(state);
 
-      if (isDangerousDataReduction(currentSummary, nextSummary)) {
+      if (process.env.TRAPIT_ALLOW_DESTRUCTIVE_DATA_WRITE !== "1" && isDangerousDataReduction(currentSummary, nextSummary)) {
         throw new Error(
           `Refusing to overwrite TRAPit data with a destructive reduction. Current: ${formatCriticalDataSummary(currentSummary)}. Next: ${formatCriticalDataSummary(nextSummary)}. Set TRAPIT_ALLOW_DESTRUCTIVE_DATA_WRITE=1 only for an intentional reset.`,
         );
@@ -1223,7 +1265,6 @@ async function writeStore(state: TestingWorkspaceState) {
         throw error;
       }
     }
-  }
 
   const temporaryStorePath = `${STORE_PATH}.${process.pid}.${Date.now()}.tmp`;
 
@@ -1231,21 +1272,28 @@ async function writeStore(state: TestingWorkspaceState) {
   await rename(temporaryStorePath, STORE_PATH);
 }
 
-let gameMutationQueue = Promise.resolve();
+export async function readApportionWorkspaceState() {
+  return readStore();
+}
 
-function withSerializedGameMutation<T>(
+export function withSerializedTestingMutation<T>(
   mutate: (state: TestingWorkspaceState) => Promise<T> | T,
-) {
-  const operation = gameMutationQueue.then(async () => {
+): Promise<T> {
+  const operation = workspaceQueue.mutations.then(async () => {
     const state = await readStore();
+    const originalState = structuredClone(state);
     const result = await mutate(state);
-    await writeStore(state);
+    const changedFields = new Set((Array.from(new Set([...Object.keys(originalState), ...Object.keys(state)])) as Array<keyof TestingWorkspaceState>)
+      .filter((field) => !isDeepStrictEqual(state[field], originalState[field])));
+    await writeStore(state, changedFields);
     return result;
   });
 
-  gameMutationQueue = operation.then(() => undefined, () => undefined);
+  workspaceQueue.mutations = operation.then(() => undefined, () => undefined);
   return operation;
 }
+
+const withSerializedGameMutation = withSerializedTestingMutation;
 
 async function assignUnownedGroupsToOwner(ownerIdentifier: string) {
   const state = await readStore();
@@ -5142,4 +5190,12 @@ export async function getOverallGamePoints(participantIdentifier: string) {
 
       return total + (entry?.points ?? 0);
     }, 0);
+}
+
+function resolveBrandingActorKey(state: TestingWorkspaceState, actorKey?: string | null) {
+  const normalized = normalizeBrandingActorKey(actorKey);
+  if (!normalized) return null;
+  return Object.keys(state.workspaceBrandingByActor).find((key) => identifiersMatch(key, normalized))
+    ?? Object.keys(state.workspaceAppointmentShareCodesByActor).find((key) => identifiersMatch(key, normalized))
+    ?? normalized;
 }

@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import webPush, { type PushSubscription } from "web-push";
+import { participantIdentifiersMatch } from "@trapit/testing";
+import { listApportionPendingNotifications, markApportionNotificationDelivered, reconcileApportionLifecycle } from "../../../../../lib/apportion-store";
+import { listPendingApportionScheduleNotifications, markApportionScheduleNotificationDelivered, reconcileApportionAddressOptOuts, reconcileApportionProviderLeaves } from "../../../../../lib/apportion-directory";
+import { publishWorkspaceEvent } from "../../../../../lib/realtime-events";
 
 import {
   hasNotificationDelivery,
@@ -112,15 +116,76 @@ function buildPollReminder(poll: { id: string; shareCode: string | null; startsA
   };
 }
 
+const workerGlobal = globalThis as typeof globalThis & { __trapitNotificationWorkerQueue?: Promise<void> };
+
 export async function POST(request: Request) {
+  if (!isAuthorized(request)) return NextResponse.json({ error: "Notification worker access is required." }, { status: 401 });
+  const previous = workerGlobal.__trapitNotificationWorkerQueue ?? Promise.resolve();
+  const result = previous.then(() => runNotificationWorker(request));
+  workerGlobal.__trapitNotificationWorkerQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+async function runNotificationWorker(request: Request) {
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: "Notification worker access is required." }, { status: 401 });
   }
 
-  const [pushTokens, webPushSubscriptions] = await Promise.all([
+  await reconcileApportionAddressOptOuts();
+  await reconcileApportionProviderLeaves();
+  if (await reconcileApportionLifecycle()) publishWorkspaceEvent("apportion");
+  const [pushTokens, webPushSubscriptions, appointmentNotifications, scheduleNotifications] = await Promise.all([
     listPushTokens(),
     listWebPushSubscriptions(),
+    listApportionPendingNotifications(),
+    listPendingApportionScheduleNotifications(),
   ]);
+  const apportionNotifications = [
+    ...appointmentNotifications.map((notification) => ({ ...notification, isScheduleNotification: false })),
+    ...scheduleNotifications.map((notification) => ({
+      id: notification.id,
+      recipientIdentifier: notification.recipientIdentifier,
+      title: "Schedule updated",
+      body: notification.message,
+      url: "/user?section=apportion",
+      createdAt: notification.createdAt,
+      deliveredAt: notification.deliveredAt ?? null,
+      isScheduleNotification: true,
+    })),
+  ];
+  const webPushConfigured = configureWebPush();
+  let apportionSent = 0;
+  for (const notification of apportionNotifications) {
+    const matchingTokens = pushTokens.filter((entry) => entry.userIdentifier && participantIdentifiersMatch(entry.userIdentifier, notification.recipientIdentifier));
+    const matchingSubscriptions = webPushSubscriptions.filter((entry) => entry.userIdentifier && participantIdentifiersMatch(entry.userIdentifier, notification.recipientIdentifier));
+    const deliveryKey = `apportion:${notification.id}`;
+    let fullyDelivered = matchingTokens.length + matchingSubscriptions.length > 0;
+    for (const token of matchingTokens) {
+      if (await hasNotificationDelivery(deliveryKey, token.id)) continue;
+      try {
+        const response = await fetch(EXPO_PUSH_ENDPOINT, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify([{ to: token.token, title: notification.title, body: notification.body, sound: "default", data: { kind: "apportion", url: notification.url } }]) });
+        if (!response.ok) throw new Error(`Expo push request failed with HTTP ${response.status}.`);
+        const payload = await response.json() as { data?: Array<{ status?: string }> | { status?: string } };
+        const tickets = Array.isArray(payload.data) ? payload.data : payload.data ? [payload.data] : [];
+        if (tickets.length !== 1 || tickets[0].status !== "ok") throw new Error("Expo did not accept the notification.");
+        await recordNotificationDelivery(deliveryKey, token.id);
+        apportionSent += 1;
+      } catch (error) { fullyDelivered = false; console.warn("Unable to send Apportion mobile notification.", error); }
+    }
+    for (const subscription of matchingSubscriptions) {
+      if (await hasNotificationDelivery(deliveryKey, subscription.id)) continue;
+      if (!webPushConfigured) { fullyDelivered = false; continue; }
+      try {
+        await sendWebPushNotification({ endpoint: subscription.endpoint, keys: subscription.keys }, { title: notification.title, body: notification.body, data: { kind: "apportion", url: notification.url } });
+        await recordNotificationDelivery(deliveryKey, subscription.id);
+        apportionSent += 1;
+      } catch (error) { fullyDelivered = false; console.warn("Unable to send Apportion browser notification.", error); }
+    }
+    if (fullyDelivered) {
+      if (notification.isScheduleNotification) await markApportionScheduleNotificationDelivered(notification.id);
+      else await markApportionNotificationDelivered(notification.id);
+    }
+  }
   const queuedMessages: Array<{ deliveryKey: string; message: ExpoPushMessage; tokenId: string }> = [];
   const queuedWebMessages: Array<{ deliveryKey: string; message: ReminderMessage; subscription: PushSubscription; subscriptionId: string }> = [];
 
@@ -234,7 +299,7 @@ export async function POST(request: Request) {
 
   let webSent = 0;
 
-  if (configureWebPush()) {
+  if (webPushConfigured) {
     for (const queuedWebMessage of queuedWebMessages) {
       try {
         await sendWebPushNotification(queuedWebMessage.subscription, queuedWebMessage.message);
@@ -251,10 +316,11 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({
+    apportionSent,
     browserSent: webSent,
     browserSubscriptionsChecked: webPushSubscriptions.length,
     mobileSent: queuedMessages.length,
-    sent: queuedMessages.length + webSent,
+    sent: queuedMessages.length + webSent + apportionSent,
     tokensChecked: pushTokens.length,
     webPushConfigured: Boolean(process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY?.trim() && process.env.WEB_PUSH_PRIVATE_KEY?.trim()),
   });

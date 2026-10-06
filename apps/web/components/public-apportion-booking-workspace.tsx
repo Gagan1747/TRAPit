@@ -1,7 +1,8 @@
 "use client";
 
-import { ChevronLeft, ChevronRight } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ChevronLeft, ChevronRight, Search, Send } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { matchApportionIdentity, planApportionDateKeys, resolveApportionDailySchedule } from "@trapit/testing";
 
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
@@ -12,6 +13,32 @@ const WEEKDAY_KEYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
 type BookingPayload = {
+  viewerIdentifier: string;
+  canInvite: boolean;
+  addressOptions: Array<{
+    key: string;
+    location: BookingPayload["business"]["locations"][number];
+    contexts: Array<{
+      ownerIdentifier: string;
+      serviceId: string;
+      serviceName: string;
+      businessName: string;
+      business: BookingPayload["business"];
+      queueCounts: Array<{ count: number; dateKey: string; locationId: string }>;
+      slotCounts: Array<{ count: number; locationId: string; startsAt: string }>;
+    }>;
+  }>;
+  services: Array<{ businessName: string; id: string; locationIds: string[]; name: string; ownerIdentifier: string }>;
+  serviceId: string;
+  businessOwnerIdentifier: string;
+  providerProfile: {
+    address: string;
+    imageDataUrl: string | null;
+    name: string;
+    ownerIdentifier: string;
+    profileImageDataUrl: string | null;
+    promotionalImageDataUrls: string[];
+  };
   business: {
     address: string;
     advanceBookingWeeks: number;
@@ -33,6 +60,7 @@ type BookingPayload = {
     justAddToList: boolean;
     locations: Array<{
       address: string;
+      dailyHours?: Array<{ weekday: number; workingHours: string; workingHoursSecondWindow: string }>;
       id: string;
       name: string;
       workingDays: string;
@@ -50,6 +78,7 @@ type BookingPayload = {
     workingDays: string;
     workingHours: string;
     workingHoursSecondWindow: string;
+    providerClosedDateKeys: string[];
   };
   viewerName: string;
   queueCounts: Array<{ count: number; dateKey: string; locationId: string }>;
@@ -57,7 +86,8 @@ type BookingPayload = {
 };
 
 type BookingResponse = {
-  appointment: { id: string };
+  appointment?: { id: string };
+  invitation?: { id: string; status: "pending" };
   appointmentCount?: number;
   caution: string | null;
 };
@@ -74,6 +104,10 @@ function resolveEffectiveLocation(
   location: BookingLocation,
   serviceDateKey: string,
 ) {
+  if (business.providerClosedDateKeys.includes(serviceDateKey)) {
+    return null;
+  }
+
   if (business.appointmentDateOverrides.closedDateKeys.includes(serviceDateKey)) {
     return null;
   }
@@ -91,7 +125,16 @@ function resolveEffectiveLocation(
     return hours ? { ...location, ...hours } : null;
   }
 
-  const isWorkingDay = parseWorkingDays(location.workingDays).has(WEEKDAY_NAMES[date.getDay()]);
+  if (location.dailyHours) {
+    const hours = resolveApportionDailySchedule({ dailyHours: location.dailyHours })[date.getDay()];
+    if (hours.workingHours || hours.workingHoursSecondWindow) {
+      return { ...location, ...hours };
+    }
+  }
+
+  const isWorkingDay = location.dailyHours
+    ? false
+    : parseWorkingDays(location.workingDays).has(WEEKDAY_NAMES[date.getDay()]);
   return isWorkingDay || business.appointmentDateOverrides.openedDateKeys.includes(serviceDateKey) ? location : null;
 }
 
@@ -267,6 +310,78 @@ function buildSlotStartsForDate(input: {
   )).filter((slot): slot is { dayOffset: number; label: string; minutes: number; startsAt: string } => Boolean(slot));
 }
 
+function isOpenNow(business: BookingPayload["business"], location: BookingLocation) {
+  const now = new Date();
+  const todayKey = getIstDateKey(now);
+  const effective = resolveEffectiveLocation(business, location, todayKey);
+  if (!effective) return false;
+  const shiftedNow = new Date(now.getTime() + IST_OFFSET_MINUTES * 60_000);
+  const currentMinute = shiftedNow.getUTCHours() * 60 + shiftedNow.getUTCMinutes();
+  return [effective.workingHours, effective.workingHoursSecondWindow].some((range) => {
+    const parsed = parseTimeRange(range);
+    if (!parsed) return false;
+    const end = parsed.startMinutes + parsed.durationMinutes;
+    return currentMinute >= parsed.startMinutes && currentMinute < end
+      || end > 1440 && currentMinute < end - 1440;
+  });
+}
+
+function findNextAvailableBooking(input: {
+  business: BookingPayload["business"];
+  location: BookingLocation;
+  slotCounts: BookingPayload["slotCounts"];
+  queueCounts: BookingPayload["queueCounts"];
+}) {
+  const today = createDateFromKey(getIstDateKey(new Date()));
+  const slotCounts = Object.fromEntries(input.slotCounts
+    .filter((entry) => entry.locationId === input.location.id)
+    .map((entry) => [entry.startsAt, entry.count]));
+  const queueCounts = Object.fromEntries(input.queueCounts
+    .filter((entry) => entry.locationId === input.location.id)
+    .map((entry) => [entry.dateKey, entry.count]));
+  const lastDate = new Date(today);
+  lastDate.setMonth(lastDate.getMonth() + 6);
+
+  for (const date = new Date(today); date <= lastDate; date.setDate(date.getDate() + 1)) {
+    const dateKey = createDateKey(date);
+    const effective = resolveEffectiveLocation(input.business, input.location, dateKey);
+    if (!effective) continue;
+    if (input.business.justAddToList) {
+      const activeCount = queueCounts[dateKey] ?? 0;
+      const estimate = estimateQueueStart({
+        activeCount,
+        appointmentsPerSlot: input.business.appointmentsPerSlot,
+        selectedDateKey: dateKey,
+        slotDurationMinutes: input.business.slotDurationMinutes ?? 10,
+        workingHours: effective.workingHours,
+        workingHoursSecondWindow: effective.workingHoursSecondWindow,
+      });
+      if (estimate) {
+        const capacity = Math.max(1, input.business.appointmentsPerSlot);
+        return {
+          label: `${date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}, ${estimate.label}`,
+          remainingCount: capacity - (activeCount % capacity || 0),
+        };
+      }
+      continue;
+    }
+    const nextSlot = buildSlotStartsForDate({
+      selectedDateKey: dateKey,
+      slotDurationMinutes: input.business.slotDurationMinutes ?? 10,
+      workingHours: effective.workingHours,
+      workingHoursSecondWindow: effective.workingHoursSecondWindow,
+    }).find((slot) => new Date(slot.startsAt).getTime() > Date.now()
+      && (slotCounts[slot.startsAt] ?? 0) < input.business.appointmentsPerSlot);
+    if (nextSlot) {
+      return {
+        label: `${date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}, ${nextSlot.label}`,
+        remainingCount: Math.max(0, input.business.appointmentsPerSlot - (slotCounts[nextSlot.startsAt] ?? 0)),
+      };
+    }
+  }
+  return null;
+}
+
 function estimateQueueStart(input: {
   activeCount: number;
   appointmentsPerSlot: number;
@@ -402,41 +517,120 @@ function createCalendarCells(startDate: Date, endDate: Date): CalendarCell[] {
 
 type PublicApportionBookingWorkspaceProps = {
   shareCode: string;
+  initialServiceId?: string;
+  initialOwnerIdentifier?: string;
+  initialLocationId?: string;
 };
 
-export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBookingWorkspaceProps) {
+type BookableSlot = {
+  dayOffset: number;
+  isAvailable: boolean;
+  label: string;
+  minutes: number;
+  remainingCount: number;
+  startsAt: string;
+};
+
+export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, initialOwnerIdentifier, initialLocationId }: PublicApportionBookingWorkspaceProps) {
+  const bookingPendingRef = useRef(false);
+  const lookupPendingRef = useRef(false);
+  const lookupContextRef = useRef("");
+  const lookupVersionRef = useRef(0);
+  const [targetPhone, setTargetPhone] = useState("");
+  const [verifiedTarget, setVerifiedTarget] = useState<{ identifier: string; name: string; context: string } | null>(null);
+  const [isLookingUp, setIsLookingUp] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
   const [carouselIndex, setCarouselIndex] = useState(0);
   const [failedPromotionalImages, setFailedPromotionalImages] = useState<string[]>([]);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [ticketUrl, setTicketUrl] = useState<string | null>(null);
   const [isBooking, setIsBooking] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [notes, setNotes] = useState("");
   const [payload, setPayload] = useState<BookingPayload | null>(null);
-  const [recurrenceMode, setRecurrenceMode] = useState<"none" | "weekly">("none");
+  const [recurrenceMode, setRecurrenceMode] = useState<"none" | "weekly" | "monthly">("none");
+  const [recurringMonthDays, setRecurringMonthDays] = useState<number[]>([]);
   const [recurringEndDateKey, setRecurringEndDateKey] = useState("");
   const [recurringWeekdayKeys, setRecurringWeekdayKeys] = useState<string[]>([]);
   const [selectedDateKey, setSelectedDateKey] = useState(getIstDateKey(new Date()));
+  const [selectedServiceId, setSelectedServiceId] = useState(initialServiceId ?? "");
+  const [selectedOwnerIdentifier, setSelectedOwnerIdentifier] = useState(initialOwnerIdentifier ?? "");
   const [selectedLocationId, setSelectedLocationId] = useState("");
   const [selectedSlotIso, setSelectedSlotIso] = useState<string | null>(null);
+  const [slotPage, setSlotPage] = useState(0);
   const [weekOffset, setWeekOffset] = useState(0);
+  const normalizedTargetPhone = targetPhone.trim().replace(/[\s()-]/g, "");
+  const lookupContext = JSON.stringify([shareCode, selectedOwnerIdentifier, selectedServiceId, normalizedTargetPhone]);
+  lookupContextRef.current = lookupContext;
+  const canInvite = Boolean(payload?.canInvite && payload.viewerIdentifier
+    && matchApportionIdentity(payload.viewerIdentifier, selectedOwnerIdentifier)
+    && matchApportionIdentity(payload.businessOwnerIdentifier, selectedOwnerIdentifier));
+  const isTargeted = canInvite && Boolean(normalizedTargetPhone);
+  const targetIsVerified = Boolean(isTargeted && verifiedTarget?.context === lookupContext);
 
-  async function loadBookingPage() {
+  useEffect(() => {
+    lookupVersionRef.current += 1;
+    setVerifiedTarget(null);
+    setLookupError(null);
+    setRecurrenceMode("none");
+    setRecurringMonthDays([]);
+  }, [targetPhone, selectedOwnerIdentifier, selectedServiceId, shareCode]);
+
+  async function lookupTarget() {
+    if (lookupPendingRef.current || !canInvite) return;
+    setVerifiedTarget(null);
+    setLookupError(null);
+    if (!/^(?:\+[1-9]\d{7,14}|\d{10})$/.test(normalizedTargetPhone)) {
+      setLookupError("Enter a full registered phone number.");
+      return;
+    }
+    const context = lookupContext;
+    const version = lookupVersionRef.current;
+    lookupPendingRef.current = true;
+    setIsLookingUp(true);
+    try {
+      const query = new URLSearchParams({ lookupPhone: normalizedTargetPhone, ownerIdentifier: selectedOwnerIdentifier, serviceId: selectedServiceId });
+      const result = await readJson<{ user: { identifier: string; name: string } }>(await fetch(`/api/apportion/${encodeURIComponent(shareCode)}?${query}`));
+      if (lookupVersionRef.current === version && lookupContextRef.current === context) setVerifiedTarget({ ...result.user, context });
+    } catch (error) {
+      if (lookupVersionRef.current === version && lookupContextRef.current === context) setLookupError(error instanceof Error ? error.message : "Unable to find this user.");
+    } finally {
+      lookupPendingRef.current = false;
+      setIsLookingUp(false);
+    }
+  }
+
+  async function loadBookingPage(ownerIdentifier = selectedOwnerIdentifier, serviceId = selectedServiceId, preserveLocation = false, preserveFeedback = false, preferredLocationId?: string) {
     setIsLoading(true);
 
     try {
+      const query = new URLSearchParams();
+      if (ownerIdentifier) query.set("ownerIdentifier", ownerIdentifier);
+      if (serviceId) query.set("serviceId", serviceId);
       const nextPayload = await readJson<BookingPayload>(
-        await fetch(`/api/apportion/${encodeURIComponent(shareCode)}`),
+        await fetch(`/api/apportion/${encodeURIComponent(shareCode)}${query.size ? `?${query}` : ""}`),
       );
       setPayload(nextPayload);
+      setSelectedServiceId(nextPayload.serviceId);
+      setSelectedOwnerIdentifier(nextPayload.businessOwnerIdentifier);
       setRecurrenceMode("none");
       setRecurringEndDateKey("");
       setRecurringWeekdayKeys([]);
-      setSelectedLocationId(nextPayload.business.locations.length === 1 ? nextPayload.business.locations[0].id : "");
+      const requestedLocation = preferredLocationId
+        ? nextPayload.business.locations.find((location) => location.id === preferredLocationId)
+        : initialLocationId
+          ? nextPayload.business.locations.find((location) => location.id === initialLocationId || location.address === initialLocationId)
+        : undefined;
+      const previousLocation = preserveLocation
+        ? nextPayload.business.locations.find((location) => location.id === selectedLocationId)
+        : undefined;
+      setSelectedLocationId(requestedLocation?.id ?? previousLocation?.id ?? nextPayload.business.locations[0]?.id ?? "");
       setSelectedSlotIso(null);
+      setSlotPage(0);
       setCarouselIndex(0);
       setFailedPromotionalImages([]);
       setWeekOffset(0);
-      setFeedback(null);
+      if (!preserveFeedback) setFeedback(null);
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to load this booking page.");
     } finally {
@@ -446,7 +640,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
 
   useEffect(() => {
     void loadBookingPage();
-  }, [shareCode]);
+  }, [shareCode, initialOwnerIdentifier, initialServiceId, initialLocationId]);
 
   useEffect(() => {
     if (!payload) {
@@ -482,18 +676,25 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       const effectiveLocation = resolveEffectiveLocation(payload.business, selectedLocation, key);
       const isWorkingDate = Boolean(effectiveLocation);
 
-      if (!isWorkingDate || !payload.business.justAddToList) {
-        return isWorkingDate;
-      }
-
-      return Boolean(estimateQueueStart({
-        activeCount: queueCountsByDate[key] ?? 0,
-        appointmentsPerSlot: payload.business.appointmentsPerSlot,
+      if (!isWorkingDate) return false;
+      if (payload.business.justAddToList) return Boolean(estimateQueueStart({
+          activeCount: queueCountsByDate[key] ?? 0,
+          appointmentsPerSlot: payload.business.appointmentsPerSlot,
+          selectedDateKey: key,
+          slotDurationMinutes: payload.business.slotDurationMinutes ?? 10,
+          workingHours: effectiveLocation?.workingHours ?? "",
+          workingHoursSecondWindow: effectiveLocation?.workingHoursSecondWindow ?? "",
+        }));
+      const counts = Object.fromEntries(payload.slotCounts
+        .filter((entry) => entry.locationId === selectedLocation.id)
+        .map((entry) => [entry.startsAt, entry.count]));
+      return buildSlotStartsForDate({
         selectedDateKey: key,
-        slotDurationMinutes: payload.business.slotDurationMinutes ?? 30,
+        slotDurationMinutes: payload.business.slotDurationMinutes ?? 10,
         workingHours: effectiveLocation?.workingHours ?? "",
         workingHoursSecondWindow: effectiveLocation?.workingHoursSecondWindow ?? "",
-      }));
+      }).some((slot) => new Date(slot.startsAt).getTime() > Date.now()
+        && (counts[slot.startsAt] ?? 0) < payload.business.appointmentsPerSlot);
     });
 
     if (nextWorkingDate) {
@@ -504,7 +705,39 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   }, [payload, selectedLocationId]);
 
   useEffect(() => {
-    const imageCount = payload?.business.promotionalImageDataUrls
+    if (!payload || payload.business.justAddToList || !selectedLocationId) return;
+    const location = payload.business.locations.find((entry) => entry.id === selectedLocationId);
+    if (!location) return;
+    const effective = resolveEffectiveLocation(payload.business, location, selectedDateKey);
+    if (!effective) return;
+    const counts = Object.fromEntries(payload.slotCounts
+      .filter((entry) => entry.locationId === selectedLocationId)
+      .map((entry) => [entry.startsAt, entry.count]));
+    const firstAvailable = buildSlotStartsForDate({
+      selectedDateKey,
+      slotDurationMinutes: payload.business.slotDurationMinutes ?? 10,
+      workingHours: effective.workingHours,
+      workingHoursSecondWindow: effective.workingHoursSecondWindow,
+    }).find((slot) => new Date(slot.startsAt).getTime() > Date.now()
+      && (counts[slot.startsAt] ?? 0) < payload.business.appointmentsPerSlot);
+    if (!firstAvailable) {
+      setSelectedSlotIso(null);
+      setSlotPage(0);
+      return;
+    }
+    if (!selectedSlotIso || !buildSlotStartsForDate({
+      selectedDateKey,
+      slotDurationMinutes: payload.business.slotDurationMinutes ?? 10,
+      workingHours: effective.workingHours,
+      workingHoursSecondWindow: effective.workingHoursSecondWindow,
+    }).some((slot) => slot.startsAt === selectedSlotIso && new Date(slot.startsAt).getTime() > Date.now()
+      && (counts[slot.startsAt] ?? 0) < payload.business.appointmentsPerSlot)) {
+      setSelectedSlotIso(firstAvailable.startsAt);
+    }
+  }, [payload, selectedDateKey, selectedLocationId, selectedSlotIso]);
+
+  useEffect(() => {
+    const imageCount = payload?.providerProfile.promotionalImageDataUrls
       .map(normalizeImageDataUrl)
       .filter((imageUrl) => !failedPromotionalImages.includes(imageUrl)).length ?? 0;
 
@@ -521,21 +754,8 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     return () => window.clearInterval(intervalId);
   }, [failedPromotionalImages, payload]);
 
-  useEffect(() => {
-    if (recurrenceMode !== "weekly") {
-      return;
-    }
-
-    if (!recurringEndDateKey) {
-      setRecurringEndDateKey(selectedDateKey);
-    }
-
-    if (!recurringWeekdayKeys.length) {
-      setRecurringWeekdayKeys([getWeekdayKeyForDateKey(selectedDateKey)]);
-    }
-  }, [recurrenceMode, recurringEndDateKey, recurringWeekdayKeys, selectedDateKey]);
-
   async function handleBookAppointment() {
+    if (bookingPendingRef.current) return;
     if (!payload) {
       setFeedback("Unable to load this booking page.");
       return;
@@ -553,38 +773,52 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
       return;
     }
 
-    if (recurrenceMode === "weekly") {
-      if (!payload.business.recurringBookingsEnabled) {
+    if (isTargeted && !targetIsVerified) {
+      setFeedback("Verify the registered phone number before sending an invitation.");
+      return;
+    }
+
+    if (isTargeted && recurrenceMode !== "none") {
+      if (!payload.business.recurringBookingsEnabled || !canInvite) {
         setFeedback("Recurring bookings are disabled for this business.");
         return;
       }
 
-      if (!recurringWeekdayKeys.length) {
-        setFeedback("Choose at least one weekday for recurring booking.");
+      if (recurrenceMode === "weekly" ? !effectiveRecurringWeekdays.length : !recurringMonthDays.length) {
+        setFeedback("Choose at least one recurring day.");
         return;
       }
 
-      if (!recurringEndDateKey) {
-        setFeedback("Choose an end date for recurring booking.");
+      if (!recurringEndDateKey || recurringEndDateKey < selectedDateKey || recurringEndDateKey > createDateKey(maxBookableDate)) {
+        setFeedback("Choose an end date within the appointment date range.");
+        return;
+      }
+      if (recurrenceError || !plannedDateKeys.length) {
+        setFeedback(recurrenceError || "Choose between 1 and 6 appointments.");
         return;
       }
     }
 
+    bookingPendingRef.current = true;
     setIsBooking(true);
+    setTicketUrl(null);
 
     try {
       const bookingPayload = await readJson<BookingResponse>(
         await fetch(`/api/apportion/${encodeURIComponent(shareCode)}`, {
           body: JSON.stringify({
+            ownerIdentifier: selectedOwnerIdentifier,
+            serviceId: selectedServiceId,
             locationId: selectedLocationId,
             slotDateKey: selectedDateKey,
             notes,
-            recurrence: recurrenceMode === "weekly"
+            targetPhone: isTargeted ? normalizedTargetPhone : undefined,
+            recurrence: isTargeted && recurrenceMode !== "none" && canInvite
               && payload.business.recurringBookingsEnabled
               ? {
                   endDateKey: recurringEndDateKey,
-                  mode: "weekly",
-                  weekdayKeys: recurringWeekdayKeys,
+                  mode: recurrenceMode,
+                  ...(recurrenceMode === "weekly" ? { weekdayKeys: effectiveRecurringWeekdays } : { monthDays: recurringMonthDays }),
                 }
               : null,
             startsAt: selectedSlot?.startsAt,
@@ -593,23 +827,28 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
           method: "POST",
         }),
       );
-      const successLabel = bookingPayload.appointmentCount && bookingPayload.appointmentCount > 1
+      const successLabel = bookingPayload.invitation ? "Invitation sent." : bookingPayload.appointmentCount && bookingPayload.appointmentCount > 1
         ? `${bookingPayload.appointmentCount} appointments booked.`
         : "Appointment booked.";
 
-      setFeedback(bookingPayload.caution
-        ? `${successLabel} ${bookingPayload.caution}`
-        : `${successLabel} You can see it in the Apportion tab on your dashboard.`);
+      const ticketUrl = bookingPayload.invitation
+        ? `/user?tab=apportion&invitationId=${encodeURIComponent(bookingPayload.invitation.id)}`
+        : bookingPayload.appointment ? `/user?tab=apportion&appointmentId=${encodeURIComponent(bookingPayload.appointment.id)}` : "/user?tab=apportion";
+      setFeedback(bookingPayload.caution ? `${successLabel} ${bookingPayload.caution}` : successLabel);
+      setTicketUrl(ticketUrl);
       markNotificationPromptOpportunity();
       setNotes("");
+      setTargetPhone("");
+      setVerifiedTarget(null);
       setRecurrenceMode("none");
       setRecurringEndDateKey(selectedDateKey);
       setRecurringWeekdayKeys([getWeekdayKeyForDateKey(selectedDateKey)]);
       setSelectedSlotIso(null);
-      await loadBookingPage();
+      await loadBookingPage(selectedOwnerIdentifier, selectedServiceId, true, true);
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Unable to book the appointment.");
     } finally {
+      bookingPendingRef.current = false;
       setIsBooking(false);
     }
   }
@@ -640,38 +879,38 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
   const closedDateKeys = new Set(payload.business.appointmentDateOverrides.closedDateKeys);
   const openedDateKeys = new Set(payload.business.appointmentDateOverrides.openedDateKeys);
   const weekStartDate = new Date(today);
-  weekStartDate.setDate(today.getDate() + (weekOffset * 7));
+  weekStartDate.setDate(today.getDate() - today.getDay() + (weekOffset * 7));
   const weekDates = Array.from({ length: 7 }, (_, dayOffset) => {
     const date = new Date(weekStartDate);
     date.setDate(weekStartDate.getDate() + dayOffset);
     return date;
   });
   const workingHoursText = [effectiveSelectedLocation?.workingHours, effectiveSelectedLocation?.workingHoursSecondWindow].filter(Boolean).join(" and ");
-  const availableSlots = (effectiveSelectedLocation ? buildSlotStartsForDate({
+  const availableSlots = effectiveSelectedLocation ? buildSlotStartsForDate({
     selectedDateKey,
     slotDurationMinutes,
     workingHours: effectiveSelectedLocation.workingHours,
     workingHoursSecondWindow: effectiveSelectedLocation.workingHoursSecondWindow,
-  }) : []).map((slot) => {
+  }).map((slot) => {
     const startsAt = slot.startsAt;
     const isPast = new Date(startsAt).getTime() <= Date.now();
     const bookedCount = slotCountsByIso[startsAt] ?? 0;
     const remainingCount = Math.max(0, payload.business.appointmentsPerSlot - bookedCount);
-    const isFull = bookedCount >= payload.business.appointmentsPerSlot;
-
     return {
       dayOffset: slot.dayOffset,
-      isAvailable: !isPast && !isFull,
+      isAvailable: !isPast && bookedCount < payload.business.appointmentsPerSlot,
       label: slot.label,
       minutes: slot.minutes,
       remainingCount,
       startsAt,
     };
-  });
+  }).filter((slot) => slot.isAvailable) : [];
+  const visibleSlots = availableSlots.slice(slotPage * 6, slotPage * 6 + 6);
+  const pageCount = Math.ceil(availableSlots.length / 6);
   const selectedSlot = availableSlots.find((slot) => slot.startsAt === selectedSlotIso) ?? null;
-  const logoDataUrl = payload.business.imageDataUrl ? normalizeImageDataUrl(payload.business.imageDataUrl) : null;
-  const profileImageDataUrl = payload.business.profileImageDataUrl ? normalizeImageDataUrl(payload.business.profileImageDataUrl) : null;
-  const promotionalImageDataUrls = payload.business.promotionalImageDataUrls
+  const logoDataUrl = payload.providerProfile.imageDataUrl ? normalizeImageDataUrl(payload.providerProfile.imageDataUrl) : null;
+  const profileImageDataUrl = payload.providerProfile.profileImageDataUrl ? normalizeImageDataUrl(payload.providerProfile.profileImageDataUrl) : null;
+  const promotionalImageDataUrls = payload.providerProfile.promotionalImageDataUrls
     .map(normalizeImageDataUrl)
     .filter((imageUrl) => !failedPromotionalImages.includes(imageUrl));
   const queueEstimate = payload.business.justAddToList
@@ -687,9 +926,41 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
     : null;
   const queueCountForSelectedDate = queueCountsByDateKey[selectedDateKey] ?? 0;
   const selectedDateLabel = createDateFromKey(selectedDateKey).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
-  const businessContactText = [payload.business.name, formatPhoneNumberForDisplay(payload.business.ownerIdentifier, { showFullPhoneNumber: true })]
+  const businessContactText = [formatPhoneNumberForDisplay(payload.providerProfile.ownerIdentifier, { showFullPhoneNumber: true }), payload.providerProfile.address]
     .filter(Boolean)
     .join(" • ");
+  const selectedAddressKey = `${selectedOwnerIdentifier}::${selectedLocationId}`;
+  const selectedAddressOption = payload.addressOptions.find((option) => option.key === selectedAddressKey);
+  const addressServices = selectedAddressOption?.contexts ?? [];
+  const recurringAllowed = isTargeted && payload.business.recurringBookingsEnabled;
+  const recurringWorkingWeekdays = WEEKDAY_KEYS.filter((_, weekday) => {
+    if (!selectedLocation) return false;
+    const weeklyOverride = payload.business.appointmentWeeklyHoursOverrides.find((entry) => entry.weekday === weekday);
+    if (weeklyOverride) {
+      const hours = weeklyOverride.locations.find((entry) => entry.locationId === selectedLocation.id);
+      return Boolean(hours?.workingHours || hours?.workingHoursSecondWindow);
+    }
+    if (selectedLocation.dailyHours) {
+      const hours = resolveApportionDailySchedule({ dailyHours: selectedLocation.dailyHours })[weekday];
+      return Boolean(hours.workingHours || hours.workingHoursSecondWindow);
+    }
+    return parseWorkingDays(selectedLocation.workingDays).has(WEEKDAY_NAMES[weekday]);
+  });
+  const effectiveRecurringWeekdays = recurringWeekdayKeys.filter((day) => recurringWorkingWeekdays.includes(day as typeof WEEKDAY_KEYS[number]));
+  let plannedDateKeys: string[] = [];
+  let recurrenceError: string | null = null;
+  if (recurringAllowed && recurrenceMode !== "none") {
+    try {
+      if (!recurringEndDateKey || recurringEndDateKey > createDateKey(maxBookableDate)) throw new Error("Choose an end date within the appointment date range.");
+      plannedDateKeys = planApportionDateKeys(selectedDateKey, {
+        mode: recurrenceMode,
+        endDateKey: recurringEndDateKey,
+        ...(recurrenceMode === "weekly" ? { weekdayKeys: effectiveRecurringWeekdays } : { monthDays: recurringMonthDays }),
+      }, (dateKey) => Boolean(selectedLocation && resolveEffectiveLocation(payload.business, selectedLocation, dateKey)));
+    } catch (error) {
+      recurrenceError = error instanceof Error ? error.message : "Choose valid recurring dates.";
+    }
+  }
 
   return (
     <div className="workspace-card-stack">
@@ -703,7 +974,7 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
           </div>
           <div className="apportion-booking-title-block">
             <p className="eyebrow">Apportion booking</p>
-            <h1>{payload.business.name || "Business appointment"}</h1>
+            <h1>{payload.providerProfile.name || payload.business.name || "Business appointment"}</h1>
             {businessContactText ? <p className="apportion-booking-subtitle">{businessContactText}</p> : null}
           </div>
           <div className="apportion-business-image-slot right-slot">
@@ -769,32 +1040,118 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
             ) : null}
           </div>
           <div className="form-stack apportion-booking-right-column">
-            {payload.business.locations.length > 1 ? (
-              <div className="field apportion-location-selector">
-                <label htmlFor="apportion-location">Business location</label>
-                <select
-                  className="select-field"
-                  id="apportion-location"
-                  required
-                  value={selectedLocationId}
-                  onChange={(event) => {
-                    setSelectedLocationId(event.target.value);
-                    setSelectedSlotIso(null);
+            {canInvite ? (
+              <div className="field apportion-invitation-target">
+                <label htmlFor="apportion-target-phone">Customer phone</label>
+                <div className="apportion-target-lookup">
+                  <input autoComplete="tel" id="apportion-target-phone" inputMode="tel" type="tel" value={targetPhone} onChange={(event) => {
+                    lookupVersionRef.current += 1;
+                    setTargetPhone(event.target.value);
+                    setVerifiedTarget(null);
+                    setLookupError(null);
                     setRecurrenceMode("none");
-                    setRecurringEndDateKey("");
-                    setRecurringWeekdayKeys([]);
-                    setWeekOffset(0);
-                    setFeedback(null);
-                  }}
-                >
-                  <option value="">Select a location</option>
-                  {payload.business.locations.map((location) => (
-                    <option key={location.id} value={location.id}>{location.address}</option>
-                  ))}
-                </select>
-                {selectedLocation ? <p className="muted-text">{selectedLocation.address}</p> : null}
+                  }} />
+                  <button className="button-secondary" disabled={isLookingUp || !normalizedTargetPhone || isBooking} type="button" onClick={() => void lookupTarget()}>
+                    <Search aria-hidden="true" size={18} />{isLookingUp ? "Checking..." : "Verify"}
+                  </button>
+                </div>
+                {targetIsVerified ? <strong role="status">{verifiedTarget?.name}</strong> : null}
+                {lookupError ? <p className="apportion-queue-warning" role="alert">{lookupError}</p> : null}
               </div>
-            ) : selectedLocation ? <p className="muted-text apportion-single-location">{selectedLocation.address}</p> : null}
+            ) : null}
+            {addressServices.length > 1 ? (
+              <div className="field">
+                <label htmlFor="apportion-service">Service</label>
+                {addressServices.length > 4 ? (
+                  <select
+                    className="select-field"
+                    id="apportion-service"
+                    value={`${selectedOwnerIdentifier}::${selectedServiceId}`}
+                    onChange={(event) => {
+                      const service = addressServices.find((entry) => `${entry.ownerIdentifier}::${entry.serviceId}` === event.target.value);
+                      if (!service) return;
+                      setSelectedOwnerIdentifier(service.ownerIdentifier);
+                      setSelectedServiceId(service.serviceId);
+                      setSelectedLocationId("");
+                      setFeedback(null);
+                      void loadBookingPage(service.ownerIdentifier, service.serviceId, false, false, selectedLocationId);
+                    }}
+                  >
+                    {addressServices.map((service) => (
+                      <option key={`${service.ownerIdentifier}::${service.serviceId}`} value={`${service.ownerIdentifier}::${service.serviceId}`}>
+                        {service.serviceName} · {service.businessName}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="apportion-service-choices" role="group" aria-label="Choose a service">
+                    {addressServices.map((service) => {
+                      const isSelected = service.ownerIdentifier === selectedOwnerIdentifier && service.serviceId === selectedServiceId;
+                      return (
+                        <button
+                          aria-pressed={isSelected}
+                          className={`apportion-service-choice${isSelected ? " is-selected" : ""}`}
+                          key={`${service.ownerIdentifier}::${service.serviceId}`}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) return;
+                            setSelectedOwnerIdentifier(service.ownerIdentifier);
+                            setSelectedServiceId(service.serviceId);
+                            setFeedback(null);
+                            void loadBookingPage(service.ownerIdentifier, service.serviceId, false, false, selectedLocationId);
+                          }}
+                        >
+                          <strong>{service.serviceName}</strong>
+                          <span>{service.businessName}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            <div className="field apportion-location-selector">
+              <label>Business address</label>
+              <div className="apportion-location-cards">
+                {payload.addressOptions.map((option) => {
+                  const selected = option.key === selectedAddressKey;
+                  const activeContext = option.contexts.find((context) => context.ownerIdentifier === selectedOwnerIdentifier && context.serviceId === selectedServiceId) ?? option.contexts[0];
+                  if (!activeContext) return null;
+                  const location = activeContext.business.locations[0];
+                  if (!location) return null;
+                  const openNow = isOpenNow(activeContext.business, location);
+                  const nextBooking = findNextAvailableBooking({ business: activeContext.business, location, slotCounts: activeContext.slotCounts, queueCounts: activeContext.queueCounts });
+                  return (
+                    <button
+                      aria-pressed={selected}
+                      className={`apportion-location-card${selected ? " is-selected" : ""}`}
+                      key={option.key}
+                      type="button"
+                      onClick={() => {
+                        const context = option.contexts.find((entry) => entry.ownerIdentifier === selectedOwnerIdentifier && entry.serviceId === selectedServiceId) ?? option.contexts[0];
+                        if (!context) return;
+                        setSelectedLocationId(location.id);
+                        setSelectedOwnerIdentifier(context.ownerIdentifier);
+                        setSelectedServiceId(context.serviceId);
+                        setSelectedSlotIso(null);
+                        setSlotPage(0);
+                        setWeekOffset(0);
+                        setFeedback(null);
+                        if (context.ownerIdentifier !== selectedOwnerIdentifier || context.serviceId !== selectedServiceId) {
+                          void loadBookingPage(context.ownerIdentifier, context.serviceId, false, false, location.id);
+                        }
+                      }}
+                    >
+                      <strong>{option.location.name}</strong>
+                      <span>{option.location.address}</span>
+                      {openNow ? <span className="apportion-open-status">Open Now</span> : null}
+                      <span>{nextBooking ? `Next available booking: ${nextBooking.label} · ${nextBooking.remainingCount} left` : "No availability"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             {selectedLocation ? (
               <div className="apportion-week-calendar-shell">
@@ -870,26 +1227,34 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
             ) : (
               <div className="field">
                 <label htmlFor="apportion-appointment-time">Appointment time</label>
-                <select
-                  className="select-field"
-                  disabled={!selectedLocation}
-                  id="apportion-appointment-time"
-                  value={selectedSlotIso ?? ""}
-                  onChange={(event) => {
-                    setSelectedSlotIso(event.target.value || null);
-                    setFeedback(null);
-                  }}
-                >
-                  <option value="">Select a time</option>
-                  {availableSlots.map((slot) => (
-                    <option disabled={!slot.isAvailable} key={slot.startsAt} value={slot.startsAt}>
-                      {slot.label} - {slot.isAvailable ? `Available${payload.business.showRemainingBookings ? ` (${slot.remainingCount} left)` : ""}` : "Unavailable"}
-                    </option>
-                  ))}
-                </select>
+                <div className="apportion-slot-pager">
+                  <button aria-label="Previous times" className="icon-button button-secondary" disabled={slotPage === 0} type="button" onClick={() => setSlotPage((page) => Math.max(0, page - 1))}>
+                    <ChevronLeft aria-hidden="true" size={18} />
+                  </button>
+                  <span className="muted-text">{pageCount ? `${slotPage + 1} / ${pageCount}` : "0 times"}</span>
+                  <button aria-label="Next times" className="icon-button button-secondary" disabled={slotPage + 1 >= pageCount} type="button" onClick={() => setSlotPage((page) => Math.min(pageCount - 1, page + 1))}>
+                    <ChevronRight aria-hidden="true" size={18} />
+                  </button>
+                </div>
+                {visibleSlots.length ? (
+                  <div className="apportion-slot-grid" role="group" aria-label="Available appointment times">
+                    {visibleSlots.map((slot) => (
+                      <button
+                        aria-pressed={selectedSlotIso === slot.startsAt}
+                        className={`apportion-slot-chip${selectedSlotIso === slot.startsAt ? " is-selected" : ""}`}
+                        key={slot.startsAt}
+                        type="button"
+                        onClick={() => { setSelectedSlotIso(slot.startsAt); setFeedback(null); }}
+                      >
+                        {slot.label}
+                        {payload.business.showRemainingBookings && payload.business.appointmentsPerSlot > 1 ? <span>{slot.remainingCount} left</span> : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : <p className="muted-text apportion-queue-warning">No availability for this date.</p>}
                 {selectedSlot ? (
                   <p className="muted-text">
-                    {selectedSlot.label} selected{payload.business.showRemainingBookings ? `, ${selectedSlot.remainingCount} booking${selectedSlot.remainingCount === 1 ? "" : "s"} left` : ""}
+                    {selectedSlot.label} selected{payload.business.showRemainingBookings && payload.business.appointmentsPerSlot > 1 ? `, ${selectedSlot.remainingCount} booking${selectedSlot.remainingCount === 1 ? "" : "s"} left` : ""}
                   </p>
                 ) : null}
               </div>
@@ -906,12 +1271,39 @@ export function PublicApportionBookingWorkspace({ shareCode }: PublicApportionBo
                 onChange={(event) => setNotes(event.target.value)}
               />
             </div>
-            {feedback ? <p className="muted-text">{feedback}</p> : null}
+            {recurringAllowed ? (
+              <div className="field apportion-recurrence-controls">
+                <label htmlFor="apportion-recurrence">Repeat</label>
+                <select className="select-field" id="apportion-recurrence" value={recurrenceMode} onChange={(event) => {
+                  const mode = event.target.value as typeof recurrenceMode;
+                  setRecurrenceMode(mode);
+                  setRecurringEndDateKey(selectedDateKey);
+                  setRecurringWeekdayKeys([getWeekdayKeyForDateKey(selectedDateKey)]);
+                  setRecurringMonthDays([createDateFromKey(selectedDateKey).getDate()]);
+                }}>
+                  <option value="none">Once</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option>
+                </select>
+                {recurrenceMode !== "none" ? <>
+                  <label htmlFor="apportion-repeat-end">End date</label>
+                  <input id="apportion-repeat-end" type="date" min={selectedDateKey} max={createDateKey(maxBookableDate)} value={recurringEndDateKey} onChange={(event) => setRecurringEndDateKey(event.target.value)} />
+                  <div className={`apportion-repeat-days${recurrenceMode === "monthly" ? " is-monthly" : ""}`} role="group" aria-label={recurrenceMode === "weekly" ? "Recurring weekdays" : "Recurring month dates"}>
+                    {recurrenceMode === "weekly" ? WEEKDAY_KEYS.map((day) => (
+                      <button aria-pressed={effectiveRecurringWeekdays.includes(day)} className="button-secondary" disabled={!recurringWorkingWeekdays.includes(day)} key={day} type="button" onClick={() => setRecurringWeekdayKeys((days) => days.includes(day) ? days.filter((entry) => entry !== day) : [...days, day])}>{day}</button>
+                    )) : Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
+                      <button aria-pressed={recurringMonthDays.includes(day)} className="button-secondary" key={day} type="button" onClick={() => setRecurringMonthDays((days) => days.includes(day) ? days.filter((entry) => entry !== day) : [...days, day])}>{day}</button>
+                    ))}
+                  </div>
+                  <p className="muted-text" role="status">{plannedDateKeys.length} / 6 appointments</p>
+                  {recurrenceError ? <p className="apportion-queue-warning" role="alert">{recurrenceError}</p> : null}
+                </> : null}
+              </div>
+            ) : null}
+            {feedback ? <p className="muted-text" role="status">{feedback}{ticketUrl ? <> <a href={ticketUrl}>My Dashboard</a></> : null}</p> : null}
             <div className="inline-actions">
-              <button className="button" disabled={isBooking || !selectedLocation || (payload.business.justAddToList && !queueEstimate)} type="button" onClick={() => void handleBookAppointment()}>
-                {isBooking ? "Booking..." : payload.business.justAddToList ? "Join appointment queue" : "Book appointment"}
+              <button className="button" disabled={isBooking || isLookingUp || (isTargeted && !targetIsVerified) || !selectedLocation || (!payload.business.justAddToList && !selectedSlot) || (payload.business.justAddToList && !queueEstimate) || (recurringAllowed && recurrenceMode !== "none" && (!plannedDateKeys.length || plannedDateKeys.length > 6))} type="button" onClick={() => void handleBookAppointment()}>
+                {isTargeted ? <Send aria-hidden="true" size={18} /> : null}{isBooking ? isTargeted ? "Sending..." : "Booking..." : isTargeted ? "Send Invitation" : payload.business.justAddToList ? "Join appointment queue" : "Book appointment"}
               </button>
-              <a className="button-secondary" href="/user?tab=apportion">Go to dashboard</a>
+              <a className="button-secondary" href="/user?tab=apportion">My Dashboard</a>
             </div>
             <p className="muted-text">Booking user: {payload.viewerName}</p>
             </div>

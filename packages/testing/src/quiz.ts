@@ -124,8 +124,15 @@ export type PollRecurrenceCycle = {
   startsAt: string;
 };
 
+export type AppointmentDailyHours = {
+  weekday: number;
+  workingHours: string;
+  workingHoursSecondWindow: string;
+};
+
 export type AppointmentLocation = {
   address: string;
+  dailyHours?: AppointmentDailyHours[];
   id: string;
   name: string;
   workingHours: string;
@@ -405,6 +412,7 @@ export type TestLeaderboard = {
 };
 
 export type TestingWorkspaceState = {
+  apportionDirectory?: import("./apportion").ApportionDirectory;
   attempts: TestAttempt[];
   games: ScheduledGame[];
   groupJoinRequests: GroupJoinRequest[];
@@ -921,6 +929,18 @@ export function normalizeWorkspaceBranding(
     .slice(0, 2)
     .map((location, index) => ({
       address: location.address?.trim() ?? "",
+      ...(location.dailyHours ? {
+        dailyHours: location.dailyHours
+          .filter((dailyHours) => Number.isInteger(dailyHours.weekday) && dailyHours.weekday >= 0 && dailyHours.weekday <= 6)
+          .map((dailyHours) => ({
+            weekday: dailyHours.weekday,
+            workingHours: dailyHours.workingHours?.trim() ?? "",
+            workingHoursSecondWindow: dailyHours.workingHoursSecondWindow?.trim() ?? "",
+          }))
+          .filter((dailyHours, dailyIndex, values) =>
+            values.findIndex((candidate) => candidate.weekday === dailyHours.weekday) === dailyIndex,
+          ),
+      } : {}),
       id: location.id?.trim() || `location-${index + 1}`,
       name: location.name?.trim() || `Location ${index + 1}`,
       workingDays: location.workingDays?.trim() ?? "",

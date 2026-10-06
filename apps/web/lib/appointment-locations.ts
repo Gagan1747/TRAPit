@@ -1,10 +1,10 @@
-import { type AppointmentLocation, type WorkspaceBranding } from "@trapit/testing";
+import { resolveApportionDailySchedule, type AppointmentLocation, type WorkspaceBranding } from "@trapit/testing";
 
 const MINUTES_PER_DAY = 24 * 60;
 const MINUTES_PER_WEEK = 7 * MINUTES_PER_DAY;
 const IST_OFFSET_MINUTES = (5 * 60) + 30;
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const SLOT_DURATION_MINUTES = new Set([5, 10, 15, 30, 45, 60, 120, 180, 240]);
+const SLOT_DURATION_MINUTES = new Set([5, 10, 15, 30, 45, 60, 120, 180, 240, 1440]);
 
 type WeeklyInterval = {
   end: number;
@@ -12,6 +12,7 @@ type WeeklyInterval = {
 };
 
 function parseTime(value: string) {
+  if (value.trim() === "24:00") return MINUTES_PER_DAY;
   const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
 
   if (!match) {
@@ -36,11 +37,11 @@ function parseRange(value: string) {
   const start = parseTime(startValue ?? "");
   const end = parseTime(endValue ?? "");
 
-  if (extraValue !== undefined || start === null || end === null) {
+  if (extraValue !== undefined || start === null || start === MINUTES_PER_DAY || end === null) {
     return null;
   }
 
-  return { duration: start === end ? MINUTES_PER_DAY : (end - start + MINUTES_PER_DAY) % MINUTES_PER_DAY, start };
+  return { duration: start === end || end - start === MINUTES_PER_DAY ? MINUTES_PER_DAY : (end - start + MINUTES_PER_DAY) % MINUTES_PER_DAY, start };
 }
 
 function selectedWeekdays(value: string) {
@@ -74,13 +75,20 @@ export function resolveAppointmentLocationSchedule(
   const dateOverride = branding.appointmentDateHoursOverrides?.find((entry) => entry.dateKey === serviceDateKey);
   if (dateOverride) {
     const hours = dateOverride.locations.find((entry) => entry.locationId === locationId);
-    return hours ? { ...location, ...hours, workingDays: WEEKDAYS[weekday] } : null;
+    return hours ? { ...location, ...hours, dailyHours: undefined, workingDays: WEEKDAYS[weekday] } : null;
   }
 
   const weeklyOverride = branding.appointmentWeeklyHoursOverrides?.find((entry) => entry.weekday === weekday);
   if (weeklyOverride) {
     const hours = weeklyOverride.locations.find((entry) => entry.locationId === locationId);
-    return hours ? { ...location, ...hours, workingDays: WEEKDAYS[weekday] } : null;
+    return hours ? { ...location, ...hours, dailyHours: undefined, workingDays: WEEKDAYS[weekday] } : null;
+  }
+
+  if (location.dailyHours) {
+    const hours = resolveApportionDailySchedule({ dailyHours: location.dailyHours })[weekday];
+    return hours.workingHours || hours.workingHoursSecondWindow
+      ? { ...location, ...hours, dailyHours: undefined, workingDays: WEEKDAYS[weekday] }
+      : null;
   }
 
   const isLegacyOpenedDate = branding.appointmentDateOverrides?.openedDateKeys.includes(serviceDateKey) ?? false;
@@ -99,6 +107,27 @@ function splitAcrossWeek(start: number, end: number): WeeklyInterval[] {
 }
 
 function buildIntervals(location: AppointmentLocation) {
+  if (location.dailyHours) {
+    if (location.dailyHours.length !== 7
+      || location.dailyHours.some((entry) => !entry || !Number.isInteger(entry.weekday) || entry.weekday < 0 || entry.weekday > 6
+        || typeof entry.workingHours !== "string" || typeof entry.workingHoursSecondWindow !== "string")
+      || new Set(location.dailyHours.map((entry) => entry.weekday)).size !== 7) {
+      throw new Error(`${location.name} needs valid daily working hours for all seven days.`);
+    }
+    const intervals = resolveApportionDailySchedule({ dailyHours: location.dailyHours }).flatMap((entry) => {
+      const ranges = [entry.workingHours, entry.workingHoursSecondWindow].filter((value) => value.trim()).map((value) => parseRange(value));
+      if (ranges.some((range) => !range)) throw new Error(`${location.name} has an invalid working-hours range.`);
+      return ranges.flatMap((range) => splitAcrossWeek(
+        entry.weekday * MINUTES_PER_DAY + range!.start,
+        entry.weekday * MINUTES_PER_DAY + range!.start + range!.duration,
+      ));
+    });
+    if (!intervals.length) throw new Error(`${location.name} needs at least one working hour.`);
+    if (intervals.some((first, firstIndex) => intervals.some((second, secondIndex) =>
+      firstIndex < secondIndex && first.start < second.end && second.start < first.end,
+    ))) throw new Error(`${location.name} working-hour windows cannot overlap.`);
+    return intervals;
+  }
   const days = selectedWeekdays(location.workingDays);
 
   if (!days.length) {
@@ -142,6 +171,24 @@ function createSlotIso(serviceDateKey: string, absoluteMinutes: number) {
     Math.floor((absoluteMinutes % MINUTES_PER_DAY) / 60),
     absoluteMinutes % 60,
   ) - (IST_OFFSET_MINUTES * 60 * 1000)).toISOString();
+}
+
+export function getApportionLifecycleBoundaries(input: {
+  location: AppointmentLocation | null;
+  serviceDateKey: string;
+  slotDurationMinutes: number;
+  startsAt: string;
+}) {
+  const slotEndsAt = new Date(new Date(input.startsAt).getTime() + input.slotDurationMinutes * 60_000).toISOString();
+  const windows = [input.location?.workingHours, input.location?.workingHoursSecondWindow]
+    .filter((value): value is string => Boolean(value))
+    .map(parseRange)
+    .filter((range): range is NonNullable<ReturnType<typeof parseRange>> => Boolean(range));
+  const windowEnds = windows.map((range) => new Date(createSlotIso(input.serviceDateKey, range.start + range.duration)!).getTime());
+  const serviceDayStart = new Date(`${input.serviceDateKey}T00:00:00+05:30`).getTime();
+  const end = Math.max(serviceDayStart, new Date(slotEndsAt).getTime(), ...windowEnds);
+  const nextMidnight = (Math.floor((end + IST_OFFSET_MINUTES * 60_000) / 86_400_000) + 1) * 86_400_000 - IST_OFFSET_MINUTES * 60_000;
+  return { slotEndsAt, queueExpiresAt: new Date(nextMidnight).toISOString() };
 }
 
 export function validateAppointmentLocationSlot(input: {
@@ -202,18 +249,7 @@ export function validateAppointmentLocations(locations: AppointmentLocation[] | 
     }
   });
 
-  if (locations.length < 2) {
-    buildIntervals(locations[0]);
-    return;
-  }
-
-  const firstIntervals = buildIntervals(locations[0]);
-  const secondIntervals = buildIntervals(locations[1]);
-  const overlaps = firstIntervals.some((first) => secondIntervals.some((second) => first.start < second.end && second.start < first.end));
-
-  if (overlaps) {
-    throw new Error(`${locations[0].name} and ${locations[1].name} working hours cannot overlap.`);
-  }
+  locations.forEach(buildIntervals);
 }
 
 export function validateAppointmentHoursOverrides(branding: WorkspaceBranding) {
@@ -256,13 +292,6 @@ export function validateAppointmentHoursOverrides(branding: WorkspaceBranding) {
       return intervals;
     });
 
-    if (locationIntervals.length > 1 && locationIntervals[0].some((first) =>
-      locationIntervals.slice(1).some((intervals) => intervals.some((second) =>
-        first.start < second.end && second.start < first.end,
-      )),
-    )) {
-      throw new Error("Business locations cannot have overlapping leave-day hours on the same day.");
-    }
   }
 }
 

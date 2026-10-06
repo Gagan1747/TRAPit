@@ -1,3 +1,99 @@
+.apportion-search-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 160;
+  background: rgba(20, 24, 28, 0.32);
+}
+
+.apportion-business-search-drawer {
+  position: absolute;
+  inset: 0 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  height: 100dvh;
+  background: var(--surface-strong);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.apportion-business-search-head {
+  position: relative;
+  flex: 0 0 auto;
+  padding: max(20px, env(safe-area-inset-top)) 64px 18px 24px;
+  border-bottom: 1px solid var(--line);
+}
+
+.apportion-business-search-head h2,
+.apportion-invitation-log h2 { margin: 0; font-size: 1.15rem; }
+.apportion-business-search-head .floating-window-close-button { top: 16px; right: 16px; }
+
+.apportion-business-search-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 24px 24px max(24px, env(safe-area-inset-bottom));
+}
+
+.apportion-business-search-input { display: flex; align-items: center; gap: 10px; }
+.apportion-business-search-input input { min-width: 0; width: 100%; }
+.apportion-business-search-results { list-style: none; margin: 20px 0 0; padding: 0; }
+.apportion-business-search-results li { border-bottom: 1px solid var(--line); }
+.apportion-business-search-results a { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 0; }
+.apportion-business-search-results a > span { display: grid; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.apportion-business-search-results a > svg { flex-shrink: 0; }
+.apportion-business-search-results a:hover strong { text-decoration: underline; }
+.apportion-business-search-results a:focus-visible { outline: 2px solid var(--accent-deep); outline-offset: 3px; }
+
+.apportion-target-lookup { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.apportion-target-lookup input { min-width: 0; width: 100%; }
+.apportion-target-lookup button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.apportion-booking-form > .inline-actions > button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.apportion-invitation-target { padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.apportion-recurrence-controls { min-width: 0; }
+.apportion-repeat-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+.apportion-repeat-days button { min-width: 0; min-height: 40px; padding: 6px 0; font-size: 0.8rem; border-radius: 4px; }
+.apportion-repeat-days button[aria-pressed="true"] { background: var(--accent-deep); color: #fff; border-color: var(--accent-deep); }
+.apportion-repeat-days button:disabled { opacity: 0.4; cursor: not-allowed; }
+.apportion-repeat-days.is-monthly button { min-height: 36px; }
+
+.apportion-appointment-log-section { min-width: 0; padding-top: 18px; border-top: 1px solid var(--line); }
+.apportion-invitation-log { min-width: 0; padding-top: 22px; border-top: 1px solid var(--line); }
+.apportion-invitation-list { margin-top: 18px; }
+.apportion-invitation-list-head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.apportion-invitation-list-head h3 { margin: 0; font-size: 1rem; }
+.apportion-invitation-table-wrap { max-width: 100%; overflow-x: auto; }
+.apportion-invitation-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.9rem; }
+.apportion-invitation-table th { text-align: left; color: var(--muted); font-weight: 600; }
+.apportion-invitation-table th,
+.apportion-invitation-table td { padding: 12px 10px; border-bottom: 1px solid var(--line); vertical-align: top; overflow-wrap: anywhere; }
+.apportion-invitation-table th:first-child { width: 30%; }
+.apportion-invitation-table th:last-child { width: 30%; }
+.apportion-invitation-table td > strong,
+.apportion-invitation-table td > span,
+.apportion-invitation-table td > time { display: block; margin-bottom: 6px; }
+.apportion-invitation-table details { margin-top: 8px; }
+.apportion-invitation-table summary { cursor: pointer; color: var(--accent-deep); }
+.apportion-invitation-table ul { margin: 8px 0; padding-left: 18px; }
+.apportion-invitation-table li { margin-bottom: 6px; }
+.apportion-invitation-actions { gap: 6px; margin-top: 10px; }
+.apportion-invitation-actions button { display: inline-flex; align-items: center; gap: 4px; border-radius: 4px; }
+.apportion-invitation-table tr:focus { outline: 2px solid var(--accent-deep); outline-offset: -2px; }
+
+@media (max-width: 640px) {
+  .apportion-business-search-head { padding-left: 16px; }
+  .apportion-business-search-body { padding-left: 16px; padding-right: 16px; }
+  .apportion-invitation-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .apportion-invitation-table tbody { display: block; }
+  .apportion-invitation-table tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .apportion-invitation-table td { display: block; min-width: 0; padding: 8px; border: 0; }
+  .apportion-invitation-table td:first-child,
+  .apportion-invitation-table td:last-child { grid-column: 1 / -1; }
+  .apportion-invitation-table td::before { display: block; content: attr(data-label); margin-bottom: 6px; color: var(--muted); font-size: 0.78rem; font-weight: 600; }
+  .apportion-invitation-log { padding-top: 18px; }
+}
+
 .answer-status-indicator {
   align-items: center;
   display: inline-flex;
@@ -650,7 +746,122 @@ main {
 }
 
 .business-details-form {
+  display: grid;
   gap: 14px;
+}
+
+.business-details-panel {
+  display: grid;
+  gap: 0;
+}
+
+.business-form-section {
+  display: grid;
+  gap: 12px;
+}
+
+.business-form-section > h3 {
+  margin: 8px 0 0;
+  color: #183b43;
+  font-size: 1rem;
+}
+
+.business-form-footer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  width: 100%;
+  margin-top: 0;
+  padding: 14px 22px 16px;
+  border-top: 1px solid var(--line);
+  background: rgba(248, 251, 250, 0.98);
+  box-shadow: 0 -8px 20px rgba(25, 49, 53, 0.08);
+}
+
+.business-form-footer > .muted-text {
+  flex: 1 1 100%;
+  margin: 0;
+}
+
+.business-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.business-choice-button {
+  min-width: 42px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid rgba(24, 59, 67, 0.2);
+  border-radius: 6px;
+  background: #fff;
+  color: #183b43;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.business-choice-button[aria-pressed="true"] {
+  border-color: #176b62;
+  background: #176b62;
+  color: #fff;
+}
+
+.business-duration-choices .business-choice-button {
+  flex: 1 1 62px;
+}
+
+.business-queue-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.business-queue-switch-row > span {
+  display: grid;
+  gap: 3px;
+}
+
+.business-queue-switch-row small {
+  color: var(--muted);
+}
+
+.business-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 46px;
+  height: 26px;
+  padding: 3px;
+  border: 1px solid #87989b;
+  border-radius: 999px;
+  background: #e1e8e7;
+  cursor: pointer;
+}
+
+.business-switch > span {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 150ms ease;
+}
+
+.business-switch[aria-checked="true"] {
+  border-color: #176b62;
+  background: #176b62;
+}
+
+.business-switch[aria-checked="true"] > span {
+  transform: translateX(20px);
 }
 
 .business-field-card {
@@ -996,7 +1207,50 @@ main {
   width: 104px;
   height: 104px;
   border-radius: 999px;
-  object-fit: cover;
+  object-fit: contain;
+}
+
+.apportion-service-choices,
+.apportion-location-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.apportion-service-choice,
+.apportion-location-card {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 76px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.apportion-service-choice span,
+.apportion-location-card span {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.apportion-service-choice.is-selected,
+.apportion-location-card.is-selected {
+  border-color: var(--accent-deep);
+  box-shadow: inset 0 0 0 1px var(--accent-deep);
+}
+
+.apportion-location-card .apportion-open-status {
+  color: inherit;
+  font-weight: 800;
 }
 
 .business-share-card {
@@ -1309,6 +1563,31 @@ main {
   font-weight: 800;
 }
 
+@media (max-width: 480px) {
+  .apportion-calendar {
+    gap: 3px;
+  }
+
+  .apportion-calendar-day {
+    padding: 8px 1px;
+    gap: 3px;
+  }
+
+  .apportion-calendar-day > * {
+    max-width: 100%;
+    font-size: 0.65rem;
+    letter-spacing: 0;
+  }
+
+  .apportion-calendar-day strong {
+    font-size: 1.05rem;
+  }
+
+  .apportion-calendar-day small {
+    font-size: 0.45rem;
+  }
+}
+
 .apportion-working-hours {
   margin: -2px 0 8px;
 }
@@ -1343,18 +1622,31 @@ main {
 }
 
 .apportion-slot-grid {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(48px, auto);
+  gap: 8px;
+}
+
+.apportion-slot-pager {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center;
+  justify-items: center;
   gap: 10px;
 }
 
 .apportion-slot-chip {
-  display: inline-grid;
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  align-content: center;
+  justify-items: center;
   gap: 2px;
-  min-height: 46px;
-  padding: 8px 14px;
+  padding: 8px;
   border: 1px solid rgba(81, 55, 133, 0.2);
-  border-radius: 999px;
+  border-radius: 6px;
   background: rgba(255, 255, 255, 0.72);
   color: var(--accent-deep);
   font: inherit;
@@ -1382,6 +1674,45 @@ main {
 .apportion-slot-chip span {
   font-size: 0.72rem;
   font-weight: 700;
+}
+
+:is(.apportion-service-choice, .apportion-location-card, .apportion-calendar-day, .apportion-slot-chip) {
+  --booking-selected-background: #183b43;
+  --booking-unselected-background: #eef2f1;
+  --booking-unselected-text: #687572;
+  border-color: #c9d4d2;
+  border-radius: 6px;
+  background: var(--booking-unselected-background);
+  color: var(--booking-unselected-text);
+  box-shadow: none;
+}
+
+:is(.apportion-service-choice, .apportion-location-card, .apportion-calendar-day, .apportion-slot-chip).is-selected {
+  border-color: var(--booking-selected-background);
+  background: var(--booking-selected-background);
+  color: #fff;
+  box-shadow: none;
+}
+
+:is(.apportion-service-choice, .apportion-location-card, .apportion-calendar-day, .apportion-slot-chip):not(.is-selected) {
+  background: var(--booking-unselected-background);
+  color: var(--booking-unselected-text);
+}
+
+:is(.apportion-service-choice, .apportion-location-card, .apportion-calendar-day, .apportion-slot-chip) :is(span, strong, small) {
+  color: inherit;
+}
+
+:is(.apportion-service-choice, .apportion-location-card, .apportion-calendar-day, .apportion-slot-chip):focus-visible {
+  outline: 2px solid #183b43;
+  outline-offset: 3px;
+}
+
+:is(.apportion-service-choice, .apportion-location-card, .apportion-calendar-day, .apportion-slot-chip):disabled {
+  background: #e4e9e7;
+  color: #7a8582;
+  opacity: 0.65;
+  cursor: not-allowed;
 }
 
 .apportion-appointment-summary {
@@ -1453,12 +1784,45 @@ main {
   box-sizing: border-box;
   overflow-y: auto;
   border: 1px solid rgba(81, 55, 133, 0.22);
-  border-radius: 30px;
+  border-radius: 10px;
   background:
     linear-gradient(180deg, rgba(255, 252, 244, 0.98), rgba(248, 241, 229, 0.98)),
     var(--surface-strong);
   box-shadow: -24px 0 70px rgba(35, 25, 66, 0.18);
   animation: businessDrawerIn 220ms ease-out;
+}
+
+.apportion-business-drawer {
+  animation: none;
+  height: calc(100dvh - 36px);
+  max-height: calc(100dvh - 36px);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: min(560px, calc(100vw - 28px));
+  padding: 0;
+  overflow: hidden;
+  background: #f8fbfa;
+}
+
+.apportion-drawer-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  flex: 0 0 auto;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--line);
+  background: #f8fbfa;
+}
+
+.apportion-business-drawer > .apportion-drawer-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px 22px;
 }
 
 .apportion-appointment-drawer {
@@ -1523,6 +1887,308 @@ main {
   color: var(--muted);
   font-size: 0.78rem;
   line-height: 1.35;
+}
+
+.apportion-appointment-log {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.apportion-log-section-head {
+  align-items: center;
+  margin: 10px 0 0;
+}
+
+.apportion-log-completed-head {
+  margin-top: 22px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.apportion-log-pagination {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.apportion-log-pagination .button-secondary {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
+.apportion-log-table-wrap {
+  max-width: 100%;
+  margin: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.apportion-log-table {
+  min-width: 760px;
+  table-layout: fixed;
+}
+
+.apportion-log-table th:first-child,
+.apportion-log-table td:first-child {
+  width: 64px;
+  min-width: 64px;
+  text-align: center;
+}
+
+.apportion-log-table th:nth-child(2),
+.apportion-log-table td:nth-child(2) {
+  width: 29%;
+}
+
+.apportion-log-table th:nth-child(3),
+.apportion-log-table td:nth-child(3) {
+  width: 23%;
+}
+
+.apportion-log-table th:nth-child(4),
+.apportion-log-table td:nth-child(4) {
+  width: 18%;
+}
+
+.apportion-log-table th:last-child,
+.apportion-log-table td:last-child {
+  width: 20%;
+}
+
+.apportion-log-table td {
+  overflow-wrap: anywhere;
+  vertical-align: middle;
+}
+
+.apportion-log-group-row th {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  background: #eef4f1;
+  color: var(--ink);
+  font-size: 0.82rem;
+  text-align: left;
+}
+
+.apportion-history-details {
+  position: relative;
+  display: inline-block;
+  margin-left: 7px;
+  vertical-align: middle;
+}
+
+.apportion-history-details > button {
+  display: grid;
+  place-items: center;
+  min-width: 30px;
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: var(--surface-strong);
+  list-style: none;
+}
+
+.apportion-history-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.apportion-history-details > button:focus-visible,
+.apportion-thread-trigger:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.apportion-history-popover {
+  position: fixed;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 125;
+  display: none;
+  width: min(340px, 72vw);
+  max-height: 320px;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-strong);
+  box-shadow: 0 12px 28px rgba(28, 34, 30, 0.16);
+  font-size: 0.82rem;
+  font-weight: 400;
+}
+
+.apportion-history-popover.is-visible {
+  display: block;
+}
+
+.apportion-history-popover ol {
+  display: grid;
+  gap: 9px;
+  margin: 10px 0 0;
+  padding-left: 20px;
+}
+
+.apportion-history-popover li > * {
+  display: block;
+  margin-top: 3px;
+}
+
+.apportion-history-popover time {
+  color: var(--muted);
+}
+
+@media (max-width: 760px) {
+  .apportion-history-popover {
+    position: fixed;
+    top: auto !important;
+    right: 16px;
+    bottom: 20px;
+    left: 16px !important;
+    z-index: 125;
+    width: auto;
+    max-height: min(320px, 60dvh);
+  }
+}
+
+.apportion-thread-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.apportion-thread-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(24, 33, 29, 0.42);
+}
+
+.apportion-thread-drawer {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100vw);
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--line);
+  background: var(--surface-strong);
+  box-shadow: -16px 0 42px rgba(21, 31, 27, 0.2);
+}
+
+.apportion-thread-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.apportion-thread-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.apportion-thread-header .eyebrow,
+.apportion-thread-header .muted-text {
+  margin: 0 0 6px;
+}
+
+.apportion-thread-close {
+  flex: 0 0 auto;
+}
+
+.apportion-thread-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  min-height: 0;
+  padding: 18px 20px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.apportion-thread-message {
+  width: min(88%, 420px);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #f3f6f4;
+}
+
+.apportion-thread-message.is-outgoing {
+  align-self: flex-end;
+  background: #e6f2ed;
+}
+
+.apportion-thread-message > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  font-size: 0.8rem;
+}
+
+.apportion-thread-message time {
+  color: var(--muted);
+}
+
+.apportion-thread-message p {
+  margin: 7px 0 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.apportion-thread-footer {
+  display: grid;
+  flex: 0 0 auto;
+  gap: 9px;
+  padding: 14px 20px max(16px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--surface-strong);
+}
+
+.apportion-thread-footer > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.apportion-thread-footer .muted-text,
+.apportion-thread-footer .form-error {
+  margin: 0;
+}
+
+.apportion-log-reschedule-editor {
+  display: grid;
+  gap: 10px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.apportion-log-reschedule-editor p {
+  margin: 0;
 }
 
 .apportion-actions-menu {
@@ -1863,6 +2529,42 @@ main {
     max-width: calc(100vw - 16px);
     padding: 18px;
     border-radius: 20px;
+  }
+
+  .apportion-business-drawer {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  .apportion-drawer-header {
+    padding: 14px 18px;
+  }
+
+  .apportion-business-drawer > .apportion-drawer-body {
+    padding: 14px 18px;
+  }
+
+  .business-form-footer {
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    padding: 14px 18px calc(14px + env(safe-area-inset-bottom));
+  }
+
+  .business-choice-row {
+    gap: 6px;
+  }
+
+  .business-duration-choices .business-choice-button {
+    flex-basis: 58px;
   }
 }
 
@@ -3614,6 +4316,7 @@ button:disabled {
 }
 
 .promotional-image-preview {
+  position: relative;
   display: grid;
   gap: 8px;
   min-width: 0;
@@ -3628,9 +4331,21 @@ button:disabled {
 }
 
 .promotional-image-actions {
+  position: absolute;
+  top: 7px;
+  right: 7px;
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.promotional-image-actions .icon-button {
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.94);
 }
 
 .business-time-selector {
@@ -3720,8 +4435,79 @@ button:disabled {
 .business-time-point:hover:not(:disabled),
 .business-time-point:focus-visible,
 .business-time-point.is-selected {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent-deep);
+  background: #183b43;
+  color: #fff;
+}
+
+.business-time-bar-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.business-time-format {
+  display: flex;
+  gap: 4px;
+}
+
+.business-time-format button {
+  min-height: 34px;
+  border: 1px solid #c9d4d2;
+  border-radius: 4px;
+  background: #eef2f1;
+  color: #596765;
+}
+
+.business-time-format button[aria-pressed="true"] {
+  background: #183b43;
+  color: #fff;
+}
+
+.apportion-business-drawer .business-day-toggle.is-active,
+.apportion-business-drawer .business-exception-date.is-active,
+.apportion-business-drawer .business-choice-button[aria-pressed="true"] {
+  border-color: #183b43;
+  background: #183b43;
+  color: #fff;
+}
+
+.apportion-business-drawer .business-choice-button:not([aria-pressed="true"]),
+.apportion-business-drawer .business-day-toggle:not(.is-active) {
+  background: #eef2f1;
+  color: #596765;
+}
+
+.apportion-service-location {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.apportion-business-drawer .business-details-panel,
+.apportion-business-drawer .business-details-form,
+.apportion-business-drawer .business-form-section,
+.apportion-business-drawer .business-field-card,
+.apportion-business-drawer fieldset {
+  min-width: 0;
+}
+
+.apportion-business-drawer .business-day-grid,
+.apportion-business-drawer .business-exception-grid {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.apportion-business-drawer .business-day-toggle {
+  width: min(42px, 100%);
+  min-width: 0;
+  padding: 0;
+  font-size: 0.75rem;
+}
+
+.apportion-business-drawer .business-exception-date {
+  padding: 8px 0;
 }
 
 .business-time-point.is-blocked {

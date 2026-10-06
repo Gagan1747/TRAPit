@@ -93,4 +93,29 @@ describe("normalizeWorkspaceBranding", () => {
       weekday: 0,
     }]);
   });
+
+  it("normalizes optional daily location hours without requiring them on legacy locations", () => {
+    const branding = normalizeWorkspaceBranding({
+      instituteName: "Example Business",
+      appointmentLocations: [{
+        address: "Primary address",
+        id: "location-1",
+        name: "Location 1",
+        workingDays: "Monday",
+        workingHours: "9:00 AM - 5:00 PM",
+        workingHoursSecondWindow: "",
+        dailyHours: [
+          { weekday: 1, workingHours: " 9:00 AM - 1:00 PM ", workingHoursSecondWindow: "" },
+          { weekday: 8, workingHours: "invalid weekday", workingHoursSecondWindow: "" },
+          { weekday: 1, workingHours: "duplicate", workingHoursSecondWindow: "" },
+        ],
+      }],
+    } as WorkspaceBranding)!;
+    const legacyBranding = normalizeWorkspaceBranding({ instituteName: "Legacy", workingDays: "Monday" } as WorkspaceBranding)!;
+
+    expect(branding.appointmentLocations?.[0].dailyHours).toEqual([
+      { weekday: 1, workingHours: "9:00 AM - 1:00 PM", workingHoursSecondWindow: "" },
+    ]);
+    expect(legacyBranding.appointmentLocations?.[0].dailyHours).toBeUndefined();
+  });
 });

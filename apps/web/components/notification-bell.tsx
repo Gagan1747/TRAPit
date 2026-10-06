@@ -53,11 +53,28 @@ function isBrowserPushSupported() {
 
 export function NotificationBell({ browserPushPublicKey, enableBrowserPush = false, items, subtitle, title }: NotificationBellProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [apportionItems, setApportionItems] = useState<NotificationBellItem[]>([]);
   const [browserPushStatus, setBrowserPushStatus] = useState<"idle" | "registered" | "registering" | "unavailable">("idle");
   const [browserPushFeedback, setBrowserPushFeedback] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const totalCount = items.reduce((sum, item) => sum + item.count, 0);
+  const allItems = [...apportionItems, ...items];
+  const totalCount = allItems.reduce((sum, item) => sum + item.count, 0);
   const canRegisterBrowserPush = enableBrowserPush && Boolean(browserPushPublicKey);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function loadApportionNotifications() {
+      try {
+        const response = await fetch("/api/user/apportion?notifications=1", { signal: controller.signal });
+        if (!response.ok) return;
+        const payload = await response.json() as { notifications: Array<{ id: string; title: string; body: string; url: string }> };
+        if (!controller.signal.aborted) setApportionItems(payload.notifications.map((entry) => ({ label: entry.title, detail: entry.body, count: 1, actionHref: entry.url, actionLabel: "Open" })));
+      } catch { }
+    }
+    void loadApportionNotifications();
+    const interval = window.setInterval(() => void loadApportionNotifications(), 60_000);
+    return () => { controller.abort(); window.clearInterval(interval); };
+  }, [isOpen]);
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -168,7 +185,7 @@ export function NotificationBell({ browserPushPublicKey, enableBrowserPush = fal
             </div>
           ) : null}
           <div className="notification-panel-list">
-            {items.map((item) => (
+            {allItems.map((item) => (
               <div className={`notification-panel-item${item.tone ? ` is-${item.tone}` : ""}`} key={`${item.label}-${item.detail ?? item.count}`}>
                 <div className="notification-panel-item-copy">
                   <span>{item.label}</span>

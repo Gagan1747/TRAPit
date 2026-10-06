@@ -1,9 +1,12 @@
 import { AuthShell } from "../components/auth-shell";
 import { HeroFeatureAssets } from "../components/hero-feature-assets";
 import { isWebAuthConfigured } from "../lib/auth-config";
+import { getSafeAuthReturnPath } from "../lib/auth-return-path";
 
-export default function HomePage() {
+export default function HomePage({ searchParams }: { searchParams?: Record<string, string | string[] | undefined> }) {
   const authConfigured = isWebAuthConfigured();
+  const redirectPath = typeof searchParams?.redirect === "string" ? getSafeAuthReturnPath(searchParams.redirect) : "";
+  const redirectQuery = redirectPath ? `?redirect=${encodeURIComponent(redirectPath)}` : "";
 
   return (
     <AuthShell
@@ -26,10 +29,10 @@ export default function HomePage() {
         </div>
         {authConfigured ? (
           <>
-            <a className="button" href="/sign-in">
+            <a className="button" href={`/sign-in${redirectQuery}`}>
               Sign in
             </a>
-            <a className="button-secondary" href="/sign-up">
+            <a className="button-secondary" href={`/sign-up${redirectQuery}`}>
               Sign up
             </a>
           </>
