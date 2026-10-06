@@ -42,8 +42,12 @@ async function buildApportionDashboardPayload(actor: WorkspaceActor & { identifi
   const uniqueOwnerIdentifiers = Array.from(
     new Set(appointments.map((appointment) => appointment.ownerIdentifier.trim()).filter(Boolean)),
   );
+  const ownerContexts = new Map<string, Awaited<ReturnType<typeof getApportionBusinessContext>>>();
+  for (const ownerIdentifier of uniqueOwnerIdentifiers) {
+    ownerContexts.set(ownerIdentifier, await getApportionBusinessContext(ownerIdentifier));
+  }
   const ownerOperatingHoursEntries = await Promise.all(uniqueOwnerIdentifiers.map(async (ownerIdentifier) => {
-    const ownerContext = await getApportionBusinessContext(ownerIdentifier);
+    const ownerContext = ownerContexts.get(ownerIdentifier);
     const ownerBranding = ownerContext?.branding ?? await getWorkspaceBranding(ownerIdentifier);
     const ownerClosedDates = Object.entries(ownerContext?.providerClosedDateKeys ?? {})
       .find(([identifier]) => participantIdentifiersMatch(identifier, ownerIdentifier))?.[1] ?? [];
@@ -69,8 +73,8 @@ async function buildApportionDashboardPayload(actor: WorkspaceActor & { identifi
     ] as const;
   }));
   const ownerOperatingHoursByIdentifier = Object.fromEntries(ownerOperatingHoursEntries);
-  const appointmentOperatingHoursById = Object.fromEntries(await Promise.all(appointments.map(async (appointment) => {
-    const context = await getApportionBusinessContext(appointment.ownerIdentifier);
+  const appointmentOperatingHoursById = Object.fromEntries(appointments.map((appointment) => {
+    const context = ownerContexts.get(appointment.ownerIdentifier.trim());
     const service = context?.business.services.find((entry) => entry.id === (appointment.serviceId || "consultation"));
     const provider = service?.assignedIdentifier || (service?.id === "consultation" ? context?.business.ownerIdentifier : null);
     const membership = provider ? context?.memberships.find((entry) => entry.locationId === appointment.locationId && participantIdentifiersMatch(entry.providerIdentifier, provider)) : undefined;
@@ -91,7 +95,7 @@ async function buildApportionDashboardPayload(actor: WorkspaceActor & { identifi
         workingHoursSecondWindow: membership?.workingHoursSecondWindow ?? location.workingHoursSecondWindow,
       } } : {},
     } satisfies OwnerOperatingHours] as const;
-  })));
+  }));
 
   return {
     appointmentOperatingHoursById,

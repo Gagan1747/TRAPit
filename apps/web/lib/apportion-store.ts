@@ -255,6 +255,10 @@ function providerIsLinked(context: ApportionBusinessContext, provider: string, l
 
 export async function resolveApportionAppointmentAccess(appointment: ApportionAppointment, actorIdentifier: string) {
   const context = await getApportionBusinessContext(appointment.ownerIdentifier);
+  return appointmentAccessFromContext(appointment, actorIdentifier, context);
+}
+
+function appointmentAccessFromContext(appointment: ApportionAppointment, actorIdentifier: string, context: ApportionBusinessContext | null) {
   const serviceId = appointment.serviceId || "consultation";
   const service = context?.business.services.find((entry) => entry.id === serviceId);
   let controllerIdentifier: string | null = null;
@@ -679,10 +683,16 @@ export async function listApportionAppointmentsForRequester(requesterIdentifier:
 export async function listApportionAppointmentsForActor(identifier: string) {
   return withAppointmentLock(async () => {
     const state = await readState();
-    const projections = await Promise.all(state.appointments.map(async (appointment) => {
-      const access = await resolveApportionAppointmentAccess(appointment, identifier);
+    const contexts = new Map<string, ApportionBusinessContext | null>();
+    for (const appointment of state.appointments) {
+      if (!contexts.has(appointment.ownerIdentifier)) {
+        contexts.set(appointment.ownerIdentifier, await getApportionBusinessContext(appointment.ownerIdentifier));
+      }
+    }
+    const projections = state.appointments.map((appointment) => {
+      const access = appointmentAccessFromContext(appointment, identifier, contexts.get(appointment.ownerIdentifier) ?? null);
       return access.canView ? { ...appointment, notifications: appointment.notifications?.filter((notification) => participantIdentifiersMatch(notification.recipientIdentifier, identifier)), canManage: access.canManage, canMessage: isActiveStatus(appointment.currentStatus) && (access.isRequester || access.canManage) } : null;
-    }));
+    });
     return projections.filter((entry): entry is NonNullable<typeof entry> => entry !== null).sort(compareAppointments);
   });
 }

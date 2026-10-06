@@ -24,7 +24,7 @@ vi.mock("next/server", () => ({ NextResponse: { json: (body: unknown, init?: Res
 vi.mock("../../../apps/web/lib/workspace-actor", () => ({ getWorkspaceActor: async () => fixtures.actor }));
 vi.mock("../../../apps/web/lib/auth-config", () => ({ isWebAuthConfigured: () => fixtures.authConfigured }));
 vi.mock("../../../apps/web/lib/cognito", () => ({ listRegisteredDirectoryUsers: async () => fixtures.registeredUsers }));
-vi.mock("../../../apps/web/lib/apportion-directory", () => ({ getApportionPanel: async () => fixtures.panel, getApportionBusinessContext: async (ownerIdentifier: string) => ownerIdentifier === OWNER ? fixtures.context : ownerIdentifier === STAFF ? fixtures.personalContext : null, listApportionDirectLinkServices: async () => fixtures.directServices, assertApportionHoursWithinMaster: vi.fn(), listApportionScheduleNotificationsForActor: async () => fixtures.scheduleNotifications }));
+vi.mock("../../../apps/web/lib/apportion-directory", () => ({ getApportionPanel: async () => fixtures.panel, getApportionBusinessContext: vi.fn(async (ownerIdentifier: string) => ownerIdentifier === OWNER ? fixtures.context : ownerIdentifier === STAFF ? fixtures.personalContext : null), listApportionDirectLinkServices: async () => fixtures.directServices, assertApportionHoursWithinMaster: vi.fn(), listApportionScheduleNotificationsForActor: async () => fixtures.scheduleNotifications }));
 vi.mock("../../../apps/web/lib/realtime-events", () => ({ publishWorkspaceEvent: vi.fn() }));
 vi.mock("../../../apps/web/lib/session", () => ({ getWebSession: async () => ({ phoneNumber: fixtures.actor.identifier, displayName: "Requester" }) }));
 vi.mock("../../../apps/web/lib/testing-store", () => ({ getOrCreateWorkspaceAppointmentShareCode: fixtures.share, listWorkspaceAppointmentBusinesses: async () => [], listParticipants: async () => fixtures.registeredUsers, getWorkspaceBranding: async () => fixtures.context?.branding, getWorkspaceBrandingByAppointmentShareCode: async () => ({ ownerIdentifier: fixtures.linkedBusinessOwnerIdentifier, branding: fixtures.linkedBusinessBranding ?? fixtures.context?.branding }) }));
@@ -41,6 +41,7 @@ vi.mock("../../../apps/web/lib/apportion-store", () => ({
 }));
 
 const dashboard = await import("../../../apps/web/app/api/user/apportion/route");
+const directoryApi = await import("../../../apps/web/lib/apportion-directory");
 const publicApi = await import("../../../apps/web/app/api/apportion/[shareCode]/route");
 const OWNER = "+919111111111";
 const STAFF = "+919222222222";
@@ -72,6 +73,21 @@ beforeEach(() => {
 });
 
 describe("Apportion API role and service contracts", () => {
+  it("loads each owner's context once for a large dashboard including missing contexts", async () => {
+    fixtures.appointments = Array.from({ length: 297 }, (_, index) => ({
+      id: `appointment-${index}`,
+      ownerIdentifier: index < 200 ? OWNER : STAFF,
+      requesterIdentifier: STAFF,
+      locationId: "location-1",
+      serviceId: "therapy",
+      justAddToList: false,
+    }));
+    const payload = await (await dashboard.GET(new Request("https://trapit.in/api/user/apportion"))).json();
+    expect(directoryApi.getApportionBusinessContext).toHaveBeenCalledTimes(2);
+    expect(Object.keys(payload.appointmentOperatingHoursById)).toHaveLength(297);
+    expect(payload.appointmentOperatingHoursById["appointment-0"].workingHours).toBe("10:00 AM - 12:00 PM");
+    expect(payload.appointmentOperatingHoursById["appointment-296"].workingHours).toBe("");
+  });
   it.each([OWNER, STAFF, "+919444444444"])("projects invitation capability only for the canonical owner %s", async (identifier) => {
     fixtures.actor.identifier = identifier;
     fixtures.context!.business.adminDelegateIdentifier = "+919444444444";

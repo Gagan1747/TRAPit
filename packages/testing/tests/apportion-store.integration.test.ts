@@ -6,7 +6,8 @@ import { normalizeWorkspaceBranding } from "../src/quiz";
 import type { ApportionBusinessContext } from "../../../apps/web/lib/apportion-directory";
 
 vi.mock("server-only", () => ({}));
-vi.mock("../../../apps/web/lib/apportion-directory", () => ({ getApportionBusinessContext: async () => fixtures.context }));
+vi.mock("../../../apps/web/lib/apportion-directory", () => ({ getApportionBusinessContext: vi.fn(async () => fixtures.context) }));
+const directoryApi = await import("../../../apps/web/lib/apportion-directory");
 const fixtures = vi.hoisted(() => ({ context: null as import("../../../apps/web/lib/apportion-directory").ApportionBusinessContext | null }));
 const OWNER = "+919111111111";
 const STAFF = "+919222222222";
@@ -56,11 +57,26 @@ afterAll(async () => {
   await rm(temporaryDirectory, { recursive: true, force: true });
 });
 beforeEach(async () => {
+  vi.clearAllMocks();
   fixtures.context = context();
   await writeFile(storePath, JSON.stringify({ appointments: [legacy()] }));
 });
 
 describe("canonical appointment store", () => {
+  it("reuses owner contexts when projecting hundreds of historical appointments", async () => {
+    const appointments = Array.from({ length: 297 }, (_, index) => ({
+      ...legacy(), id: `historical-${index}`, currentStatus: "done", serviceId: "therapy", assignedStaffIdentifier: STAFF,
+    }));
+    await writeFile(storePath, JSON.stringify({ appointments }));
+    const projected = await store.listApportionAppointmentsForActor(STAFF);
+    expect(projected).toHaveLength(297);
+    expect(projected.every((entry) => entry.canManage && !entry.canMessage)).toBe(true);
+    expect(directoryApi.getApportionBusinessContext).toHaveBeenCalledTimes(1);
+    vi.clearAllMocks();
+    fixtures.context = null;
+    expect(await store.listApportionAppointmentsForActor(ADMIN)).toEqual([]);
+    expect(directoryApi.getApportionBusinessContext).toHaveBeenCalledTimes(1);
+  });
   it("notifies the Admin fallback controller when an unassigned slot converts or expires", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
