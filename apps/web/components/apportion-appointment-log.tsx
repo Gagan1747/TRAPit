@@ -1,9 +1,13 @@
 "use client";
 
-import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
-import { participantIdentifiersMatch } from "@trapit/testing";
+import { useEffect, useRef, useState } from "react";
+import { matchApportionIdentity, participantIdentifiersMatch, type ApportionRecurrence } from "@trapit/testing";
 import { createPortal } from "react-dom";
-import { ArrowLeft, ArrowRight, MessageSquare, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, LoaderCircle, MessageSquare, X } from "lucide-react";
+import type { ApportionInvitation as StoredInvitation } from "../lib/apportion-store";
+
+export type ApportionInvitation = Omit<StoredInvitation, "notifications" | "bookedSettings">;
+type LogRow = { kind: "appointment"; entry: ApportionLogAppointment } | { kind: "invitation"; entry: ApportionInvitation };
 
 type AppointmentStatus = "cancelled" | "done" | "missed" | "pending" | "present-in-person" | "pushed-back" | "rejected";
 type HistoryEntry = {
@@ -17,6 +21,8 @@ type HistoryEntry = {
 type AppointmentMessage = { id: string; authorIdentifier: string; createdAt: string; body: string };
 
 export type ApportionLogAppointment = {
+  sourceInvitationId?: string;
+  hasUnreadMessages?: boolean;
   canManage?: boolean;
   canMessage?: boolean;
   currentStatus: AppointmentStatus;
@@ -57,6 +63,7 @@ type DashboardUpdate = { ownerAppointments?: ApportionLogAppointment[]; requeste
 
 type ApportionAppointmentLogProps = {
   appointments: ApportionLogAppointment[];
+  invitations?: ApportionInvitation[];
   currentIdentifier: string | null;
   initialAppointmentId?: string;
   isActive: (status: AppointmentStatus) => boolean;
@@ -64,12 +71,10 @@ type ApportionAppointmentLogProps = {
   formatDateTime: (value: string) => string;
   getStatusLabel: (appointment: ApportionLogAppointment) => string;
   getStatusHelper?: (appointment: ApportionLogAppointment) => string | null;
-  onAction: (action: AppointmentUpdate) => void;
-  onCancel: (appointmentId: string) => void;
+  onAction: (action: AppointmentUpdate) => Promise<void | string>;
+  onCancel: (appointmentId: string) => Promise<void | string>;
   onRefresh: () => void | Promise<void>;
-  onReschedule: (appointment: ApportionLogAppointment) => void;
   isUpdating: boolean;
-  rescheduleEditor?: ReactNode;
 };
 
 const PAGE_SIZE = 6;
@@ -144,16 +149,49 @@ function historyActionLabel(action: HistoryEntry["action"]) {
   }
 }
 
-function groupKey(appointment: ApportionLogAppointment) {
-  return `${appointment.ownerIdentifier}\u0000${appointment.locationId ?? ""}\u0000${appointment.serviceId || "consultation"}`;
+function rowTime(row: LogRow) {
+  return row.kind === "appointment" ? row.entry.startsAt : row.entry.occurrences[0]?.startsAt ?? row.entry.createdAt;
 }
 
-function groupSortKey(appointment: ApportionLogAppointment) {
-  return `${appointment.locationName}\u0000${appointment.serviceName || "Consultation"}\u0000${groupKey(appointment)}`;
+function mergeActiveRows(rows: LogRow[]) {
+  const owners: string[] = [];
+  const streams = new Map<string, LogRow[]>();
+  for (const row of rows) {
+    const entry = row.entry;
+    let owner = owners.find((identifier) => matchApportionIdentity(identifier, entry.ownerIdentifier));
+    if (!owner) { owner = entry.ownerIdentifier; owners.push(owner); }
+    const key = row.kind === "appointment" && row.entry.justAddToList
+      ? `${owner}::${entry.locationId}::${entry.serviceId || "consultation"}::${row.entry.serviceDateKey}` : `${row.kind}::${entry.id}`;
+    const stream = streams.get(key) ?? [];
+    stream.push(row);
+    streams.set(key, stream);
+  }
+  for (const stream of streams.values()) stream.sort((left, right) => left.kind === "appointment" && right.kind === "appointment"
+    ? (left.entry.queueOrder ?? left.entry.queuePosition ?? 0) - (right.entry.queueOrder ?? right.entry.queuePosition ?? 0) || left.entry.id.localeCompare(right.entry.id) : left.entry.id.localeCompare(right.entry.id));
+  const result: LogRow[] = [];
+  const positions = Array.from(streams.values()).map((stream) => ({ stream, index: 0 }));
+  while (positions.some((position) => position.index < position.stream.length)) {
+    const next = positions.filter((position) => position.index < position.stream.length).sort((left, right) => rowTime(left.stream[left.index]).localeCompare(rowTime(right.stream[right.index])) || left.stream[left.index].entry.id.localeCompare(right.stream[right.index].entry.id))[0];
+    result.push(next.stream[next.index++]);
+  }
+  return result;
+}
+
+function recurrenceLabel(recurrence: ApportionRecurrence | null | undefined) {
+  if (!recurrence) return "";
+  const frequency = recurrence.mode === "weekly" ? "Weekly" : "Monthly";
+  return recurrence.durationCount ? `${frequency} · ${recurrence.durationCount} ${recurrence.mode === "weekly" ? "weeks" : "months"}` : `${frequency} · through ${recurrence.endDateKey}`;
+}
+
+function tableDateTime(value: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  return `${date.toLocaleDateString("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric" })}, ${date.toLocaleTimeString("en-US", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true })}`;
 }
 
 export function ApportionAppointmentLog({
   appointments,
+  invitations = [],
   currentIdentifier,
   initialAppointmentId,
   isActive,
@@ -164,10 +202,25 @@ export function ApportionAppointmentLog({
   onAction,
   onCancel,
   onRefresh,
-  onReschedule,
   isUpdating,
-  rescheduleEditor,
 }: ApportionAppointmentLogProps) {
+  const [now, setNow] = useState(() => Date.now());
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [invitationAction, setInvitationAction] = useState<"accept" | "decline" | "cancel" | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [noteInvitationId, setNoteInvitationId] = useState<string | null>(null);
+  const actionPendingRef = useRef(false);
+  const acknowledgedRef = useRef(new Set<string>());
+  const refreshRef = useRef(onRefresh);
+  refreshRef.current = onRefresh;
+  const threadRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const refresh = () => { setNow(Date.now()); void refreshRef.current(); };
+    const timer = window.setInterval(refresh, 30_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, []);
   const [activePage, setActivePage] = useState(0);
   const [completedPage, setCompletedPage] = useState(0);
   const [threadAppointmentId, setThreadAppointmentId] = useState<string | null>(null);
@@ -181,15 +234,12 @@ export function ApportionAppointmentLog({
     ? appointments.find((appointment) => appointment.id === threadAppointmentId) ?? null
     : null;
 
-  const activeAppointments = appointments
-    .filter((appointment) => isActive(appointment.currentStatus))
-    .sort((left, right) => groupSortKey(left).localeCompare(groupSortKey(right))
-      || left.serviceDateKey.localeCompare(right.serviceDateKey)
-      || Number(left.justAddToList) - Number(right.justAddToList)
-      || (left.justAddToList && right.justAddToList ? (left.queueOrder ?? left.queuePosition ?? 0) - (right.queueOrder ?? right.queuePosition ?? 0) : new Date(left.startsAt).getTime() - new Date(right.startsAt).getTime()));
-  const completedAppointments = appointments
-    .filter((appointment) => !isActive(appointment.currentStatus))
-    .sort((left, right) => groupSortKey(left).localeCompare(groupSortKey(right)) || completionTime(right) - completionTime(left));
+  const rows: LogRow[] = [
+    ...appointments.map((entry): LogRow => ({ kind: "appointment", entry })),
+    ...invitations.filter((entry) => entry.status !== "accepted" && currentIdentifier && (matchApportionIdentity(entry.ownerIdentifier, currentIdentifier) || matchApportionIdentity(entry.requesterIdentifier, currentIdentifier))).map((entry): LogRow => ({ kind: "invitation", entry: entry.status === "pending" && new Date(entry.expiresAt).getTime() <= now ? { ...entry, status: "expired", statusUpdatedAt: entry.expiresAt } : entry })),
+  ];
+  const activeAppointments = mergeActiveRows(rows.filter((row) => row.kind === "appointment" ? isActive(row.entry.currentStatus) : row.entry.status === "pending"));
+  const completedAppointments = rows.filter((row) => row.kind === "appointment" ? !isActive(row.entry.currentStatus) : row.entry.status !== "pending").sort((left, right) => (right.kind === "appointment" ? completionTime(right.entry) : new Date(right.entry.statusUpdatedAt).getTime()) - (left.kind === "appointment" ? completionTime(left.entry) : new Date(left.entry.statusUpdatedAt).getTime()) || left.entry.id.localeCompare(right.entry.id));
   const activePageCount = Math.max(1, Math.ceil(activeAppointments.length / PAGE_SIZE));
   const completedPageCount = Math.max(1, Math.ceil(completedAppointments.length / PAGE_SIZE));
   const visibleActive = activeAppointments.slice(activePage * PAGE_SIZE, (activePage + 1) * PAGE_SIZE);
@@ -199,38 +249,91 @@ export function ApportionAppointmentLog({
   useEffect(() => setCompletedPage((page) => Math.min(page, completedPageCount - 1)), [completedPageCount]);
 
   useEffect(() => {
-    if (!initialAppointmentId || focusedTicketRef.current === initialAppointmentId) return;
-    const activeIndex = activeAppointments.findIndex((appointment) => appointment.id === initialAppointmentId);
+    const targetId = initialAppointmentId || new URLSearchParams(window.location.search).get("invitationId");
+    if (!targetId || focusedTicketRef.current === targetId) return;
+    const activeIndex = activeAppointments.findIndex((row) => row.entry.id === targetId);
     if (activeIndex >= 0) {
       setActivePage(Math.floor(activeIndex / PAGE_SIZE));
       return;
     }
-    const completedIndex = completedAppointments.findIndex((appointment) => appointment.id === initialAppointmentId);
+    const completedIndex = completedAppointments.findIndex((row) => row.entry.id === targetId);
     if (completedIndex >= 0) setCompletedPage(Math.floor(completedIndex / PAGE_SIZE));
   }, [activeAppointments, completedAppointments, initialAppointmentId]);
 
   useEffect(() => {
-    if (!initialAppointmentId || focusedTicketRef.current === initialAppointmentId) return;
-    const ticket = document.getElementById(`apportion-appointment-${initialAppointmentId}`);
+    const targetId = initialAppointmentId || new URLSearchParams(window.location.search).get("invitationId");
+    if (!targetId || focusedTicketRef.current === targetId) return;
+    const ticket = document.getElementById(`apportion-appointment-${targetId}`) || document.getElementById(`apportion-invitation-${targetId}`);
     if (!ticket) return;
-    focusedTicketRef.current = initialAppointmentId;
+    focusedTicketRef.current = targetId;
     ticket.scrollIntoView({ behavior: "smooth", block: "center" });
     ticket.focus({ preventScroll: true });
-  }, [activePage, appointments, completedPage, initialAppointmentId]);
+  }, [activePage, appointments, invitations, completedPage, initialAppointmentId]);
 
   useEffect(() => {
-    if (!threadAppointmentId) return;
+    if (!threadAppointmentId && !noteInvitationId) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const previousOverflow = document.body.style.overflow;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setThreadAppointmentId(null);
+      if (event.key === "Escape") { setThreadAppointmentId(null); setNoteInvitationId(null); }
+      if (event.key === "Tab") {
+        const controls = Array.from(threadRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), textarea:not(:disabled), a[href]") ?? []);
+        const first = controls[0];
+        const last = controls.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
     };
     document.body.style.overflow = "hidden";
     document.addEventListener("keydown", handleKeyDown);
+    threadRef.current?.querySelector<HTMLElement>("button")?.focus();
     return () => {
       document.body.style.overflow = previousOverflow;
       document.removeEventListener("keydown", handleKeyDown);
+      previousFocus?.focus();
     };
-  }, [threadAppointmentId]);
+  }, [threadAppointmentId, noteInvitationId]);
+
+  const displayedLastMessageId = (threadMessages ?? threadAppointment?.messages)?.at(-1)?.id;
+  useEffect(() => {
+    if (!threadAppointmentId || !displayedLastMessageId) return;
+    const key = `${threadAppointmentId}::${displayedLastMessageId}`;
+    if (acknowledgedRef.current.has(key)) return;
+    acknowledgedRef.current.add(key);
+    void fetch("/api/user/apportion", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "mark-read", appointmentId: threadAppointmentId, lastMessageId: displayedLastMessageId }) }).then(async (response) => {
+      if (!response.ok) throw new Error("Unable to mark messages read.");
+      await refreshRef.current();
+    }).catch(() => acknowledgedRef.current.delete(key));
+  }, [threadAppointmentId, displayedLastMessageId]);
+
+  async function actOnInvitation(entry: ApportionInvitation, action: "accept" | "decline" | "cancel") {
+    if (actionPendingRef.current || isUpdating || !currentIdentifier || entry.status !== "pending" || new Date(entry.expiresAt).getTime() <= Date.now()) return;
+    if (!matchApportionIdentity(action === "cancel" ? entry.ownerIdentifier : entry.requesterIdentifier, currentIdentifier)) return;
+    actionPendingRef.current = true;
+    setUpdatingId(entry.id);
+    setInvitationAction(action);
+    setActionError(null);
+    try {
+      const response = await fetch("/api/user/apportion/invitations", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ invitationId: entry.id, action }) });
+      const payload = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "Unable to update invitation.");
+      await onRefresh();
+    } catch (error) { setActionError(error instanceof Error ? error.message : "Unable to update invitation."); }
+    finally { actionPendingRef.current = false; setUpdatingId(null); setInvitationAction(null); }
+  }
+
+  async function actOnAppointment(entry: ApportionLogAppointment, action: "done" | "reject" | "cancel") {
+    if (actionPendingRef.current || isUpdating) return;
+    document.getElementById(`apportion-actions-${entry.id}`)?.removeAttribute("open");
+    actionPendingRef.current = true;
+    setUpdatingId(entry.id);
+    setActionError(null);
+    try {
+      const result = await (action === "cancel" ? onCancel(entry.id) : onAction({ appointmentId: entry.id, action }));
+      if (typeof result === "string") throw new Error(result);
+    } catch (error) { setActionError(error instanceof Error ? error.message : "Unable to update appointment."); }
+    finally { actionPendingRef.current = false; setUpdatingId(null); }
+  }
 
   async function sendMessage() {
     const message = messageDraft.trim();
@@ -262,12 +365,25 @@ export function ApportionAppointmentLog({
     }
   }
 
-  function renderRows(rows: ApportionLogAppointment[], completed: boolean) {
-    let previousGroup = "";
-    return rows.map((appointment, index) => {
-      const key = groupKey(appointment);
-      const groupHeading = key !== previousGroup;
-      previousGroup = key;
+  function renderRows(visibleRows: LogRow[], completed: boolean) {
+    return visibleRows.map((row, index) => {
+      const serial = (completed ? completedPage : activePage) * PAGE_SIZE + index + 1;
+      if (row.kind === "invitation") {
+        const invitation = row.entry;
+        const incoming = Boolean(currentIdentifier && matchApportionIdentity(invitation.requesterIdentifier, currentIdentifier));
+        const contactName = incoming ? invitation.ownerName || "Business" : invitation.requesterName;
+        return <tr className="apportion-log-row" id={`apportion-invitation-${invitation.id}`} key={invitation.id} tabIndex={-1}>
+          <td><span className={`apportion-origin ${incoming ? "is-invite-incoming" : "is-invite-outgoing"}`} title={incoming ? "Incoming invitation" : "Outgoing invitation"}>{serial}</span></td>
+          <td><strong>{tableDateTime(invitation.occurrences[0]?.startsAt ?? invitation.createdAt)}</strong><span className="apportion-status-helper">{invitation.serviceName} · {invitation.locationAddress}</span><details className="apportion-series-summary"><summary>{recurrenceLabel(invitation.recurrence) || "Once"} · {invitation.occurrences.length} appointment{invitation.occurrences.length === 1 ? "" : "s"}</summary><ul>{invitation.occurrences.map((occurrence) => <li key={occurrence.serviceDateKey}>{tableDateTime(occurrence.startsAt)}</li>)}</ul></details></td>
+          <td><strong>{contactName}</strong><span className="apportion-status-helper">{incoming ? invitation.ownerIdentifier : invitation.requesterPhone || invitation.requesterIdentifier}</span></td>
+          <td><button className="apportion-thread-trigger" type="button" aria-label={`View invitation note for ${contactName}`} onClick={() => setNoteInvitationId(invitation.id)}><MessageSquare aria-hidden="true" size={15} /><span>{invitation.notes || "Open notes"}</span></button></td>
+          <td><span className={`status-chip apportion-status-chip is-${invitation.status}`}>{invitation.status === "pending" ? incoming ? "Pending invitation" : "Pending Acceptance" : invitation.status.charAt(0).toUpperCase() + invitation.status.slice(1)}</span>
+            {invitation.status === "pending" ? <div className="inline-actions apportion-invitation-actions">
+              {incoming ? <><button className="button small-button" disabled={!!updatingId || isUpdating} type="button" onClick={() => void actOnInvitation(invitation, "accept")}>{updatingId === invitation.id && invitationAction === "accept" ? <LoaderCircle className="apportion-spinner" size={16} /> : <Check size={16} />}Accept</button><button className="button-secondary small-button" disabled={!!updatingId || isUpdating} type="button" onClick={() => void actOnInvitation(invitation, "decline")}>{updatingId === invitation.id && invitationAction === "decline" ? <LoaderCircle className="apportion-spinner" size={16} /> : <X size={16} />}Decline</button></> : <button className="button-secondary small-button" disabled={!!updatingId || isUpdating} type="button" onClick={() => void actOnInvitation(invitation, "cancel")}>{updatingId === invitation.id ? <LoaderCircle className="apportion-spinner" size={16} /> : <X size={16} />}Cancel</button>}
+            </div> : null}</td>
+        </tr>;
+      }
+      const appointment = row.entry;
       const requesterContext = isRequester(appointment);
       const canManage = appointment.canManage === true;
       const active = isActive(appointment.currentStatus);
@@ -290,17 +406,14 @@ export function ApportionAppointmentLog({
         <details className="apportion-actions-menu" id={menuId}>
           <summary aria-label={`Actions for ${contactName}`} className="button-secondary small-button">Actions</summary>
           <div className="apportion-actions-menu-list">
-            {canManage && active ? <button className="button-secondary small-button" disabled={isUpdating} type="button" onClick={() => { document.getElementById(menuId)?.removeAttribute("open"); onAction({ action: "done", appointmentId: appointment.id }); }}>Done</button> : null}
-            {canManage && active ? <button className="button-secondary small-button" disabled={isUpdating} type="button" onClick={() => { document.getElementById(menuId)?.removeAttribute("open"); onAction({ action: "reject", appointmentId: appointment.id }); }}>Absent</button> : null}
-            {requesterContext && active ? <button className="button-secondary small-button" disabled={isUpdating} type="button" onClick={() => { document.getElementById(menuId)?.removeAttribute("open"); onCancel(appointment.id); }}>Cancel</button> : null}
-            {requesterContext && active && new Date(appointment.startsAt).getTime() > Date.now() && !appointment.justAddToList ? <button className="button-secondary small-button" disabled={isUpdating} type="button" onClick={() => { document.getElementById(menuId)?.removeAttribute("open"); onReschedule(appointment); }}>Reschedule</button> : null}
+            {canManage && active ? <button className="button-secondary small-button" disabled={isUpdating || !!updatingId} type="button" onClick={() => void actOnAppointment(appointment, "done")}>Done</button> : null}
+            {canManage && active ? <button className="button-secondary small-button" disabled={isUpdating || !!updatingId} type="button" onClick={() => void actOnAppointment(appointment, "reject")}>Absent</button> : null}
+            {requesterContext && active ? <button className="button-secondary small-button" disabled={isUpdating || !!updatingId} type="button" onClick={() => void actOnAppointment(appointment, "cancel")}>Cancel</button> : null}
           </div>
         </details>
       );
 
       return (
-        <Fragment key={appointment.id}>
-          {groupHeading ? <tr className="apportion-log-group-row" key={`group-${appointment.id}`}><th colSpan={5} scope="rowgroup">{appointment.locationName} / {appointment.serviceName || "Consultation"}</th></tr> : null}
           <tr
             className={`apportion-log-row${appointment.id === initialAppointmentId ? " is-ticket-focus" : ""}`}
             data-apportion-appointment-id={appointment.id}
@@ -308,15 +421,15 @@ export function ApportionAppointmentLog({
             key={appointment.id}
             tabIndex={appointment.id === initialAppointmentId ? -1 : undefined}
           >
-            <td>{completed ? completedAppointments.findIndex((entry) => entry.id === appointment.id) + 1 : appointment.serialLabel}</td>
+            <td><span className={`apportion-origin${appointment.sourceInvitationId ? requesterContext ? " is-invite-incoming" : " is-invite-outgoing" : requesterContext ? " is-direct-sent" : ""}`} title={appointment.sourceInvitationId ? requesterContext ? "Accepted incoming invitation" : "Accepted outgoing invitation" : requesterContext ? "Sent appointment" : "Received appointment"}>{serial}</span></td>
             <td>
               {appointment.queueConvertedAt ? (
-                <><strong><s>{formatDateTime(appointment.startsAt)}</s></strong><span className="apportion-status-helper">Queue {appointment.queuePosition ?? appointment.queueOrder ?? ""}</span></>
-              ) : <strong>{formatDateTime(appointment.startsAt)}</strong>}
+                <><strong><s>{tableDateTime(appointment.startsAt)}</s></strong><span className="apportion-status-helper">Queue {appointment.queuePosition ?? appointment.queueOrder ?? ""}</span></>
+              ) : <strong>{tableDateTime(appointment.startsAt)}</strong>}
               {originalTime ? (
                 <AppointmentHistory appointment={appointment} contactName={contactName} originalTime={originalTime} formatDateTime={formatDateTime} />
               ) : null}
-              <span className="apportion-status-helper">{appointment.scope === "owner" ? "Received" : "Booked"} · {appointment.locationName}: {appointment.locationAddress}</span>
+              <span className="apportion-status-helper">{appointment.serviceName || "Consultation"} · {appointment.locationAddress}</span>
             </td>
             <td>
               <strong>{contactName}</strong>
@@ -335,17 +448,18 @@ export function ApportionAppointmentLog({
                 }}
               >
                 <MessageSquare aria-hidden="true" size={15} />
-                <span>{appointment.messages.length ? `${appointment.messages.length} message${appointment.messages.length === 1 ? "" : "s"}` : appointment.notes ? "View note" : "Open notes"}</span>
+                <span>{appointment.messages.at(-1)?.body || appointment.notes || "Open notes"}</span>
+                {appointment.hasUnreadMessages ? <span className="apportion-unread-dot" aria-label="Unread incoming messages" /> : null}
               </button>
             </td>
             <td>
               <span className={`status-chip apportion-status-chip is-${appointment.currentStatus}`}>{getStatusLabel(appointment)}</span>
               {getStatusHelper?.(appointment) ? <span className="apportion-status-helper">{getStatusHelper(appointment)}</span> : null}
               {!CLOSED_STATUSES.has(appointment.currentStatus) && (canManage || requesterContext) ? rowActions : null}
+              {updatingId === appointment.id ? <LoaderCircle aria-label="Updating appointment" className="apportion-spinner" size={16} /> : null}
               {completion ? <span className="apportion-status-helper">Done {formatDateTime(completion)}</span> : null}
             </td>
           </tr>
-        </Fragment>
       );
     });
   }
@@ -362,9 +476,11 @@ export function ApportionAppointmentLog({
   }
 
   const threadReadOnly = !threadAppointment?.canMessage || CLOSED_STATUSES.has(threadAppointment?.currentStatus ?? "cancelled");
+  const noteInvitation = invitations.find((entry) => entry.id === noteInvitationId);
 
   return (
     <section aria-label="Appointment log" className="apportion-appointment-log">
+      {actionError ? <p className="form-error" role="alert">{actionError}</p> : null}
       <header className="question-head apportion-log-section-head">
         <strong>Active appointments</strong>
         <span className="status-chip">{activeAppointments.length}</span>
@@ -391,10 +507,10 @@ export function ApportionAppointmentLog({
           </table>
         </div>
       ) : <p className="muted-text">No completed appointments.</p>}
-      {rescheduleEditor}
+      {noteInvitation ? createPortal(<div className="apportion-thread-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setNoteInvitationId(null); }}><section ref={threadRef} aria-labelledby="apportion-invitation-note-title" aria-modal="true" className="apportion-thread-drawer" role="dialog"><header className="apportion-thread-header"><h2 id="apportion-invitation-note-title">Invitation note</h2><button className="icon-button" aria-label="Close invitation note" type="button" onClick={() => setNoteInvitationId(null)}><X size={18} /></button></header><div className="apportion-thread-body"><p>{noteInvitation.notes || "No note."}</p></div></section></div>, document.body) : null}
       {threadAppointment ? createPortal(
         <div className="apportion-thread-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setThreadAppointmentId(null); }}>
-          <section aria-labelledby="apportion-thread-title" aria-modal="true" className="apportion-thread-drawer" role="dialog">
+          <section ref={threadRef} aria-labelledby="apportion-thread-title" aria-modal="true" className="apportion-thread-drawer" role="dialog">
             <header className="apportion-thread-header">
               <div><p className="eyebrow">{threadAppointment.locationName} / {threadAppointment.serviceName || "Consultation"}</p><h2 id="apportion-thread-title">Appointment notes</h2><p className="muted-text">{formatDateTime(threadAppointment.startsAt)} · {threadAppointment.scope === "owner" ? threadAppointment.requesterName : threadAppointment.ownerName || "Business"}</p></div>
               <button aria-label="Close appointment notes" className="icon-button apportion-thread-close" type="button" onClick={() => setThreadAppointmentId(null)}><X aria-hidden="true" size={19} /></button>
@@ -412,7 +528,7 @@ export function ApportionAppointmentLog({
                 <label htmlFor="apportion-thread-message">Message</label>
                 <textarea id="apportion-thread-message" maxLength={2000} rows={3} value={messageDraft} onChange={(event) => setMessageDraft(event.target.value)} />
                 {messageError ? <p className="form-error" role="alert">{messageError}</p> : null}
-                <div><span className="muted-text">{messageDraft.length} / 2000</span><button className="button small-button" disabled={!messageDraft.trim() || isSending} type="button" onClick={() => void sendMessage()}>{isSending ? "Sending..." : "Send message"}</button></div>
+                <div><span className="muted-text">{messageDraft.length} / 2000</span><button className="button small-button" disabled={!messageDraft.trim() || isSending} type="button" onClick={() => void sendMessage()}>{isSending ? <LoaderCircle aria-hidden="true" className="apportion-spinner" size={16} /> : null}{isSending ? "Sending..." : "Send message"}</button></div>
               </>}
             </footer>
           </section>

@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { matchApportionIdentity } from "@trapit/testing";
 import { ArrowRight, Search } from "lucide-react";
 
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
@@ -12,15 +11,24 @@ type Business = { name: string; ownerIdentifier: string; appointmentShareCode: s
 
 export function ApportionBusinessSearch({ businesses, onClose }: { businesses: Business[]; onClose: () => void }) {
   const [query, setQuery] = useState("");
+  const [results, setResults] = useState(businesses);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  const normalizedPhone = query.trim().replace(/[\s()-]/g, "");
-  const fullPhone = /^(?:\+[1-9]\d{7,14}|\d{10})$/.test(normalizedPhone);
-  const results = businesses.filter((business) => business.appointmentShareCode && (!query.trim()
-    || business.name.toLowerCase().includes(query.trim().toLowerCase())
-    || (fullPhone && matchApportionIdentity(business.ownerIdentifier, normalizedPhone))));
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/user/apportion?businessSearch=${encodeURIComponent(query.trim())}`, { signal: controller.signal });
+        const payload = await response.json() as { businesses?: Business[]; error?: string };
+        if (!response.ok) throw new Error(payload.error || "Search unavailable.");
+        if (!controller.signal.aborted) { setResults(payload.businesses ?? []); setSearchError(null); }
+      } catch (error) { if (!controller.signal.aborted) { setResults([]); setSearchError(error instanceof Error ? error.message : "Search unavailable."); } }
+    }, 180);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [query]);
 
   useEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -53,7 +61,7 @@ export function ApportionBusinessSearch({ businesses, onClose }: { businesses: B
         </header>
         <div className="apportion-business-search-body">
           <div className="field">
-            <label htmlFor="apportion-business-query">Business name or owner phone</label>
+            <label htmlFor="apportion-business-query">Business, service or full mobile</label>
             <div className="apportion-business-search-input">
               <Search aria-hidden="true" size={18} />
               <input autoComplete="off" id="apportion-business-query" ref={inputRef} type="search" value={query} onChange={(event) => setQuery(event.target.value)} />
@@ -62,7 +70,7 @@ export function ApportionBusinessSearch({ businesses, onClose }: { businesses: B
           <ul className="apportion-business-search-results">
             {results.map((business) => (
               <li key={`${business.ownerIdentifier}::${business.appointmentShareCode}`}>
-                <a href={`/apportion/${encodeURIComponent(business.appointmentShareCode)}`}>
+                <a href={`/apportion/${encodeURIComponent(business.appointmentShareCode)}`} target="_blank" rel="noopener noreferrer">
                   <span><strong>{business.name}</strong><span>{formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true })}</span></span>
                   <ArrowRight aria-hidden="true" size={20} />
                 </a>
@@ -70,6 +78,7 @@ export function ApportionBusinessSearch({ businesses, onClose }: { businesses: B
             ))}
           </ul>
           {!results.length ? <p className="muted-text" role="status">No businesses found.</p> : null}
+          {searchError ? <p className="form-error" role="alert">{searchError}</p> : null}
         </div>
       </div>
     </div>, document.body,

@@ -117,6 +117,9 @@ export async function GET(request: Request) {
   }
 
   const url = new URL(request.url);
+  if (url.searchParams.has("businessSearch")) {
+    return NextResponse.json({ businesses: await listWorkspaceAppointmentBusinesses(url.searchParams.get("businessSearch") ?? "") });
+  }
   if (url.searchParams.get("notifications") === "1") {
     const [appointmentNotifications, scheduleNotifications] = await Promise.all([
       listApportionNotificationsForActor(actor.identifier),
@@ -176,9 +179,10 @@ export async function PATCH(request: Request) {
 
   try {
   const body = (await request.json()) as {
-    action?: "done" | "present-in-person" | "push-back" | "reject" | "reschedule" | "send-message";
+    action?: "done" | "present-in-person" | "push-back" | "reject" | "reschedule" | "send-message" | "mark-read";
     appointmentId?: string;
     message?: string;
+    lastMessageId?: string;
     nextServiceDateKey?: string;
     nextStartsAt?: string;
     notes?: string | null;
@@ -189,10 +193,11 @@ export async function PATCH(request: Request) {
     || (body.nextServiceDateKey !== undefined && typeof body.nextServiceDateKey !== "string")
     || (body.nextStartsAt !== undefined && typeof body.nextStartsAt !== "string")
     || (body.message !== undefined && typeof body.message !== "string")
+    || (body.lastMessageId !== undefined && typeof body.lastMessageId !== "string")
     || (body.notes !== undefined && body.notes !== null && typeof body.notes !== "string")) {
     throw new Error("A valid appointment ID and appointment fields are required.");
   }
-  if (typeof body.action !== "string" || !["done", "present-in-person", "push-back", "reject", "reschedule", "send-message"].includes(body.action)) {
+  if (typeof body.action !== "string" || !["done", "present-in-person", "push-back", "reject", "reschedule", "send-message", "mark-read"].includes(body.action)) {
     return NextResponse.json({ error: "Choose a valid appointment action." }, { status: 400 });
   }
   if (body.action === "send-message" && typeof body.message !== "string") {
@@ -254,6 +259,7 @@ export async function PATCH(request: Request) {
       nextServiceDateKey: body.nextServiceDateKey,
       nextStartsAt: body.nextStartsAt,
       message: body.message,
+      lastMessageId: body.lastMessageId,
       notes: body.notes,
     });
     publishWorkspaceEvent("apportion");

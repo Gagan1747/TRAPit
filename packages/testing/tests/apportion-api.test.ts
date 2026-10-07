@@ -380,6 +380,23 @@ describe("Apportion targeted invitation API", () => {
   });
   afterEach(() => vi.useRealTimers());
 
+  it("expands a six-week duration past six appointments and persists its definition", async () => {
+    fixtures.context!.branding.appointmentLocations![0].workingDays = "Monday Thursday";
+    fixtures.context!.memberships[0].workingDays = "Monday Thursday";
+    const recurrence = { mode: "weekly", durationCount: 6, weekdayKeys: ["Mon", "Thu"] };
+    const response = await post({ recurrence });
+    expect(response.status).toBe(200);
+    expect((await response.json()).appointmentCount).toBe(12);
+    expect(fixtures.invite).toHaveBeenCalledWith(expect.objectContaining({ recurrence, recurrenceStartDateKey: "2026-10-05", occurrences: expect.any(Array) }));
+  });
+
+  it("rejects a duration crossing the current booking horizon without creating an invitation", async () => {
+    const response = await post({ slotDateKey: "2027-01-04", startsAt: "2027-01-04T04:30:00.000Z", recurrence: { mode: "monthly", durationCount: 6, monthDays: [4] } });
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toContain("booking horizon");
+    expect(fixtures.invite).not.toHaveBeenCalled();
+  });
+
   it("rejects a same-suffix foreign owner for creation, lookup and invite capability", async () => {
     fixtures.actor.identifier = "+639111111111";
     expect((await post()).status).toBe(403);

@@ -283,7 +283,11 @@ function validateBookingDate(branding: WorkspaceBranding, slotDateKey: string) {
     throw new Error("Choose a working day for this business.");
   }
 
-  if (slotDateKey < todayIstDateKey) {
+  if (slotDateKey < todayIstDateKey && ![branding.workingHours, branding.workingHoursSecondWindow].some((hours) => {
+    const range = parseTimeRange(hours);
+    const end = range && createUtcSlotIso(slotDateKey, Math.floor((range.startMinutes + range.durationMinutes) / 1440), (range.startMinutes + range.durationMinutes) % 1440);
+    return end && new Date(end).getTime() > Date.now();
+  })) {
     throw new Error("Choose a future appointment date.");
   }
 
@@ -325,9 +329,8 @@ function estimateQueueStart(input: {
 
   const now = new Date();
   const nowIst = new Date(now.getTime() + (IST_OFFSET_MINUTES * 60 * 1000));
-  const nowMinutes = nowIst.getUTCHours() * 60 + nowIst.getUTCMinutes() + (nowIst.getUTCSeconds() / 60);
-  const isToday = input.serviceDateKey === getIstDateKey(now);
-  let estimateMinutes = isToday ? Math.max(ranges[0].startMinutes, nowMinutes) : ranges[0].startMinutes;
+  const nowMinutes = (now.getTime() - new Date(`${input.serviceDateKey}T00:00:00+05:30`).getTime()) / 60_000;
+  let estimateMinutes = Math.max(ranges[0].startMinutes, nowMinutes);
   let remainingServiceMinutes = Math.floor(input.activeCount / Math.max(1, input.appointmentsPerSlot)) * slotDurationMinutes;
 
   for (const range of ranges) {
@@ -338,7 +341,7 @@ function estimateQueueStart(input: {
     estimateMinutes = Math.max(estimateMinutes, range.startMinutes);
     const availableMinutes = range.endMinutes - estimateMinutes;
 
-    if (remainingServiceMinutes < availableMinutes) {
+    if (slotDurationMinutes === 1440 ? remainingServiceMinutes + 1440 <= availableMinutes : remainingServiceMinutes < availableMinutes) {
       estimateMinutes += remainingServiceMinutes;
       const startsAt = createUtcSlotIso(input.serviceDateKey, Math.floor(estimateMinutes / (24 * 60)), Math.floor(estimateMinutes % (24 * 60)));
       return startsAt ? { exceedsWorkingHours: false, startsAt } : null;
@@ -577,7 +580,7 @@ export async function POST(
       || (body.recurrence !== undefined && body.recurrence !== null && (
         typeof body.recurrence !== "object" || Array.isArray(body.recurrence)
         || !["weekly", "monthly"].includes(body.recurrence.mode)
-        || typeof body.recurrence.endDateKey !== "string"
+        || (body.recurrence.durationCount === undefined ? typeof body.recurrence.endDateKey !== "string" : !Number.isInteger(body.recurrence.durationCount) || body.recurrence.durationCount < 1 || body.recurrence.durationCount > 6)
         || (body.recurrence.weekdayKeys !== undefined && (!Array.isArray(body.recurrence.weekdayKeys) || body.recurrence.weekdayKeys.some((value) => typeof value !== "string")))
         || (body.recurrence.monthDays !== undefined && (!Array.isArray(body.recurrence.monthDays) || body.recurrence.monthDays.some((value) => !Number.isInteger(value) || value < 1 || value > 31)))
         || (body.recurrence.mode === "weekly" && !body.recurrence.weekdayKeys?.length)
@@ -670,7 +673,7 @@ export async function POST(
         } catch {
           return false;
         }
-      });
+      }, (() => { const horizon = new Date(`${getIstDateKey(new Date())}T00:00:00Z`); horizon.setUTCMonth(horizon.getUTCMonth() + 6); return createDateKeyUtc(horizon); })());
       const ownerAppointments = await listApportionAppointmentsForOwner(business.ownerIdentifier);
       const activeAppointments = ownerAppointments.filter((appointment) => appointment.locationId === location.id
         && (appointment.serviceId || "consultation") === serviceId
@@ -703,6 +706,7 @@ export async function POST(
         requesterPhone: target.identifier,
         notes: body.notes,
         occurrences,
+        ...(body.recurrence ? { recurrence: body.recurrence, recurrenceStartDateKey: slotDateKey } : {}),
       });
       publishWorkspaceEvent("apportion");
       return NextResponse.json({ invitation: { id: invitation.id, status: invitation.status }, appointmentCount: occurrences.length, caution: null });

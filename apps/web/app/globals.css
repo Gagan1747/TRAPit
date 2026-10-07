@@ -4485,6 +4485,72 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.apportion-calendar-day.is-unavailable:disabled {
+  background: repeating-linear-gradient(-45deg, #e2e8e5 0 4px, #f3f5f4 4px 9px);
+  color: #697571;
+  opacity: 1;
+}
+
+.business-hours-grid-head,
+.business-hours-grid-row {
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.business-hours-grid-head { font-size: 0.76rem; font-weight: 700; }
+.business-hours-grid-row > div { min-width: 0; }
+.business-hours-day { display: flex; align-items: center; gap: 5px; font-size: 0.8rem; }
+.business-saved-hours { display: block; margin-top: 5px; font-size: 0.72rem; overflow-wrap: anywhere; }
+.business-hours-grid .business-time-selector { position: relative; min-width: 0; width: 100%; grid-template-columns: minmax(0, 1fr); }
+.business-hours-grid .business-time-selector-actions { gap: 3px; min-width: 0; }
+.business-hours-grid .business-time-trigger { flex: 0 1 32px; justify-content: center; width: 32px; min-height: 32px; padding: 5px; }
+.business-hours-grid .business-time-selector-actions > .icon-button { width: 28px; min-width: 28px; min-height: 32px; padding: 4px; }
+.business-hours-grid .business-time-bar-shell { position: absolute; top: 100%; width: min(420px, calc(100vw - 64px)); max-width: none; z-index: 5; }
+.business-hours-grid-row > div:last-child .business-time-bar-shell { right: 0; }
+.business-time-more { flex: 0 0 40px; align-self: center; margin-left: 48px; position: relative; z-index: 1; }
+.business-time-label { pointer-events: none; }
+.business-mode-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.business-mode-choices .business-choice-button { min-width: 0; min-height: 44px; }
+.apportion-address-services { min-width: 0; padding: 14px 0; border-top: 1px solid var(--line); }
+.apportion-address-services > header { margin-bottom: 12px; }
+.apportion-address-services h4 { margin: 0 0 4px; overflow-wrap: anywhere; }
+.apportion-address-services > header > span { font-size: 0.78rem; color: var(--muted); }
+.apportion-address-services > fieldset { border: 0; border-bottom: 1px solid var(--line); border-radius: 0; padding: 12px 0; margin: 0 0 12px; }
+.apportion-drawer-header > div:first-child { flex: 1 1 auto; min-width: 0; }
+.apportion-drawer-header .section-title { font-size: 1.1rem; overflow-wrap: anywhere; }
+.apportion-drawer-header .apportion-link-actions { flex: 0 0 auto; margin: 0; gap: 4px; }
+.apportion-origin { display: inline-flex; width: 32px; height: 32px; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.85rem; }
+.apportion-origin.is-direct-sent { border: 1px solid currentColor; border-radius: 2px; }
+.apportion-origin:is(.is-invite-outgoing, .is-invite-incoming) { border: 1px solid currentColor; border-radius: 50%; }
+.apportion-origin.is-invite-incoming { border: 3px double currentColor; }
+.apportion-thread-trigger { position: relative; width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 4px; background: #f3f6f4; }
+.apportion-thread-trigger > svg { flex-shrink: 0; }
+.apportion-thread-trigger > span:not(.apportion-unread-dot) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.apportion-unread-dot { position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border: 2px solid white; border-radius: 50%; background: #21864f; }
+.apportion-series-summary { font-size: 0.75rem; margin-top: 4px; }
+.apportion-series-summary summary { cursor: pointer; }
+.apportion-series-summary ul { padding-left: 16px; max-height: 180px; overflow-y: auto; }
+.apportion-spinner { animation: apportionSpin 900ms linear infinite; flex-shrink: 0; }
+@keyframes apportionSpin { to { transform: rotate(360deg); } }
+:is(.apportion-appointment-log, .apportion-business-drawer, .apportion-booking-page) button:not(:disabled):hover { filter: brightness(0.94); }
+.apportion-thread-trigger:hover { border-color: #21864f; }
+.apportion-appointment-log button:focus-visible { outline: 2px solid #183b43; outline-offset: 3px; }
+@media (max-width: 480px) {
+  .business-hours-grid-head, .business-hours-grid-row { grid-template-columns: 52px minmax(0, 1fr) minmax(0, 1fr); gap: 5px; }
+  .business-hours-grid-head { font-size: 0.67rem; }
+  .business-hours-day { font-size: 0.72rem; }
+  .apportion-business-drawer > .apportion-drawer-body { padding: 12px; }
+  .apportion-business-drawer .apportion-drawer-body > fieldset { padding: 8px; margin-inline: 0; }
+  .apportion-drawer-header { padding: 12px; gap: 6px; }
+  .apportion-drawer-header .apportion-link-actions .icon-button { width: 30px; height: 32px; min-width: 30px; padding: 5px; }
+}
+@media (prefers-reduced-motion: reduce) { .apportion-spinner { animation-duration: 2s; } }
+
 .apportion-business-drawer .business-details-panel,
 .apportion-business-drawer .business-details-form,
 .apportion-business-drawer .business-form-section,

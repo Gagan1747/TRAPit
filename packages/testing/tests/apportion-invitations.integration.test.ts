@@ -57,7 +57,37 @@ afterEach(() => vi.useRealTimers());
 afterAll(async () => { vi.unstubAllEnvs(); await rm(directory, { recursive: true, force: true }); });
 
 describe("Apportion invitations", () => {
+  it("acknowledges displayed messages per actor without clearing later arrivals or exposing cursors", async () => {
+    const invitation = await store.createApportionInvitation(input());
+    await respond(invitation.id);
+    const appointmentId = (await persisted()).appointments[0].id;
+    const send = (actorIdentifier: string, message: string) => store.updateApportionAppointment({ action: "send-message", actorIdentifier, appointmentId, message });
+    const read = (actorIdentifier: string, lastMessageId: string) => store.updateApportionAppointment({ action: "mark-read", actorIdentifier, appointmentId, lastMessageId });
+    const first = await send(STAFF, "First reply");
+    const firstId = first.appointment.messages.at(-1)!.id;
+    await send(STAFF, "Later reply");
+    await expect(read(OTHER + "9", firstId)).rejects.toThrow("own appointments");
+    await read(TARGET, firstId);
+    let projected = (await store.listApportionAppointmentsForActor(TARGET))[0];
+    expect(projected.hasUnreadMessages).toBe(true);
+    expect(projected).not.toHaveProperty("messageReadCursors");
+    await read(TARGET, projected.messages.at(-1)!.id);
+    await read(TARGET, firstId);
+    expect((await store.listApportionAppointmentsForActor(TARGET))[0].hasUnreadMessages).toBe(false);
+    await send(TARGET, "My own reply");
+    expect((await store.listApportionAppointmentsForActor(TARGET))[0].hasUnreadMessages).toBe(false);
+    expect((await store.listApportionAppointmentsForActor(STAFF))[0].hasUnreadMessages).toBe(true);
+    const saved = await persisted();
+    delete saved.appointments[0].messageReadBaselineId;
+    delete saved.appointments[0].messageReadCursors;
+    await writeFile(storePath, JSON.stringify(saved));
+    projected = (await store.listApportionAppointmentsForActor(STAFF))[0];
+    expect(projected.hasUnreadMessages).toBe(false);
+    await send(TARGET, "After migration");
+    expect((await store.listApportionAppointmentsForActor(STAFF))[0].hasUnreadMessages).toBe(true);
+  });
   it("matches formatted India aliases without cross-country suffix identity", () => {
+    expect(matchApportionIdentity("+639444444444", TARGET)).toBe(false);
     expect(matchApportionIdentity(" +91 (94444) 44444 ", "9444444444")).toBe(true);
     expect(matchApportionIdentity("+639444444444", "9444444444")).toBe(false);
     expect(matchApportionIdentity("+639444444444", TARGET)).toBe(false);
@@ -97,10 +127,24 @@ describe("Apportion invitations", () => {
     fixtures.context!.providerSettings[OWNER].appointmentsPerSlot = 4;
     fixtures.getContext.mockReset().mockResolvedValueOnce(validatedContext).mockResolvedValue(fixtures.context);
     await respond(invitation.id);
-    expect(fixtures.getContext).toHaveBeenCalledTimes(2);
+    expect(fixtures.getContext).toHaveBeenCalledTimes(1);
     expect((await persisted()).appointments[0]).toMatchObject({ assignedStaffIdentifier: STAFF,
       bookedSettings: { appointmentsPerSlot: 1, slotDurationMinutes: 30 }, slotEndsAt: "2026-10-05T04:30:00.000Z" });
   });
+      it("atomically accepts twelve duration occurrences using one owner context and backfills origins", async () => {
+        const dates = Array.from({ length: 6 }, (_, week) => [5 + week * 7, 8 + week * 7]).flat().map((day) => new Date(Date.UTC(2026, 9, day)).toISOString().slice(0, 10));
+        const invitation = await store.createApportionInvitation({ ...input(dates), recurrence: { mode: "weekly", durationCount: 6, weekdayKeys: ["Mon", "Thu"] }, recurrenceStartDateKey: "2026-10-05" });
+        expect(fixtures.getContext).toHaveBeenCalledTimes(1);
+        fixtures.getContext.mockClear();
+        await respond(invitation.id);
+        expect(fixtures.getContext).toHaveBeenCalledTimes(1);
+        const saved = await persisted();
+        expect(saved.appointments).toHaveLength(12);
+        expect(saved.appointments.every((entry: { sourceInvitationId: string }) => entry.sourceInvitationId === invitation.id)).toBe(true);
+        for (const appointment of saved.appointments) delete appointment.sourceInvitationId;
+        await writeFile(storePath, JSON.stringify(saved));
+        expect((await store.listApportionAppointmentsForRequester(TARGET)).every((entry) => entry.sourceInvitationId === invitation.id)).toBe(true);
+      });
   it("keeps the saved 30-minute slot end when accepting at 09:50 after duration becomes 10", async () => {
     const invitation = await store.createApportionInvitation(input());
     fixtures.context!.providerSettings[STAFF].slotDurationMinutes = 10;

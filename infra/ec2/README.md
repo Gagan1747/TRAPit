@@ -257,6 +257,8 @@ The app includes an internal worker endpoint that sends free push notifications 
 
 The same authenticated endpoint also catches up Apportion slot-end queue conversions, service-day Missed transitions, durable provider leave cancellations and pending notification retries. It runs inside the existing web process; cron must not run a separate script that writes the appointment files. Keep exactly one web app process while persistence is file-backed.
 
+Apportion booking/dashboard refinements add per-user message read cursors, accepted-invitation origin and duration-based recurrence metadata to the appointment file. Back up the entire persistent data directory before deployment, including both testing-workspace.json and apportion-appointments.json. Legacy invitations and booked slot snapshots remain unchanged. New repeats use 1–6 weeks/months instead of six occurrences; service quotas apply separately at each address. Existing notification cron settings remain one minute with the connection/request timeouts above. No database or additional worker process is required.
+
 Add a cron job on the EC2 instance to call the worker every minute:
 
 ```bash

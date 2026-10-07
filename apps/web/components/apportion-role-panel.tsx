@@ -1,6 +1,6 @@
 "use client";
 
-import { getApportionServiceLimit, getApportionWeeklyIntervals, participantIdentifiersMatch, resolveApportionDailySchedule, type AppointmentLocation, type ApportionDailyHours, type ApportionProviderSettings, type ApportionService, type ApportionWeeklyInterval } from "@trapit/testing";
+import { APPORTION_NEW_DURATION_MINUTES, getApportionBookableServices, getApportionServiceLimit, getApportionWeeklyIntervals, participantIdentifiersMatch, resolveApportionDailySchedule, type AppointmentLocation, type ApportionDailyHours, type ApportionProviderSettings, type ApportionService, type ApportionWeeklyInterval } from "@trapit/testing";
 import { ChevronLeft, ChevronRight, Plus, Save, Search, Unlink } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApportionPanelInput, getApportionPanel } from "../lib/apportion-directory";
@@ -42,15 +42,13 @@ function RegisteredPhone({ value, onChange, disabled = false }: { value: string;
   </div>;
 }
 
-function ServiceRow({ business, service, busy, save }: { business: Business; service: ApportionService; busy: boolean; save: SaveOperation }) {
-  const [draft, setDraft] = useState(service);
-  useEffect(() => { setDraft(service); }, [service]);
+function ServiceRow({ business, service, draft, setDraft, locationId, busy, save }: { business: Business; service: ApportionService; draft: ApportionService; setDraft: (value: ApportionService) => void; locationId: string; busy: boolean; save: SaveOperation }) {
   const consultation = service.id === "consultation";
   const enabled = business.role !== "staff" && getApportionServiceLimit(business.ownerCategory) > 0;
   return <fieldset disabled={busy || !enabled} className="workspace-card-stack">
     <label>Service<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
     <label><input type="checkbox" checked={draft.active} onChange={(event) => setDraft({ ...draft, active: event.target.checked })} /> Active</label>
-    <label>Assigned phone</label>
+    <label>Assigned staff</label>
     <RegisteredPhone disabled={consultation || !enabled} value={draft.assignedIdentifier || ""} onChange={(value) => setDraft({ ...draft, assignedIdentifier: value.trim() || null })} />
     <div className="button-row">
       {(business.branding.appointmentLocations ?? []).map((location) => {
@@ -59,11 +57,11 @@ function ServiceRow({ business, service, busy, save }: { business: Business; ser
         const schedule = resolveApportionDailySchedule(membership ?? location);
         return <div className="apportion-service-location" key={location.id}>
           <label><input type="checkbox" checked={draft.locationIds.includes(location.id)} onChange={(event) => setDraft({ ...draft, locationIds: event.target.checked ? [...draft.locationIds, location.id] : draft.locationIds.filter((id) => id !== location.id) })} /> {location.address}</label>
-          <span className="muted-text">{schedule.filter((entry) => entry.workingHours || entry.workingHoursSecondWindow).map((entry) => `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][entry.weekday]} ${[entry.workingHours, entry.workingHoursSecondWindow].filter(Boolean).join(" / ")}`).join(" · ") || "No provider hours set"}</span>
+          {location.id === locationId && service.assignedIdentifier && !participantIdentifiersMatch(service.assignedIdentifier, business.business.ownerIdentifier) ? <span className="muted-text">{schedule.filter((entry) => entry.workingHours || entry.workingHoursSecondWindow).map((entry) => `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][entry.weekday]} ${[entry.workingHours, entry.workingHoursSecondWindow].filter(Boolean).join(" / ")}`).join(" · ") || "No provider hours set"}</span> : null}
         </div>;
       })}
     </div>
-    <span className="status-chip">{business.bookableServiceIds.includes(service.id) ? "Bookable" : service.active ? "Paused" : "Inactive"}</span>
+    <span className="status-chip">{getApportionBookableServices(business.business, business.ownerCategory, locationId).some((entry) => entry.id === service.id) ? "Bookable" : service.active ? "Paused" : "Inactive"}</span>
     {enabled ? <button className="button-secondary" type="button" onClick={() => void save({ operation: "set-service", ownerIdentifier: business.business.ownerIdentifier, service: draft })}><Save size={16} /> Save service</button> : null}
   </fieldset>;
 }
@@ -71,6 +69,8 @@ function ServiceRow({ business, service, busy, save }: { business: Business; ser
 function BusinessRoles({ business, save, busy }: { business: Business; save: SaveOperation; busy: boolean }) {
   const [delegate, setDelegate] = useState(business.business.adminDelegateIdentifier || "");
   const [branding, setBranding] = useState(business.branding);
+  const [drafts, setDrafts] = useState(() => Object.fromEntries(business.business.services.map((service) => [service.id, service])));
+  useEffect(() => { setDrafts(Object.fromEntries(business.business.services.map((service) => [service.id, service]))); }, [business.business.services]);
   useEffect(() => { setDelegate(business.business.adminDelegateIdentifier || ""); setBranding(business.branding); }, [business]);
   const canEdit = business.role !== "staff" && getApportionServiceLimit(business.ownerCategory) > 0;
   return <section className="workspace-card-stack">
@@ -80,10 +80,15 @@ function BusinessRoles({ business, save, busy }: { business: Business; save: Sav
       <RegisteredPhone value={delegate} onChange={setDelegate} />
       <button className="button-secondary" type="button" onClick={() => void save({ operation: "set-delegate", ownerIdentifier: business.business.ownerIdentifier, delegateIdentifier: delegate.trim() || null })}><Save size={16} /> Save Admin</button>
     </fieldset> : null}
-    <div className="workspace-card-stack">
-      {business.business.services.map((service) => <ServiceRow key={service.id} business={business} service={service} busy={busy} save={save} />)}
-    </div>
-    {canEdit ? <button className="button-secondary" type="button" disabled={busy || business.business.services.filter((service) => service.active).length >= getApportionServiceLimit(business.ownerCategory)} onClick={() => void save({ operation: "set-service", ownerIdentifier: business.business.ownerIdentifier, service: { id: `service-${crypto.randomUUID()}`, name: "New service", active: false, assignedIdentifier: null, locationIds: [] } })}><Plus size={16} /> Add service</button> : null}
+    {(business.branding.appointmentLocations ?? []).map((location, index) => {
+      const activeCount = business.business.services.filter((service) => service.active && service.locationIds.includes(location.id)).length;
+      const services = business.business.services.filter((service) => service.locationIds.includes(location.id) || (!service.locationIds.length && index === 0));
+      return <section className="apportion-address-services" key={location.id}>
+        <header><h4>{location.address}</h4><span>{activeCount} / {getApportionServiceLimit(business.ownerCategory)} active services</span></header>
+        {services.map((service) => <ServiceRow key={service.id} business={business} service={service} draft={drafts[service.id] ?? service} setDraft={(value) => setDrafts((current) => ({ ...current, [service.id]: value }))} locationId={location.id} busy={busy} save={save} />)}
+        {canEdit ? <button className="button-secondary" type="button" disabled={busy || activeCount >= getApportionServiceLimit(business.ownerCategory)} onClick={() => void save({ operation: "set-service", ownerIdentifier: business.business.ownerIdentifier, service: { id: `service-${crypto.randomUUID()}`, name: "New service", active: false, assignedIdentifier: null, locationIds: [location.id] } })}><Plus size={16} /> Add service</button> : null}
+      </section>;
+    })}
     {business.role === "admin" && canEdit ? <fieldset disabled={busy} className="workspace-card-stack">
       <label>Business name<input value={branding.instituteName} onChange={(event) => setBranding({ ...branding, instituteName: event.target.value })} /></label>
       {(branding.appointmentLocations ?? []).map((location) => <div key={location.id}>
@@ -125,31 +130,21 @@ function ProviderScheduleEditor({
   onDayToggle: (weekday: number, enabled: boolean) => void;
   onHoursChange: (weekday: number, field: "workingHours" | "workingHoursSecondWindow", value: string) => void;
 }) {
-  const [selectedWeekday, setSelectedWeekday] = useState(1);
-  const current = dailyHours.find((entry) => entry.weekday === selectedWeekday) ?? { weekday: selectedWeekday, workingHours: "", workingHoursSecondWindow: "" };
-  const master = masterDailyHours.find((entry) => entry.weekday === selectedWeekday) ?? { weekday: selectedWeekday, workingHours: "", workingHoursSecondWindow: "" };
-  const isEnabled = Boolean(current.workingHours || current.workingHoursSecondWindow);
-  const allowedIntervals = intervalsForWeekday(masterWeeklyIntervals, selectedWeekday);
-  const blockedIntervals = intervalsForWeekday(blockedWeeklyIntervals, selectedWeekday);
-
-  return <div className="business-weekly-hours">
-    <div className="business-day-grid" role="group" aria-label="Staff working weekdays">
+  return <div className="business-weekly-hours business-hours-grid" role="group" aria-label="Staff working weekdays">
+    <div className="business-hours-grid-head"><span>Day</span><span>Operating hours 1</span><span>Operating hours 2</span></div>
       {SCHEDULE_WEEKDAYS.map((day, weekday) => {
-        const schedule = dailyHours.find((entry) => entry.weekday === weekday);
-        const active = Boolean(schedule?.workingHours || schedule?.workingHoursSecondWindow);
+        const current = dailyHours.find((entry) => entry.weekday === weekday);
+        const active = Boolean(current?.workingHours || current?.workingHoursSecondWindow);
         const masterSchedule = masterDailyHours.find((entry) => entry.weekday === weekday);
         const hasMasterHours = Boolean(masterSchedule?.workingHours || masterSchedule?.workingHoursSecondWindow);
-        return <div className="business-weekday-chip" key={day}>
-          <button aria-pressed={selectedWeekday === weekday} className={`business-day-toggle${active ? " is-active" : ""}${selectedWeekday === weekday ? " is-current" : ""}`} type="button" onClick={() => setSelectedWeekday(weekday)}>{day.slice(0, 3)}</button>
-          <label><input aria-label={`Work ${day}`} checked={active} disabled={!hasMasterHours} type="checkbox" onChange={(event) => onDayToggle(weekday, event.target.checked)} /></label>
+        const allowedIntervals = intervalsForWeekday(masterWeeklyIntervals, weekday);
+        const blockedIntervals = intervalsForWeekday(blockedWeeklyIntervals, weekday);
+        return <div className="business-hours-grid-row" key={day}>
+          <label className="business-hours-day"><input aria-label={`Work ${day}`} checked={active} disabled={!hasMasterHours} type="checkbox" onChange={(event) => onDayToggle(weekday, event.target.checked)} />{day.slice(0, 3)}</label>
+          <div><BusinessTimeRangeSelector disabled={!active} allowedIntervals={allowedIntervals} blockedIntervals={blockedIntervals} blockedRanges={[current?.workingHoursSecondWindow ?? ""].filter(Boolean)} label={`${day} operating hours 1`} value={current?.workingHours ?? ""} onChange={(value) => onHoursChange(weekday, "workingHours", value)} /></div>
+          <div><BusinessTimeRangeSelector disabled={!active} allowedIntervals={allowedIntervals} blockedIntervals={blockedIntervals} blockedRanges={[current?.workingHours ?? ""].filter(Boolean)} label={`${day} operating hours 2`} value={current?.workingHoursSecondWindow ?? ""} onChange={(value) => onHoursChange(weekday, "workingHoursSecondWindow", value)} /></div>
         </div>;
       })}
-    </div>
-    <strong className="business-weekday-heading">{SCHEDULE_WEEKDAYS[selectedWeekday]}</strong>
-    {isEnabled ? <div className="business-daily-windows">
-      <div><span className="field-label">Operating hours 1</span><BusinessTimeRangeSelector allowedIntervals={allowedIntervals} blockedIntervals={blockedIntervals} blockedRanges={[current.workingHoursSecondWindow].filter(Boolean)} label={`${SCHEDULE_WEEKDAYS[selectedWeekday]} hours`} value={current.workingHours} onChange={(value) => onHoursChange(selectedWeekday, "workingHours", value)} /></div>
-      <div><span className="field-label">Operating hours 2</span><BusinessTimeRangeSelector allowedIntervals={allowedIntervals} blockedIntervals={blockedIntervals} blockedRanges={[current.workingHours].filter(Boolean)} label={`${SCHEDULE_WEEKDAYS[selectedWeekday]} second window`} value={current.workingHoursSecondWindow} onChange={(value) => onHoursChange(selectedWeekday, "workingHoursSecondWindow", value)} /></div>
-    </div> : <p className="muted-text">Turn on a master-scheduled day to set staff hours.</p>}
   </div>;
 }
 
@@ -353,8 +348,9 @@ export function ApportionRolePanel({ canCreateBusiness: fallbackCanCreateBusines
       <span className="field-label">Appointments per slot</span>
       <div className="business-choice-row" role="group" aria-label="My appointments per slot">{[1, 2, 3, 4, 5, 6].map((capacity) => <button className="business-choice-button" aria-pressed={panel.providerSettings.appointmentsPerSlot === capacity} key={capacity} type="button" onClick={() => setPanel({ ...panel, providerSettings: { ...panel.providerSettings, appointmentsPerSlot: capacity } })}>{capacity}</button>)}</div>
       <span className="field-label">Slot duration</span>
-      <div className="business-choice-row" role="group" aria-label="My slot duration">{Array.from(new Set([5, 10, 60, 240, 1440, panel.providerSettings.slotDurationMinutes])).sort((first, second) => first - second).map((duration) => <button className="business-choice-button" aria-pressed={panel.providerSettings.slotDurationMinutes === duration} key={duration} type="button" onClick={() => setPanel({ ...panel, providerSettings: { ...panel.providerSettings, slotDurationMinutes: duration } })}>{duration === 1440 ? "24 hours" : `${duration} min`}</button>)}</div>
-      <label className="business-queue-toggle"><input role="switch" type="checkbox" checked={panel.providerSettings.justAddToList} onChange={(event) => setPanel({ ...panel, providerSettings: { ...panel.providerSettings, justAddToList: event.target.checked } })} /> Queue mode</label>
+      <div className="business-choice-row" role="group" aria-label="My slot duration">{APPORTION_NEW_DURATION_MINUTES.map((duration) => <button className="business-choice-button" aria-pressed={panel.providerSettings.slotDurationMinutes === duration} key={duration} type="button" onClick={() => setPanel({ ...panel, providerSettings: { ...panel.providerSettings, slotDurationMinutes: duration } })}>{duration === 1440 ? "All Day" : duration === 240 ? "4 hr" : duration === 60 ? "1 hr" : `${duration} min`}</button>)}</div>
+      {!APPORTION_NEW_DURATION_MINUTES.some((duration) => duration === panel.providerSettings.slotDurationMinutes) ? <span className="muted-text">Current: {panel.providerSettings.slotDurationMinutes} min</span> : null}
+      <div className="business-choice-row business-mode-choices" role="group" aria-label="My booking mode">{[{ label: "Slot Based", queue: false }, { label: "Queue Based", queue: true }].map((mode) => <button className="business-choice-button" aria-pressed={panel.providerSettings.justAddToList === mode.queue} key={mode.label} type="button" onClick={() => setPanel({ ...panel, providerSettings: { ...panel.providerSettings, justAddToList: mode.queue } })}>{mode.label}</button>)}</div>
       <button className="button-secondary" type="button" onClick={() => void save({ operation: "set-settings", settings: panel.providerSettings })}><Save size={16} /> Save my settings</button>
     </fieldset> : null}
     {panel.memberships.filter((membership) => !participantIdentifiersMatch(membership.ownerIdentifier, actorIdentifier || "")).map((membership) => {

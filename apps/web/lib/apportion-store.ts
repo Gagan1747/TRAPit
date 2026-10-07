@@ -1,6 +1,6 @@
 import "server-only";
 
-import { createEntityId, getApportionBookableServices, getApportionWeeklyIntervals, intersectApportionWeeklyIntervals, matchApportionIdentity, normalizeApportionProviderSettings, participantIdentifiersMatch, resolveApportionController, type ApportionProviderSettings } from "@trapit/testing";
+import { createEntityId, getApportionBookableServices, getApportionWeeklyIntervals, intersectApportionWeeklyIntervals, matchApportionIdentity, normalizeApportionProviderSettings, participantIdentifiersMatch, planApportionDateKeys, resolveApportionController, type ApportionRecurrence, type ApportionProviderSettings } from "@trapit/testing";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getApportionBusinessContext, type ApportionBusinessContext } from "./apportion-directory";
@@ -10,6 +10,10 @@ const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
 export type ApportionAppointment = {
+  sourceInvitationId?: string;
+  messageReadCursors?: Record<string, string>;
+  messageReadBaselineId?: string | null;
+  hasUnreadMessages?: boolean;
   serviceId?: string;
   serviceName?: string;
   assignedStaffIdentifier?: string | null;
@@ -86,6 +90,8 @@ type ApportionState = {
 };
 
 export type ApportionInvitation = {
+  recurrence?: ApportionRecurrence | null;
+  recurrenceStartDateKey?: string;
   id: string;
   status: "pending" | "accepted" | "declined" | "expired" | "cancelled";
   ownerIdentifier: string;
@@ -229,7 +235,7 @@ function resolveServiceDateKey(value: string | undefined, startsAt: string, allo
   const serviceDateKey = value?.trim() || getAppointmentDayKey(startsAt);
   const date = new Date(`${serviceDateKey}T00:00:00Z`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(serviceDateKey) || Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== serviceDateKey
-    || (!allowPastDay && serviceDateKey < getAppointmentDayKey(new Date().toISOString()))) {
+    || (!allowPastDay && serviceDateKey < getAppointmentDayKey(new Date().toISOString()) && new Date(startsAt).getTime() < Date.now())) {
     throw new Error("Choose a valid current or future service day.");
   }
   return serviceDateKey;
@@ -284,12 +290,12 @@ function appointmentAccessFromContext(appointment: ApportionAppointment, actorId
   return { controllerIdentifier, isOwner, isRequester, isAssignedStaff, isAdminDelegate, canManage, canView: isOwner || isRequester || isAssignedStaff || isAdminDelegate || canManage };
 }
 
-async function resolveBookingContext(ownerIdentifier: string, locationId: string, serviceId: string, existingBooking = false) {
-  const context = await getApportionBusinessContext(ownerIdentifier);
+async function resolveBookingContext(ownerIdentifier: string, locationId: string, serviceId: string, existingBooking = false, ownerContext?: ApportionBusinessContext) {
+  const context = ownerContext ?? await getApportionBusinessContext(ownerIdentifier);
   if (!context || !matchApportionIdentity(context.business.ownerIdentifier, ownerIdentifier)) {
     throw new Error("Appointment business is unavailable.");
   }
-  const service = (existingBooking ? context.business.services : getApportionBookableServices(context.business, context.ownerCategory)).find((entry) => entry.id === serviceId);
+  const service = (existingBooking ? context.business.services : getApportionBookableServices(context.business, context.ownerCategory, locationId)).find((entry) => entry.id === serviceId);
   const location = context.branding.appointmentLocations?.find((entry) => entry.id === locationId);
   if (!service || !location || !service.locationIds.includes(locationId)) {
     throw new Error("This service is not bookable at this address.");
@@ -501,6 +507,14 @@ function normalizeMessages(appointment: Pick<ApportionAppointment, "createdAt" |
   return messages;
 }
 
+function appointmentProjection(appointment: ApportionAppointment, identifier: string) {
+  const { messageReadCursors, messageReadBaselineId, hasUnreadMessages: ignoredUnread, ...visible } = appointment;
+  const cursorKey = Object.keys(messageReadCursors ?? {}).find((key) => matchApportionIdentity(key, identifier));
+  const cursorId = cursorKey ? messageReadCursors![cursorKey] : messageReadBaselineId;
+  const readIndex = cursorId ? appointment.messages.findIndex((message) => message.id === cursorId) : -1;
+  return { ...visible, hasUnreadMessages: appointment.messages.some((message, index) => index > readIndex && !matchApportionIdentity(message.authorIdentifier, identifier)), notifications: appointment.notifications?.filter((notification) => matchApportionIdentity(notification.recipientIdentifier, identifier)) };
+}
+
 function normalizeAppointments(appointments: ApportionAppointment[]) {
   const bookedCountsByOwnerDay = new Map<string, number>();
   const owners: string[] = [];
@@ -555,6 +569,10 @@ function normalizeAppointments(appointments: ApportionAppointment[]) {
 }
 
 function normalizeState(parsed: Partial<ApportionState>): ApportionState {
+  const invitationByAppointmentId = new Map<string, string>();
+  for (const invitation of parsed.invitations ?? []) {
+    if (invitation.status === "accepted") for (const appointmentId of invitation.appointmentIds ?? []) invitationByAppointmentId.set(appointmentId, invitation.id);
+  }
   return {
     ...parsed,
     invitations: (parsed.invitations ?? []).map((invitation) => ({ ...invitation,
@@ -575,6 +593,7 @@ function normalizeState(parsed: Partial<ApportionState>): ApportionState {
 
           const normalizedAppointment: ApportionAppointment = {
             ...appointment,
+            sourceInvitationId: appointment.sourceInvitationId || invitationByAppointmentId.get(appointment.id),
             serviceId: appointment.serviceId?.trim() || "consultation",
             serviceName: appointment.serviceName?.trim() || "Consultation",
             assignedStaffIdentifier: appointment.assignedStaffIdentifier === null ? null : appointment.assignedStaffIdentifier?.trim() || ownerIdentifier,
@@ -609,6 +628,8 @@ function normalizeState(parsed: Partial<ApportionState>): ApportionState {
           normalizedAppointment.history = normalizeHistory(appointment.history, normalizedAppointment);
           normalizedAppointment.originalStartsAt ||= originalAppointmentStartsAt(normalizedAppointment);
           normalizedAppointment.messages = normalizeMessages({ ...normalizedAppointment, messages: appointment.messages ?? [] });
+          normalizedAppointment.messageReadCursors = { ...(appointment.messageReadCursors ?? {}) };
+          normalizedAppointment.messageReadBaselineId = Object.prototype.hasOwnProperty.call(appointment, "messageReadBaselineId") ? appointment.messageReadBaselineId : normalizedAppointment.messages.at(-1)?.id ?? null;
 
           return normalizedAppointment;
         })
@@ -664,7 +685,7 @@ export async function listApportionAppointmentsForOwner(ownerIdentifier: string)
 
   return state.appointments
     .filter((appointment) => participantIdentifiersMatch(appointment.ownerIdentifier, ownerIdentifier))
-    .map((appointment) => ({ ...appointment, notifications: appointment.notifications?.filter((notification) => participantIdentifiersMatch(notification.recipientIdentifier, ownerIdentifier)) }))
+    .map((appointment) => appointmentProjection(appointment, ownerIdentifier))
     .sort(compareAppointments);
   });
 }
@@ -675,7 +696,7 @@ export async function listApportionAppointmentsForRequester(requesterIdentifier:
 
   return state.appointments
     .filter((appointment) => participantIdentifiersMatch(appointment.requesterIdentifier, requesterIdentifier))
-    .map((appointment) => ({ ...appointment, notifications: appointment.notifications?.filter((notification) => participantIdentifiersMatch(notification.recipientIdentifier, requesterIdentifier)) }))
+    .map((appointment) => appointmentProjection(appointment, requesterIdentifier))
     .sort(compareAppointments);
   });
 }
@@ -691,7 +712,7 @@ export async function listApportionAppointmentsForActor(identifier: string) {
     }
     const projections = state.appointments.map((appointment) => {
       const access = appointmentAccessFromContext(appointment, identifier, contexts.get(appointment.ownerIdentifier) ?? null);
-      return access.canView ? { ...appointment, notifications: appointment.notifications?.filter((notification) => participantIdentifiersMatch(notification.recipientIdentifier, identifier)), canManage: access.canManage, canMessage: isActiveStatus(appointment.currentStatus) && (access.isRequester || access.canManage) } : null;
+      return access.canView ? { ...appointmentProjection(appointment, identifier), canManage: access.canManage, canMessage: isActiveStatus(appointment.currentStatus) && (access.isRequester || access.canManage) } : null;
     });
     return projections.filter((entry): entry is NonNullable<typeof entry> => entry !== null).sort(compareAppointments);
   });
@@ -789,6 +810,7 @@ async function buildApportionAppointment(state: ApportionState, input: Apportion
     : ownerDayAppointments.length + 1;
 
   const appointment: ApportionAppointment = {
+    messageReadCursors: {}, messageReadBaselineId: null,
     serviceId,
     serviceName: booking.service.name,
     assignedStaffIdentifier: booking.service.assignedIdentifier,
@@ -854,8 +876,8 @@ function expireApportionInvitations(state: ApportionState) {
   return changed;
 }
 
-async function validateInvitationOccurrence(ownerIdentifier: string, locationId: string, serviceId: string, occurrence: { serviceDateKey: string; startsAt: string }, allowPastDay = false, savedSettings?: ApportionProviderSettings) {
-  const booking = await resolveBookingContext(ownerIdentifier, locationId, serviceId);
+async function validateInvitationOccurrence(ownerIdentifier: string, locationId: string, serviceId: string, occurrence: { serviceDateKey: string; startsAt: string }, allowPastDay = false, savedSettings?: ApportionProviderSettings, ownerContext?: ApportionBusinessContext) {
+  const booking = await resolveBookingContext(ownerIdentifier, locationId, serviceId, false, ownerContext);
   if (savedSettings) booking.settings = { ...booking.settings, slotDurationMinutes: savedSettings.slotDurationMinutes, justAddToList: savedSettings.justAddToList };
   const startsAt = new Date(occurrence.startsAt);
   if (Number.isNaN(startsAt.getTime())) throw new Error("Choose a valid appointment date and time.");
@@ -920,16 +942,18 @@ export async function createApportionInvitation(input: {
   actorIdentifier: string; ownerIdentifier: string; serviceId: string; locationId: string;
   requesterIdentifier: string; requesterName: string; requesterPhone?: string | null; notes?: string | null;
   occurrences: Array<{ serviceDateKey: string; startsAt: string }>;
+  recurrence?: ApportionRecurrence | null;
+  recurrenceStartDateKey?: string;
 }) {
   return withAppointmentLock(async () => {
     if (!input.actorIdentifier?.trim() || !input.ownerIdentifier?.trim() || !input.requesterIdentifier?.trim()) throw new ApportionInvitationError("Owner and registered requester are required.");
     if (!matchApportionIdentity(input.actorIdentifier, input.ownerIdentifier)) throw new ApportionInvitationError("Only the business owner can invite a requester.", 403);
     if (matchApportionIdentity(input.requesterIdentifier, input.ownerIdentifier)) throw new ApportionInvitationError("Use normal booking for your own appointment.");
-    if (!Array.isArray(input.occurrences) || !input.occurrences.length || input.occurrences.length > 6) throw new ApportionInvitationError("Choose one to six total occurrences.");
+    if (!Array.isArray(input.occurrences) || !input.occurrences.length || input.occurrences.length > (input.recurrence?.durationCount !== undefined ? 186 : 6)) throw new ApportionInvitationError(input.recurrence?.durationCount !== undefined ? "Choose valid bounded appointment occurrences." : "Choose one to six total occurrences.");
     const occurrences: ApportionInvitation["occurrences"] = [];
     let snapshot: Awaited<ReturnType<typeof resolveBookingContext>> | undefined;
     for (const occurrence of input.occurrences) {
-      const { booking } = await validateInvitationOccurrence(input.ownerIdentifier, input.locationId, input.serviceId, occurrence, false, snapshot?.settings);
+      const { booking } = await validateInvitationOccurrence(input.ownerIdentifier, input.locationId, input.serviceId, occurrence, false, snapshot?.settings, snapshot?.context);
       snapshot ??= booking;
       const startsAt = new Date(occurrence.startsAt).toISOString();
       if (occurrences.some((entry) => entry.serviceDateKey === occurrence.serviceDateKey)) throw new ApportionInvitationError("Choose distinct service days.");
@@ -939,8 +963,30 @@ export async function createApportionInvitation(input: {
     occurrences.sort((first, second) => first.startsAt.localeCompare(second.startsAt));
     if (new Date(occurrences[0].slotEndsAt).getTime() <= Date.now()) throw new ApportionInvitationError("The first appointment slot has already ended.");
     const booking = snapshot!;
+    if (input.recurrence?.durationCount !== undefined) {
+      const horizon = new Date(`${getAppointmentDayKey(new Date().toISOString())}T00:00:00Z`);
+      horizon.setUTCMonth(horizon.getUTCMonth() + 6);
+      const planned = planApportionDateKeys(input.recurrenceStartDateKey ?? "", input.recurrence, (dateKey) => {
+        try {
+          assertProviderOpenOnDay(booking.context, booking.providerIdentifier, input.locationId, dateKey);
+          const master = resolveAppointmentLocationSchedule(booking.context.branding, input.locationId, dateKey);
+          const membership = booking.context.memberships.find((entry) => entry.locationId === input.locationId && booking.providerIdentifier && matchApportionIdentity(entry.providerIdentifier, booking.providerIdentifier));
+          const provider = membership ? resolveAppointmentLocationSchedule({ ...booking.context.branding, appointmentLocations: [{ ...booking.location, ...membership }], appointmentDateOverrides: { closedDateKeys: [], openedDateKeys: [] }, appointmentDateHoursOverrides: [], appointmentWeeklyHoursOverrides: [] }, input.locationId, dateKey) : master;
+          if (!master || !provider) return false;
+          if (!booking.settings.justAddToList) {
+            const first = new Date(input.occurrences[0].startsAt).getTime() - new Date(`${input.occurrences[0].serviceDateKey}T00:00:00+05:30`).getTime();
+            const startsAt = new Date(new Date(`${dateKey}T00:00:00+05:30`).getTime() + first).toISOString();
+            validateAppointmentLocationSlot({ location: provider, serviceDateKey: dateKey, startsAt, slotDurationMinutes: booking.settings.slotDurationMinutes });
+            validateAppointmentLocationSlot({ location: master, serviceDateKey: dateKey, startsAt, slotDurationMinutes: booking.settings.slotDurationMinutes });
+          }
+          return true;
+        } catch { return false; }
+      }, horizon.toISOString().slice(0, 10));
+      if (planned.join() !== occurrences.map((entry) => entry.serviceDateKey).sort().join()) throw new ApportionInvitationError("Occurrences must match the selected duration and working dates.");
+    }
     const timestamp = new Date().toISOString();
     const invitation: ApportionInvitation = {
+      recurrence: input.recurrence ? structuredClone(input.recurrence) : null, recurrenceStartDateKey: input.recurrenceStartDateKey,
       id: createEntityId("apportion-invitation"), status: "pending", ownerIdentifier: booking.context.business.ownerIdentifier,
       creatorIdentifier: input.actorIdentifier.trim(), requesterIdentifier: input.requesterIdentifier.trim(), requesterName: input.requesterName.trim() || "Registered user",
       requesterPhone: input.requesterPhone?.trim() || null, ownerName: booking.context.branding.instituteName || null,
@@ -971,19 +1017,22 @@ export async function respondToApportionInvitation(input: { actorIdentifier: str
     const staged: ApportionState = { ...state, appointments: [...state.appointments] };
     const appointments: ApportionAppointment[] = [];
     if (input.action === "accept") {
+      const ownerContext = await getApportionBusinessContext(invitation.ownerIdentifier);
+      if (!ownerContext) throw new ApportionInvitationError("Appointment business is unavailable.");
       for (const occurrence of invitation.occurrences) {
-        const validated = await validateInvitationOccurrence(invitation.ownerIdentifier, invitation.locationId, invitation.serviceId, occurrence, true, invitation.bookedSettings);
+        const validated = await validateInvitationOccurrence(invitation.ownerIdentifier, invitation.locationId, invitation.serviceId, occurrence, true, invitation.bookedSettings, ownerContext);
         if (staged.appointments.some((entry) => appointmentsShareServiceDay(entry, { ...occurrence, ...invitation })
           && matchApportionIdentity(entry.requesterIdentifier, invitation.requesterIdentifier) && entry.currentStatus !== "cancelled" && entry.currentStatus !== "rejected")) {
           throw new ApportionInvitationError("The requester already has an appointment for this service day.");
         }
         const startsAt = validated.booking.settings.justAddToList ? estimateInvitationQueueStart(staged, invitation, occurrence, validated) : occurrence.startsAt;
         const appointment = await buildApportionAppointment(staged, { ...invitation, ...occurrence, startsAt }, true, validated.booking);
+        appointment.sourceInvitationId = invitation.id;
         staged.appointments.push(appointment);
         appointments.push(appointment);
       }
       for (const appointment of appointments) {
-        const { controllerIdentifier } = await resolveApportionAppointmentAccess(appointment, input.actorIdentifier);
+        const { controllerIdentifier } = appointmentAccessFromContext(appointment, input.actorIdentifier, ownerContext);
         addAppointmentNotifications(appointment, "Appointment booked", `${appointment.serviceName} at ${appointment.locationName} on ${appointment.serviceDateKey}: invitation accepted.`, timestamp, controllerIdentifier);
       }
     }
@@ -1020,7 +1069,7 @@ function reindexOwnerDayQueue(state: ApportionState, ownerIdentifier: string, lo
 }
 
 export async function updateApportionAppointment(input: {
-  action: "cancel" | "done" | "present-in-person" | "push-back" | "reject" | "reschedule" | "send-message";
+  action: "cancel" | "done" | "present-in-person" | "push-back" | "reject" | "reschedule" | "send-message" | "mark-read";
   actorIdentifier: string;
   appointmentsPerSlot?: number;
   appointmentId: string;
@@ -1028,6 +1077,7 @@ export async function updateApportionAppointment(input: {
   nextStartsAt?: string;
   notes?: string | null;
   message?: string;
+  lastMessageId?: string;
   requesterOnly?: boolean;
 }) {
   return withAppointmentLock(async () => {
@@ -1045,7 +1095,22 @@ export async function updateApportionAppointment(input: {
     throw new Error("Appointment not found.");
   }
 
-  const { canManage, isRequester, controllerIdentifier } = await resolveApportionAppointmentAccess(appointment, actorIdentifier);
+  const { canManage, canView, isRequester, controllerIdentifier } = await resolveApportionAppointmentAccess(appointment, actorIdentifier);
+
+  if (input.action === "mark-read") {
+    if (!canView) throw new Error("You can only read your own appointments.");
+    const displayedIndex = appointment.messages.findIndex((message) => message.id === input.lastMessageId);
+    if (displayedIndex < 0) throw new Error("Choose a displayed message to acknowledge.");
+    appointment.messageReadCursors ??= {};
+    const key = Object.keys(appointment.messageReadCursors).find((identifier) => matchApportionIdentity(identifier, actorIdentifier)) ?? actorIdentifier;
+    const previousId = appointment.messageReadCursors[key] ?? appointment.messageReadBaselineId;
+    const previousIndex = appointment.messages.findIndex((message) => message.id === previousId);
+    if (displayedIndex > previousIndex) {
+      appointment.messageReadCursors[key] = appointment.messages[displayedIndex].id;
+      await writeState(state);
+    }
+    return { appointment: appointmentProjection(appointment, actorIdentifier), nextInPersonAppointment: null };
+  }
 
   if (!canManage && !isRequester) {
     throw new Error("You can only update your own appointments.");
@@ -1062,7 +1127,7 @@ export async function updateApportionAppointment(input: {
     }
     appointment.messages.push({ id: createEntityId("message"), authorIdentifier: actorIdentifier, createdAt: timestamp, body });
     await writeState(state);
-    return { appointment, nextInPersonAppointment: null };
+    return { appointment: appointmentProjection(appointment, actorIdentifier), nextInPersonAppointment: null };
   } else if (input.action === "cancel") {
     if (!isRequester) throw new Error("Only the requester can cancel this appointment.");
 

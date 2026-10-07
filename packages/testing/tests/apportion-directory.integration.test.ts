@@ -97,6 +97,19 @@ beforeEach(async () => {
 });
 
 describe("persistent Apportion directory", () => {
+  it("searches service names and full owner/staff phones without disclosing staff phones", async () => {
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: { ...service("staff", STAFF), name: "Paediatrician" } });
+    for (const query of ["clinic", "paediatric", OWNER, STAFF, "9222222222", "+91 92222 22222"]) {
+      const results = await store.listWorkspaceAppointmentBusinesses(query);
+      expect(results).toHaveLength(1);
+      expect(results[0].ownerIdentifier).toBe(OWNER);
+      expect(JSON.stringify(results)).not.toContain(STAFF);
+    }
+    for (const query of ["92222", "+449222222222", "unrelated"]) {
+      expect(await store.listWorkspaceAppointmentBusinesses(query)).toEqual([]);
+    }
+  });
+
   it("persists only newly added future personal leave intents before applying without the testing lock", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {

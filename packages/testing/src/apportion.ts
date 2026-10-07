@@ -74,9 +74,20 @@ export function getApportionServiceLimit(category: string) {
     : category === "trapit-pro" || category === "trapit-pro-limited" ? 4 : 0;
 }
 
-export function getApportionBookableServices(business: ApportionBusiness, category: string) {
-  return business.services.filter((service) => service.active).slice(0, getApportionServiceLimit(category));
+export function getApportionBookableServices(business: ApportionBusiness, category: string, locationId?: string) {
+  const counts = new Map<string, number>();
+  const limit = getApportionServiceLimit(category);
+  return business.services.filter((service) => service.active).flatMap((service) => {
+    const locationIds = service.locationIds.filter((id) => {
+      const count = counts.get(id) ?? 0;
+      counts.set(id, count + 1);
+      return count < limit && (!locationId || id === locationId);
+    });
+    return locationIds.length ? [{ ...service, locationIds }] : [];
+  });
 }
+
+export const APPORTION_NEW_DURATION_MINUTES = [5, 10, 15, 60, 240, 1440] as const;
 
 export function resolveApportionController(business: ApportionBusiness, service: ApportionService) {
   return service.assignedIdentifier || business.adminDelegateIdentifier || business.ownerIdentifier;
@@ -319,9 +330,10 @@ export function assertApportionServiceAssignment(
 ) {
   if (!service.id.trim() || !service.name.trim()) throw new Error("A service ID and name are required.");
   const otherServices = business.services.filter((entry) => entry.id !== service.id);
-  const activeCount = otherServices.filter((entry) => entry.active).length;
   const previous = business.services.find((entry) => entry.id === service.id);
-  if (service.active && !previous?.active && activeCount >= getApportionServiceLimit(category)) {
+  if (service.active && service.locationIds.some((locationId) =>
+    (!previous?.active || !previous.locationIds.includes(locationId))
+    && otherServices.filter((entry) => entry.active && entry.locationIds.includes(locationId)).length >= getApportionServiceLimit(category))) {
     throw new Error("Upgrade to add more services.");
   }
   if (service.assignedIdentifier && otherServices.some((entry) => entry.assignedIdentifier

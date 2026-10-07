@@ -57,9 +57,15 @@ describe("Apportion roles and migration", () => {
     const services = Array.from({ length: 7 }, (_, index) => ({ ...business.services[0], id: `service-${index}`, active: index !== 1 }));
     expect(getApportionBookableServices({ ...business, services }, "trapit-pro").map((service) => service.id)).toEqual(["service-0", "service-2", "service-3", "service-4"]);
     expect(getApportionBookableServices({ ...business, services }, "trapit-normal")).toEqual([]);
-    expect(services).toHaveLength(7);
   });
-
+  it("allocates quotas independently and clips dual-address services after a downgrade", () => {
+    const services = Array.from({ length: 8 }, (_, index) => ({ id: `s-${index}`, name: `Service ${index}`, active: true, assignedIdentifier: null, locationIds: [index < 4 ? "a" : "b"] }));
+    expect(getApportionBookableServices({ ...business, services }, "trapit-pro")).toHaveLength(8);
+    const dual = { ...services[0], id: "dual", locationIds: ["a", "b"] };
+    expect(() => assertApportionServiceAssignment({ ...business, services }, dual, "trapit-pro")).toThrow("Upgrade");
+    expect(() => assertApportionServiceAssignment({ ...business, services }, { ...services[0], locationIds: ["a", "b"] }, "trapit-pro")).toThrow("Upgrade");
+    expect(getApportionBookableServices({ ...business, services: [...services.slice(0, 4), dual] }, "trapit-pro").at(-1)?.locationIds).toEqual(["b"]);
+  });
   it("enforces active quotas and normalized person uniqueness", () => {
     expect(() => assertApportionServiceAssignment(business, { ...business.services[0], id: "duplicate", assignedIdentifier: "9582372662" }, "trapit-pro")).toThrow("only one service");
     const full = { ...business, services: Array.from({ length: 4 }, (_, index) => ({ ...business.services[0], id: `service-${index}`, assignedIdentifier: null })) };

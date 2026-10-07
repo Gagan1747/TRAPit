@@ -49,9 +49,8 @@ import QRCode from "qrcode";
 import { formatShortDate, formatShortDateTime, formatShortDateTimeIst } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { AnswerStatusIndicator } from "./answer-status-indicator";
-import { ApportionAppointmentLog } from "./apportion-appointment-log";
+import { ApportionAppointmentLog, type ApportionInvitation } from "./apportion-appointment-log";
 import { ApportionBusinessSearch } from "./apportion-business-search";
-import { ApportionInvitationLog, type ApportionInvitation } from "./apportion-invitation-log";
 import { ApportionRolePanel } from "./apportion-role-panel";
 import { AssessmentLogTable, type AssessmentLogRow } from "./assessment-log-table";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
@@ -263,63 +262,22 @@ function BusinessWeeklyHoursEditor({
   onHoursChange: (weekday: number, field: "workingHours" | "workingHoursSecondWindow", value: string) => void;
   workingDays: string;
 }) {
-  const [selectedWeekday, setSelectedWeekday] = useState(1);
   const activeDays = parseBusinessDays(workingDays);
-  const selectedDay = BUSINESS_DAILY_HOURS_DAYS.find((day) => day.weekday === selectedWeekday) ?? BUSINESS_DAILY_HOURS_DAYS[1];
-  const selectedHours = dailyHours.find((entry) => entry.weekday === selectedWeekday) ?? {
-    weekday: selectedWeekday,
-    workingHours: "",
-    workingHoursSecondWindow: "",
-  };
-  const blockedIntervals = intervalsForWeekday(blockedWeeklyIntervals, selectedWeekday);
-
   return (
-    <div className="business-weekly-hours">
-      <div className="business-day-grid" role="group" aria-label={`${label} weekdays`}>
+    <div className="business-weekly-hours business-hours-grid" role="group" aria-label={`${label} weekdays`}>
+      <div className="business-hours-grid-head"><span>Day</span><span>Operating hours 1</span><span>Operating hours 2</span></div>
         {BUSINESS_DAILY_HOURS_DAYS.map((day) => {
           const isActive = activeDays.includes(day.key);
+          const hours = dailyHours.find((entry) => entry.weekday === day.weekday);
+          const blockedIntervals = intervalsForWeekday(blockedWeeklyIntervals, day.weekday);
           return (
-            <div className="business-weekday-chip" key={day.key}>
-              <button
-                aria-pressed={selectedWeekday === day.weekday}
-                className={`business-day-toggle${isActive ? " is-active" : ""}${selectedWeekday === day.weekday ? " is-current" : ""}`}
-                title={`Edit ${day.name} hours`}
-                type="button"
-                onClick={() => setSelectedWeekday(day.weekday)}
-              >
-                {day.label}
-              </button>
-              <label>
-                <input aria-label={`${label} works on ${day.name}`} checked={isActive} type="checkbox" onChange={() => onDayToggle(day.weekday)} />
-              </label>
+            <div className="business-hours-grid-row" key={day.key}>
+              <label className="business-hours-day"><input aria-label={`${label} works on ${day.name}`} checked={isActive} type="checkbox" onChange={() => onDayToggle(day.weekday)} />{day.label}</label>
+              <div><BusinessTimeRangeSelector disabled={!isActive} blockedIntervals={blockedIntervals} blockedRanges={[hours?.workingHoursSecondWindow ?? ""].filter(Boolean)} label={`${label} ${day.name} operating hours 1`} value={hours?.workingHours ?? ""} onChange={(value) => onHoursChange(day.weekday, "workingHours", value)} /></div>
+              <div><BusinessTimeRangeSelector disabled={!isActive} blockedIntervals={blockedIntervals} blockedRanges={[hours?.workingHours ?? ""].filter(Boolean)} label={`${label} ${day.name} operating hours 2`} value={hours?.workingHoursSecondWindow ?? ""} onChange={(value) => onHoursChange(day.weekday, "workingHoursSecondWindow", value)} /></div>
             </div>
           );
         })}
-      </div>
-      <strong className="business-weekday-heading">{selectedDay.name}</strong>
-      {activeDays.includes(selectedDay.key) ? (
-        <div className="business-daily-windows">
-          <div>
-            <span className="field-label">Operating hours 1</span>
-            <BusinessTimeRangeSelector
-              blockedIntervals={blockedIntervals}
-              label={`${label} ${selectedDay.name} operating hours`}
-              value={selectedHours.workingHours}
-              onChange={(value) => onHoursChange(selectedWeekday, "workingHours", value)}
-            />
-          </div>
-          <div>
-            <span className="field-label">Operating hours 2</span>
-            <BusinessTimeRangeSelector
-              blockedIntervals={blockedIntervals}
-              blockedRanges={[selectedHours.workingHours].filter(Boolean)}
-              label={`${label} ${selectedDay.name} second window`}
-              value={selectedHours.workingHoursSecondWindow}
-              onChange={(value) => onHoursChange(selectedWeekday, "workingHoursSecondWindow", value)}
-            />
-          </div>
-        </div>
-      ) : <p className="muted-text">Select this day to add operating hours.</p>}
     </div>
   );
 }
@@ -663,6 +621,8 @@ type BrandingResponse = {
 };
 
 type ApportionAppointment = {
+  sourceInvitationId?: string;
+  hasUnreadMessages?: boolean;
   canManage?: boolean;
   canMessage?: boolean;
   serviceId?: string;
@@ -2486,7 +2446,9 @@ export function AdminQuestionWorkspace({
       }
       setFeedback("Appointment cancelled.");
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Unable to cancel appointment.");
+      const message = error instanceof Error ? error.message : "Unable to cancel appointment.";
+      setFeedback(message);
+      return message;
     } finally {
       apportionUpdatePendingRef.current = false;
       setIsApportionUpdating(false);
@@ -2542,7 +2504,9 @@ export function AdminQuestionWorkspace({
           ? "Appointment rescheduled."
           : "Appointment updated.");
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Unable to update appointment.");
+      const message = error instanceof Error ? error.message : "Unable to update appointment.";
+      setFeedback(message);
+      return message;
     } finally {
       apportionUpdatePendingRef.current = false;
       setIsApportionUpdating(false);
@@ -4285,7 +4249,7 @@ export function AdminQuestionWorkspace({
     const nextActiveWeekdays = nextSelectedDays.map((day) => BUSINESS_WEEKDAY_KEYS_BY_JS_DAY.indexOf(day as typeof BUSINESS_WEEKDAY_KEYS_BY_JS_DAY[number]));
     const nextDailyHours = isActive
       ? clearDailyHoursWeekday(businessDailyHours, weekday)
-      : autofillApportionDailyHours(businessDailyHours, sourceWeekday, nextActiveWeekdays, businessCustomizedWeekdays);
+      : businessDailyHours;
     if (isActive) {
       setBusinessCustomizedWeekdays((current) => current.includes(weekday) ? current : [...current, weekday]);
     }
@@ -4310,7 +4274,7 @@ export function AdminQuestionWorkspace({
       const nextActiveWeekdays = nextSelectedDays.map((day) => BUSINESS_WEEKDAY_KEYS_BY_JS_DAY.indexOf(day as typeof BUSINESS_WEEKDAY_KEYS_BY_JS_DAY[number]));
       const dailyHours = isActive
         ? clearDailyHoursWeekday(current.dailyHours, weekday)
-        : autofillApportionDailyHours(current.dailyHours, sourceWeekday, nextActiveWeekdays, current.customizedWeekdays);
+        : current.dailyHours;
       const customizedWeekdays = isActive && !current.customizedWeekdays.includes(weekday)
         ? [...current.customizedWeekdays, weekday]
         : current.customizedWeekdays;
@@ -4333,7 +4297,7 @@ export function AdminQuestionWorkspace({
     const customizedWeekdays = businessCustomizedWeekdays.includes(weekday)
       ? businessCustomizedWeekdays
       : [...businessCustomizedWeekdays, weekday];
-    const next = copyScheduleToBlankActiveDays(businessDailyHours, activeWeekdays, weekday, field, value, customizedWeekdays);
+    const next = businessDailyHours.map((entry) => entry.weekday === weekday ? { ...entry, [field]: value } : entry);
     setBusinessCustomizedWeekdays(customizedWeekdays);
     setBusinessDailyHours(next);
     const summary = next.find((entry) => activeWeekdays.includes(entry.weekday) && (entry.workingHours || entry.workingHoursSecondWindow));
@@ -4348,7 +4312,7 @@ export function AdminQuestionWorkspace({
       const customizedWeekdays = current.customizedWeekdays.includes(weekday)
         ? current.customizedWeekdays
         : [...current.customizedWeekdays, weekday];
-      const dailyHours = copyScheduleToBlankActiveDays(current.dailyHours, activeWeekdays, weekday, field, value, customizedWeekdays);
+      const dailyHours = current.dailyHours.map((entry) => entry.weekday === weekday ? { ...entry, [field]: value } : entry);
       const summary = dailyHours.find((entry) => activeWeekdays.includes(entry.weekday) && (entry.workingHours || entry.workingHoursSecondWindow));
       return { ...current, customizedWeekdays, dailyHours, workingHours: summary?.workingHours ?? "", workingHoursSecondWindow: summary?.workingHoursSecondWindow ?? "" };
     });
@@ -5234,9 +5198,7 @@ export function AdminQuestionWorkspace({
   const businessAppointmentUrl = activeAppointmentShareCode
     ? getApportionAccessUrl(activeAppointmentShareCode)
     : "";
-  const businessDetailsPanel = (
-    <div className="business-details-panel">
-      {businessAppointmentUrl ? (
+  const businessLinkActions = businessAppointmentUrl ? (
         <div className="apportion-link-actions" aria-label="Business booking link actions">
           <button
             aria-label={copiedLinkKey === "business-panel" ? "Booking link copied" : "Copy booking link"}
@@ -5269,7 +5231,9 @@ export function AdminQuestionWorkspace({
             </a>
           ) : null}
         </div>
-      ) : null}
+      ) : null;
+  const businessDetailsPanel = (
+    <div className="business-details-panel">
       <div className="business-details-form">
       <section className="business-form-section">
         <h3>Address &amp; Operating Hours</h3>
@@ -5394,13 +5358,9 @@ export function AdminQuestionWorkspace({
             { label: "5 min", value: "5" },
             { label: "10 min", value: "10" },
             { label: "15 min", value: "15" },
-            { label: "30 min", value: "30" },
-            { label: "45 min", value: "45" },
             { label: "1 hr", value: "60" },
-            { label: "2 hr", value: "120" },
-            { label: "3 hr", value: "180" },
             { label: "4 hr", value: "240" },
-            { label: "All day", value: "1440" },
+            { label: "All Day", value: "1440" },
           ].map((option) => (
             <button aria-pressed={businessSlotDurationMinutes === option.value} className="business-choice-button" key={option.value} type="button" onClick={() => {
               markBrandingDraftDirty();
@@ -5408,6 +5368,7 @@ export function AdminQuestionWorkspace({
             }}>{option.label}</button>
           ))}
         </div>
+        {!["5", "10", "15", "60", "240", "1440"].includes(businessSlotDurationMinutes) ? <span className="muted-text">Current: {businessSlotDurationMinutes} min</span> : null}
         <label htmlFor="business-notes-prompt">Notes explanation text</label>
         <input
           id="business-notes-prompt"
@@ -5418,12 +5379,8 @@ export function AdminQuestionWorkspace({
             setBusinessAppointmentNotesPrompt(event.target.value);
           }}
         />
-        <div className="business-queue-switch-row">
-          <span><strong>Queue booking</strong><small>{businessBookingBehaviorMode === "none" ? "Bookings are currently off" : businessBookingBehaviorMode === "queue" ? "Add requests to a queue" : "Show available slot capacity"}</small></span>
-          <button aria-checked={businessBookingBehaviorMode === "queue"} aria-label="Queue booking" className="business-switch" role="switch" type="button" onClick={() => {
-            markBrandingDraftDirty();
-            setBusinessBookingBehaviorMode((current) => current === "queue" ? "standard" : "queue");
-          }}><span /></button>
+        <div className="business-choice-row business-mode-choices" role="group" aria-label="Booking mode">
+          {[{ label: "Slot Based", value: "standard" }, { label: "Queue Based", value: "queue" }].map((mode) => <button aria-pressed={businessBookingBehaviorMode === mode.value} className="business-choice-button" key={mode.value} type="button" onClick={() => { markBrandingDraftDirty(); setBusinessBookingBehaviorMode(mode.value as "standard" | "queue"); }}>{mode.label}</button>)}
         </div>
       </div>
       </section>
@@ -5568,7 +5525,7 @@ export function AdminQuestionWorkspace({
               </div>
             ))}
           </div>
-        ) : <p className="muted-text">Add up to four images for the booking-page carousel.</p>}
+        ) : null}
       </div>
       </section>
       </div>
@@ -6031,8 +5988,9 @@ export function AdminQuestionWorkspace({
                     <div className="workspace-overflow-head apportion-drawer-header">
                       <div>
                         <p className="eyebrow">APPORTION</p>
-                        <h2 className="section-title" id="apportion-business-panel-title">Business Panel</h2>
+                        <h2 className="section-title" id="apportion-business-panel-title">{brandingInstituteName || "Business Panel"}</h2>
                       </div>
+                      {businessLinkActions}
                       <FloatingWindowCloseButton label="Close Business Panel" onClick={() => setIsApportionBusinessPanelOpen(false)} />
                     </div>
                     <ApportionRolePanel
@@ -6067,13 +6025,14 @@ export function AdminQuestionWorkspace({
                 <div className="question-head">
                   <strong>Appointment log</strong>
                   <div className="inline-actions apportion-log-head-actions">
-                    <span className="status-chip">{combinedApportionAppointments.length}</span>
+                    <span className="status-chip">{combinedApportionAppointments.length + apportionInvitations.filter((entry) => entry.status !== "accepted").length}</span>
                   </div>
                 </div>
-                {upcomingApportionAppointments.length || completedApportionAppointments.length ? (
+                {true ? (
                   <div className="notification-panel-list">
                     <ApportionAppointmentLog
                       appointments={combinedApportionAppointments}
+                      invitations={apportionInvitations}
                       currentIdentifier={currentAdminIdentifier}
                       formatDateTime={formatShortDateTimeIst}
                       getStatusHelper={(appointment) => {
@@ -6104,60 +6063,17 @@ export function AdminQuestionWorkspace({
                       isRequester={(appointment) => participantIdentifiersMatch(appointment.requesterIdentifier, currentAdminIdentifier ?? "")}
                       onAction={({ action, appointmentId }) => {
                         if (action === "cancel") {
-                          void handleCancelApportionAppointment(appointmentId);
+                          return handleCancelApportionAppointment(appointmentId);
                         } else {
-                          void handleApportionAction(appointmentId, action, { requiresConfirmation: action === "reject" });
+                          return handleApportionAction(appointmentId, action, { requiresConfirmation: action === "reject" });
                         }
                       }}
-                      onCancel={(appointmentId) => void handleCancelApportionAppointment(appointmentId)}
+                      onCancel={handleCancelApportionAppointment}
                       onRefresh={() => loadWorkspace({ silent: true })}
-                      onReschedule={(appointment) => {
-                        const sourceAppointment = combinedApportionAppointments.find((entry) => entry.id === appointment.id);
-                        if (sourceAppointment) beginRescheduleApportionAppointment(sourceAppointment);
-                      }}
-                      rescheduleEditor={reschedulingApportionAppointment ? (
-                        <div className="apportion-inline-editor apportion-log-reschedule-editor">
-                          <strong>Reschedule appointment</strong>
-                          <label className="sr-only" htmlFor={`reschedule-date-${reschedulingApportionAppointment.id}`}>New appointment date</label>
-                          <input
-                            className="date-time-input"
-                            id={`reschedule-date-${reschedulingApportionAppointment.id}`}
-                            type="date"
-                            value={rescheduleDateInput}
-                            onChange={(event) => {
-                              setRescheduleDateInput(event.target.value);
-                              setRescheduleDateTimeInput("");
-                            }}
-                          />
-                          <label className="sr-only" htmlFor={`reschedule-${reschedulingApportionAppointment.id}`}>New appointment time slot</label>
-                          <input
-                            className="date-time-input"
-                            id={`reschedule-${reschedulingApportionAppointment.id}`}
-                            list={`reschedule-slots-${reschedulingApportionAppointment.id}`}
-                            placeholder="Choose an operating-hours slot"
-                            value={rescheduleDateTimeInput}
-                            onChange={(event) => setRescheduleDateTimeInput(event.target.value)}
-                          />
-                          <datalist id={`reschedule-slots-${reschedulingApportionAppointment.id}`}>
-                            {reschedulingSlotOptions.map((slotOption) => <option key={slotOption.value} value={slotOption.value}>{slotOption.label}</option>)}
-                          </datalist>
-                          <p className="muted-text">Select an available slot within the provider&apos;s operating hours.</p>
-                          <div className="inline-actions apportion-inline-editor-actions">
-                            <button className="button small-button" disabled={isApportionUpdating} type="button" onClick={() => void submitRescheduleApportionAppointment(reschedulingApportionAppointment)}>Save time</button>
-                            <button className="button-secondary small-button" type="button" onClick={cancelRescheduleApportionAppointment}>Cancel</button>
-                          </div>
-                        </div>
-                      ) : null}
                     />
                   </div>
                 ) : null}
               </article>
-              <ApportionInvitationLog
-                invitations={apportionInvitations}
-                currentIdentifier={currentAdminIdentifier}
-                formatDateTime={formatShortDateTimeIst}
-                onRefresh={() => loadWorkspace({ silent: true })}
-              />
             </section>
           ) : (
             <>

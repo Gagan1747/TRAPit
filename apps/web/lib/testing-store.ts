@@ -31,6 +31,7 @@ import {
   getScheduledTestEndTime,
   normalizeWorkspaceBranding,
   migrateApportionDirectory,
+  matchApportionIdentity,
   normalizeDraft,
   normalizePollQuestionDraft,
   participantIdentifiersMatch as identifiersMatch,
@@ -607,8 +608,11 @@ export async function getWorkspaceBranding(actorKey?: string | null) {
   return state.workspaceBrandingByActor[normalizedActorKey] ?? null;
 }
 
-export async function listWorkspaceAppointmentBusinesses() {
+export async function listWorkspaceAppointmentBusinesses(query?: string) {
   const state = await readStore();
+  const text = query?.trim().toLowerCase() ?? "";
+  const phone = text.replace(/[\s()-]/g, "");
+  const fullPhone = /^(?:\+[1-9]\d{7,14}|\d{10})$/.test(phone);
 
   return Object.entries(state.workspaceBrandingByActor)
     .map(([ownerIdentifier, branding]) => {
@@ -621,6 +625,10 @@ export async function listWorkspaceAppointmentBusinesses() {
       if (!appointmentShareCode || !isAppointmentBusinessProfileComplete(branding)) {
         return null;
       }
+      const business = Object.values(state.apportionDirectory?.businesses ?? {}).find((entry) => matchApportionIdentity(entry.ownerIdentifier, ownerIdentifier));
+      if (text && !name.toLowerCase().includes(text)
+        && !business?.services.some((service) => service.name.toLowerCase().includes(text))
+        && !(fullPhone && (matchApportionIdentity(ownerIdentifier, phone) || business?.services.some((service) => service.assignedIdentifier && matchApportionIdentity(service.assignedIdentifier, phone))))) return null;
 
       return {
         address,
@@ -657,7 +665,7 @@ export async function listWorkspaceAppointmentBusinesses() {
       workingHours: string;
       workingHoursSecondWindow: string;
     } => Boolean(entry))
-    .sort((left, right) => left.name.localeCompare(right.name));
+    .sort((left, right) => left.name.localeCompare(right.name) || left.ownerIdentifier.localeCompare(right.ownerIdentifier));
 }
 
 export async function updateWorkspaceBranding(

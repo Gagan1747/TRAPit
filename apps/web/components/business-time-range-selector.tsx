@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock3, X } from "lucide-react";
+import { Clock3, Plus, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 type TimeRange = {
@@ -11,6 +11,7 @@ type TimeRange = {
 type MinuteInterval = TimeRange;
 
 type BusinessTimeRangeSelectorProps = {
+  disabled?: boolean;
   allowedRanges?: string[];
   allowedIntervals?: MinuteInterval[];
   blockedRanges?: string[];
@@ -53,12 +54,10 @@ function formatTime(minutes: number) {
   return `${displayHours}:${String(normalizedMinutes % 60).padStart(2, "0")} ${suffix}`;
 }
 
-function formatTimelineTime(minutes: number, use24Hour: boolean) {
+function formatTimelineTime(minutes: number) {
   const dayOffset = Math.floor(minutes / MINUTES_PER_DAY);
   const minutesOfDay = minutes % MINUTES_PER_DAY;
-  const time = use24Hour
-    ? `${String(Math.floor(minutesOfDay / 60)).padStart(2, "0")}:${String(minutesOfDay % 60).padStart(2, "0")}`
-    : formatTime(minutesOfDay);
+  const time = formatTime(minutesOfDay);
   return `${time}${dayOffset ? ` (+${dayOffset} day${dayOffset === 1 ? "" : "s"})` : ""}`;
 }
 
@@ -83,10 +82,10 @@ function mergeIntervals(intervals: MinuteInterval[]) {
   return merged;
 }
 
-export function BusinessTimeRangeSelector({ allowedRanges, allowedIntervals, blockedRanges = [], blockedIntervals = [], label, onChange, value }: BusinessTimeRangeSelectorProps) {
+export function BusinessTimeRangeSelector({ disabled = false, allowedRanges, allowedIntervals, blockedRanges = [], blockedIntervals = [], label, onChange, value }: BusinessTimeRangeSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [firstPoint, setFirstPoint] = useState<number | null>(null);
-  const [use24Hour, setUse24Hour] = useState(false);
+  const [visibleEnd, setVisibleEnd] = useState(MINUTES_PER_DAY);
   const timelineRef = useRef<HTMLDivElement | null>(null);
   const blocked = [...blockedRanges.map(parseRange).filter((range): range is TimeRange => Boolean(range)), ...blockedIntervals];
   const allowed = mergeIntervals([
@@ -94,7 +93,9 @@ export function BusinessTimeRangeSelector({ allowedRanges, allowedIntervals, blo
     ...(allowedIntervals ?? []),
   ]);
   const savedRange = parseRange(value);
-  const points = Array.from({ length: (2 * MINUTES_PER_DAY / STEP_MINUTES) + 1 }, (_, index) => index * STEP_MINUTES);
+  const requiredEnd = Math.max(visibleEnd, savedRange?.endMinutes ?? MINUTES_PER_DAY);
+  const maximumEnd = firstPoint === null ? 2 * MINUTES_PER_DAY - STEP_MINUTES : firstPoint + MINUTES_PER_DAY;
+  const points = Array.from({ length: Math.floor(requiredEnd / STEP_MINUTES) + 1 }, (_, index) => index * STEP_MINUTES);
 
   useEffect(() => {
     if (isOpen && timelineRef.current) timelineRef.current.scrollLeft = (8 * 60 / STEP_MINUTES) * 42;
@@ -134,31 +135,32 @@ export function BusinessTimeRangeSelector({ allowedRanges, allowedIntervals, blo
       <div className="business-time-selector-actions">
         <button
           aria-expanded={isOpen}
+          disabled={disabled}
+          aria-label={label}
+          title={label}
           className="button-secondary business-time-trigger"
           type="button"
           onClick={() => {
             setFirstPoint(null);
+            setVisibleEnd(MINUTES_PER_DAY);
             setIsOpen((current) => !current);
           }}
         >
           <Clock3 aria-hidden="true" size={18} />
-          <span>{value || `Set ${label}`}</span>
+          <span className="sr-only">{label}</span>
         </button>
         {value ? (
-          <button aria-label={`Clear ${label}`} className="button-secondary icon-button" title={`Clear ${label}`} type="button" onClick={() => onChange("")}>
+          <button disabled={disabled} aria-label={`Clear ${label}`} className="button-secondary icon-button" title={`Clear ${label}`} type="button" onClick={() => onChange("")}>
             <X aria-hidden="true" size={18} />
           </button>
         ) : null}
       </div>
+      <span className="business-saved-hours">{value || "Not set"}</span>
 
       {isOpen ? (
         <div className="business-time-bar-shell">
           <div className="business-time-bar-tools">
             <strong>{label}</strong>
-            <div className="business-time-format" role="group" aria-label="Time display format">
-              <button aria-pressed={!use24Hour} type="button" onClick={() => setUse24Hour(false)}>12h</button>
-              <button aria-pressed={use24Hour} type="button" onClick={() => setUse24Hour(true)}>24h</button>
-            </div>
             <button className="button-secondary" type="button" disabled={firstPoint === null || overlapsBlockedRange(firstPoint, firstPoint + MINUTES_PER_DAY) || !fitsAllowedRange(firstPoint, firstPoint + MINUTES_PER_DAY)} onClick={() => {
               if (firstPoint !== null) choosePoint(firstPoint + MINUTES_PER_DAY);
             }}>24 hours</button>
@@ -177,7 +179,7 @@ export function BusinessTimeRangeSelector({ allowedRanges, allowedIntervals, blo
               const isSelected = firstPoint === minutes || (firstPoint === null && Boolean(savedRange && minutes >= savedRange.startMinutes && minutes <= savedRange.endMinutes));
               return (
                 <button
-                  aria-label={formatTimelineTime(minutes, use24Hour)}
+                  aria-label={formatTimelineTime(minutes)}
                   aria-pressed={isSelected}
                   className={`business-time-point${isHour ? " is-hour" : " is-half-hour"}${isBlocked ? " is-blocked" : ""}${isSelected ? " is-selected" : ""}${isNextDay ? " is-next-day" : ""}`}
                   disabled={isBlocked || isOutOfSelection || isOutsideAllowed || (firstPoint === null && isNextDay)}
@@ -186,10 +188,11 @@ export function BusinessTimeRangeSelector({ allowedRanges, allowedIntervals, blo
                   onClick={() => choosePoint(minutes)}
                 >
                   <span className="business-time-tick" />
-                  {isHour ? <span className="business-time-label">{formatTimelineTime(minutes, use24Hour)}</span> : null}
+                  {isHour ? <span className="business-time-label">{formatTimelineTime(minutes)}</span> : null}
                 </button>
               );
             })}
+            <button aria-label="Reveal next-day times" title="Reveal next-day times" className="button-secondary icon-button business-time-more" disabled={requiredEnd >= maximumEnd} type="button" onClick={() => setVisibleEnd(Math.min(maximumEnd, requiredEnd + 60))}><Plus aria-hidden="true" size={18} /></button>
           </div>
         </div>
       ) : null}
