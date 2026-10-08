@@ -173,6 +173,13 @@ function createSlotIso(serviceDateKey: string, absoluteMinutes: number) {
   ) - (IST_OFFSET_MINUTES * 60 * 1000)).toISOString();
 }
 
+export function getApportionSlotExpiry(slotEndsAt: string) {
+  const end = new Date(slotEndsAt).getTime();
+  if (!Number.isFinite(end)) throw new Error("A valid saved slot end is required.");
+  const midnight = Math.ceil((end + IST_OFFSET_MINUTES * 60_000) / 86_400_000) * 86_400_000 - IST_OFFSET_MINUTES * 60_000;
+  return new Date(midnight).toISOString();
+}
+
 export function getApportionLifecycleBoundaries(input: {
   location: AppointmentLocation | null;
   serviceDateKey: string;

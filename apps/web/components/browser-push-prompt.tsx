@@ -6,6 +6,7 @@ const DISMISS_UNTIL_KEY = "trapit.browserPushPrompt.dismissUntil";
 const PROMPT_TRIGGER_COUNT_KEY = "trapit.browserPushPrompt.triggerCount";
 const PROMPT_TRIGGER_EVENT = "trapit:notification-prompt-opportunity";
 const DISMISS_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
+let registrationPending: Promise<void> | null = null;
 
 type BrowserPushPromptProps = {
   mode?: "automatic" | "triggered";
@@ -48,21 +49,38 @@ function isPromptDismissed() {
 }
 
 async function registerBrowserPush(publicKey: string) {
+  if (registrationPending) return registrationPending;
+  const operation = registerBrowserPushUnqueued(publicKey);
+  registrationPending = operation;
+  try {
+    await operation;
+  } finally {
+    registrationPending = null;
+  }
+}
+
+async function registerBrowserPushUnqueued(publicKey: string) {
   const registration = await navigator.serviceWorker.register("/sw.js");
   const existingSubscription = await registration.pushManager.getSubscription();
   const subscription = existingSubscription ?? await registration.pushManager.subscribe({
     applicationServerKey: urlBase64ToUint8Array(publicKey),
     userVisibleOnly: true,
   });
-  const response = await fetch("/api/user/web-push-subscriptions", {
-    body: JSON.stringify(subscription),
-    headers: { "Content-Type": "application/json" },
-    method: "POST",
-  });
+  try {
+    const response = await fetch("/api/user/web-push-subscriptions", {
+      body: JSON.stringify(subscription),
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+    });
 
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(payload?.error ?? "Unable to save browser notification settings.");
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(payload?.error ?? "Unable to save browser notification settings.");
+    }
+  } catch (error) {
+    // A failed account rebind must not leave this browser receiving the previous account's pushes.
+    await subscription.unsubscribe();
+    throw error;
   }
 }
 
@@ -77,10 +95,19 @@ export function BrowserPushPrompt({ mode = "triggered", publicKey }: BrowserPush
     }
 
     if (Notification.permission === "granted") {
-      void registerBrowserPush(publicKey).catch((error) => {
-        console.warn("Unable to refresh browser push subscription.", error);
-      });
-      return;
+      const refresh = () => {
+        if (document.visibilityState === "hidden") return;
+        void registerBrowserPush(publicKey).then(() => setFeedback(null)).catch((error) => {
+          setFeedback(error instanceof Error ? error.message : "Unable to refresh browser notifications.");
+        });
+      };
+      refresh();
+      window.addEventListener("focus", refresh);
+      document.addEventListener("visibilitychange", refresh);
+      return () => {
+        window.removeEventListener("focus", refresh);
+        document.removeEventListener("visibilitychange", refresh);
+      };
     }
 
     if (mode === "automatic" && Notification.permission === "default" && !isPromptDismissed()) {
@@ -93,11 +120,16 @@ export function BrowserPushPrompt({ mode = "triggered", publicKey }: BrowserPush
   }, [mode, publicKey]);
 
   useEffect(() => {
-    if (!publicKey || mode !== "triggered" || !isBrowserPushSupported() || Notification.permission !== "default") {
+    if (!publicKey || mode !== "triggered" || !isBrowserPushSupported()) {
       return;
     }
 
     function handlePromptOpportunity() {
+      if (Notification.permission === "granted") {
+        void registerBrowserPush(publicKey!).then(() => setFeedback(null)).catch((error) => setFeedback(error instanceof Error ? error.message : "Unable to refresh browser notifications."));
+        return;
+      }
+      if (Notification.permission !== "default") return;
       if (isPromptDismissed()) {
         return;
       }

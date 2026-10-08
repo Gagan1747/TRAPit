@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import webPush, { type PushSubscription } from "web-push";
+import { createHash } from "node:crypto";
 import { participantIdentifiersMatch } from "@trapit/testing";
 import { listApportionPendingNotifications, markApportionNotificationDelivered, reconcileApportionLifecycle } from "../../../../../lib/apportion-store";
 import { listPendingApportionScheduleNotifications, markApportionScheduleNotificationDelivered, reconcileApportionAddressOptOuts, reconcileApportionProviderLeaves } from "../../../../../lib/apportion-directory";
@@ -10,10 +11,14 @@ import {
   listPushTokens,
   listWebPushSubscriptions,
   recordNotificationDelivery,
+  reconcileBrowserNotificationIntents,
+  browserScheduleInstanceKey,
+  removeWebPushSubscription,
 } from "../../../../../lib/notification-store";
 import {
   listAvailablePollsForParticipant,
   listAvailableTestsForParticipant,
+  listBrowserNotificationSchedules,
 } from "../../../../../lib/testing-store";
 
 const REMINDER_WINDOW_MS = 15 * 60 * 1000;
@@ -95,6 +100,17 @@ async function sendWebPushNotification(subscription: PushSubscription, message: 
   await webPush.sendNotification(subscription, JSON.stringify(message));
 }
 
+function safeNotificationUrl(value: string) {
+  if (!value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return "/user";
+  const url = new URL(value, "https://trapit.invalid");
+  return url.origin === "https://trapit.invalid" ? `${url.pathname}${url.search}${url.hash}` : "/user";
+}
+
+function isDeadSubscription(error: unknown) {
+  const status = (error as { statusCode?: number } | null)?.statusCode;
+  return status === 404 || status === 410;
+}
+
 function buildTestReminder(test: { id: string; startsAt: string; title: string }): ReminderMessage {
   return {
     body: `${test.title} starts at ${formatStartTime(test.startsAt)}.`,
@@ -154,12 +170,21 @@ async function runNotificationWorker(request: Request) {
     })),
   ];
   const webPushConfigured = configureWebPush();
+  const errors: string[] = [];
+  const browserIntents = await reconcileBrowserNotificationIntents(await listBrowserNotificationSchedules());
   let apportionSent = 0;
   for (const notification of apportionNotifications) {
-    const matchingTokens = pushTokens.filter((entry) => entry.userIdentifier && participantIdentifiersMatch(entry.userIdentifier, notification.recipientIdentifier));
-    const matchingSubscriptions = webPushSubscriptions.filter((entry) => entry.userIdentifier && participantIdentifiersMatch(entry.userIdentifier, notification.recipientIdentifier));
+    const allMatchingTokens = pushTokens.filter((entry) => entry.userIdentifier && participantIdentifiersMatch(entry.userIdentifier, notification.recipientIdentifier));
+    const mobileEligible = !("mobilePushEligible" in notification && notification.mobilePushEligible === false);
+    const matchingTokens = mobileEligible ? allMatchingTokens : [];
+    const allMatchingSubscriptions = webPushSubscriptions.filter((entry) => entry.userIdentifier && participantIdentifiersMatch(entry.userIdentifier, notification.recipientIdentifier));
+    const browserEligible = !("webPushEligible" in notification && notification.webPushEligible === false);
+    const matchingSubscriptions = browserEligible ? allMatchingSubscriptions : [];
     const deliveryKey = `apportion:${notification.id}`;
-    let fullyDelivered = matchingTokens.length + matchingSubscriptions.length > 0;
+    let fullyDelivered = matchingTokens.length + matchingSubscriptions.length > 0
+      || (!browserEligible && allMatchingSubscriptions.length > 0)
+      || (!mobileEligible && allMatchingTokens.length > 0)
+      || (!mobileEligible && !browserEligible);
     for (const token of matchingTokens) {
       if (await hasNotificationDelivery(deliveryKey, token.id)) continue;
       try {
@@ -170,16 +195,27 @@ async function runNotificationWorker(request: Request) {
         if (tickets.length !== 1 || tickets[0].status !== "ok") throw new Error("Expo did not accept the notification.");
         await recordNotificationDelivery(deliveryKey, token.id);
         apportionSent += 1;
-      } catch (error) { fullyDelivered = false; console.warn("Unable to send Apportion mobile notification.", error); }
+      } catch (error) { fullyDelivered = false; errors.push("Apportion mobile delivery failed."); console.warn("Unable to send Apportion mobile notification.", error); }
     }
     for (const subscription of matchingSubscriptions) {
       if (await hasNotificationDelivery(deliveryKey, subscription.id)) continue;
-      if (!webPushConfigured) { fullyDelivered = false; continue; }
+      if (!webPushConfigured) { fullyDelivered = false; errors.push("Browser push is not configured."); continue; }
       try {
-        await sendWebPushNotification({ endpoint: subscription.endpoint, keys: subscription.keys }, { title: notification.title, body: notification.body, data: { kind: "apportion", url: notification.url } });
+        const current = (await listWebPushSubscriptions()).find((entry) => entry.id === subscription.id);
+        if (!current || current.userSub !== subscription.userSub || current.userIdentifier !== subscription.userIdentifier) { fullyDelivered = false; continue; }
+        await sendWebPushNotification({ endpoint: subscription.endpoint, keys: subscription.keys }, { title: "TRAPit.in appointment update", body: "An appointment update is available. Sign in to view it.", data: { kind: "apportion", url: safeNotificationUrl(notification.url), deliveryKey } });
         await recordNotificationDelivery(deliveryKey, subscription.id);
         apportionSent += 1;
-      } catch (error) { fullyDelivered = false; console.warn("Unable to send Apportion browser notification.", error); }
+      } catch (error) {
+        if (isDeadSubscription(error)) {
+          await removeWebPushSubscription(subscription.id);
+          await recordNotificationDelivery(deliveryKey, subscription.id);
+        } else {
+          fullyDelivered = false;
+          errors.push("Apportion browser delivery failed.");
+          console.warn("Unable to send Apportion browser notification.", error);
+        }
+      }
     }
     if (fullyDelivered) {
       if (notification.isScheduleNotification) await markApportionScheduleNotificationDelivered(notification.id);
@@ -187,7 +223,6 @@ async function runNotificationWorker(request: Request) {
     }
   }
   const queuedMessages: Array<{ deliveryKey: string; message: ExpoPushMessage; tokenId: string }> = [];
-  const queuedWebMessages: Array<{ deliveryKey: string; message: ReminderMessage; subscription: PushSubscription; subscriptionId: string }> = [];
 
   for (const pushToken of pushTokens) {
     const identifier = pushToken.userIdentifier?.trim();
@@ -246,67 +281,40 @@ async function runNotificationWorker(request: Request) {
     }
   }
 
-  for (const subscription of webPushSubscriptions) {
-    const identifier = subscription.userIdentifier?.trim();
-
-    if (!identifier) {
-      continue;
-    }
-
-    const [availableTests, availablePolls] = await Promise.all([
-      listAvailableTestsForParticipant(identifier),
-      listAvailablePollsForParticipant(identifier),
-    ]);
-
-    for (const test of availableTests.filter((entry) => entry.status === "scheduled" && isStartingSoon(entry.startsAt))) {
-      const deliveryKey = `test:${test.id}:15min`;
-
-      if (await hasNotificationDelivery(deliveryKey, subscription.id)) {
-        continue;
-      }
-
-      queuedWebMessages.push({
-        deliveryKey,
-        message: buildTestReminder(test),
-        subscription: {
-          endpoint: subscription.endpoint,
-          keys: subscription.keys,
-        },
-        subscriptionId: subscription.id,
-      });
-    }
-
-    for (const poll of availablePolls.filter((entry) => entry.status === "scheduled" && isStartingSoon(entry.startsAt))) {
-      const deliveryKey = `poll:${poll.id}:15min`;
-
-      if (await hasNotificationDelivery(deliveryKey, subscription.id)) {
-        continue;
-      }
-
-      queuedWebMessages.push({
-        deliveryKey,
-        message: buildPollReminder(poll),
-        subscription: {
-          endpoint: subscription.endpoint,
-          keys: subscription.keys,
-        },
-        subscriptionId: subscription.id,
-      });
-    }
-  }
-
   await sendExpoPushNotifications(queuedMessages.map((entry) => entry.message));
 
   let webSent = 0;
 
-  if (webPushConfigured) {
-    for (const queuedWebMessage of queuedWebMessages) {
+  for (const intent of browserIntents) {
+    const matchingSubscriptions = webPushSubscriptions.filter((entry) => entry.userIdentifier && participantIdentifiersMatch(entry.userIdentifier, intent.recipientIdentifier));
+    for (const subscription of matchingSubscriptions) {
+      if (await hasNotificationDelivery(intent.key, subscription.id)) continue;
+      if (!webPushConfigured) { errors.push("Browser push is not configured."); continue; }
       try {
-        await sendWebPushNotification(queuedWebMessage.subscription, queuedWebMessage.message);
-        await recordNotificationDelivery(queuedWebMessage.deliveryKey, queuedWebMessage.subscriptionId);
+        const current = (await listWebPushSubscriptions()).find((entry) => entry.id === subscription.id);
+        if (!current || current.userSub !== subscription.userSub || current.userIdentifier !== subscription.userIdentifier) continue;
+        const schedule = (await listBrowserNotificationSchedules()).find((entry) => browserScheduleInstanceKey(entry) === intent.instanceKey);
+        const now = Date.now();
+        if (!schedule || Date.parse(schedule.endsAt) <= now
+          || !schedule.recipients.some((recipient) => participantIdentifiersMatch(recipient, intent.recipientIdentifier))
+          || (intent.phase === "15min" && (now >= Date.parse(schedule.startsAt) || now < Date.parse(schedule.startsAt) - REMINDER_WINDOW_MS))
+          || (intent.phase === "start" && now < Date.parse(schedule.startsAt))) continue;
+        const eventLabel = intent.phase === "confirmed" ? "scheduling confirmed" : intent.phase === "start" ? "starting now" : "starting soon";
+        await sendWebPushNotification({ endpoint: current.endpoint, keys: current.keys }, {
+          title: `TRAPit.in ${intent.kind} ${eventLabel}`,
+          body: "Sign in to view your scheduled activity.",
+          data: { kind: intent.kind, url: intent.kind === "test" ? `/user/test/${encodeURIComponent(intent.entityId)}` : "/user?section=polls", deliveryKey: createHash("sha256").update(intent.key).digest("hex") },
+        });
+        await recordNotificationDelivery(intent.key, subscription.id);
         webSent += 1;
       } catch (error) {
-        console.warn("Unable to send browser push notification.", error);
+        if (isDeadSubscription(error)) {
+          await removeWebPushSubscription(subscription.id);
+          await recordNotificationDelivery(intent.key, subscription.id);
+        } else {
+          errors.push("Browser push delivery failed.");
+          console.warn("Unable to send browser push notification.", error);
+        }
       }
     }
   }
@@ -323,5 +331,6 @@ async function runNotificationWorker(request: Request) {
     sent: queuedMessages.length + webSent + apportionSent,
     tokensChecked: pushTokens.length,
     webPushConfigured: Boolean(process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY?.trim() && process.env.WEB_PUSH_PRIVATE_KEY?.trim()),
-  });
+    errors: [...new Set(errors)],
+  }, { status: errors.length ? 503 : 200 });
 }

@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { planApportionDateKeys } from "../src/apportion-recurrence";
+import { findNextApportionRecurringDate, planApportionDateKeys } from "../src/apportion-recurrence";
 
 describe("Apportion invitation recurrence", () => {
+  it("anchors Wed 7th Tue/Thu/Sat selections to the nearest Thursday", () => {
+    expect(findNextApportionRecurringDate("2026-10-07", "2027-04-07", { mode: "weekly", weekdayKeys: ["Tue", "Thu", "Sat"] }, () => true)).toBe("2026-10-08");
+  });
+  it("includes today with availability and advances if its selected time is unavailable", () => {
+    const recurrence = { mode: "weekly" as const, weekdayKeys: ["Wed", "Thu"] };
+    expect(findNextApportionRecurringDate("2026-10-07", "2027-04-07", recurrence, () => true)).toBe("2026-10-07");
+    expect(findNextApportionRecurringDate("2026-10-07", "2027-04-07", recurrence, (key) => key !== "2026-10-07")).toBe("2026-10-08");
+  });
+  it("anchors monthly dates to the nearest valid selected date including clamped month ends", () => {
+    expect(findNextApportionRecurringDate("2026-10-07", "2027-04-07", { mode: "monthly", monthDays: [5, 10, 20] }, () => true)).toBe("2026-10-10");
+    expect(findNextApportionRecurringDate("2027-02-27", "2027-03-31", { mode: "monthly", monthDays: [30, 31] }, () => true)).toBe("2027-02-28");
+    expect(findNextApportionRecurringDate("2026-10-07", "2027-04-07", { mode: "weekly", weekdayKeys: [] }, () => true)).toBeNull();
+  });
   it("includes twelve working dates in six weeks and excludes the end boundary", () => {
     const dates = planApportionDateKeys("2026-10-05", { mode: "weekly", durationCount: 6, weekdayKeys: ["Mon", "Thu"] }, () => true);
     expect(dates).toHaveLength(12);

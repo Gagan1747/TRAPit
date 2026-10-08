@@ -27,8 +27,9 @@ type OwnerOperatingHours = {
 
 async function buildApportionDashboardPayload(actor: WorkspaceActor & { identifier: string }) {
   const actorIdentifier = actor.identifier;
+  const ownBranding = actor.isSuperAdmin ? await getWorkspaceBranding(actorIdentifier) : null;
   const [appointmentShareCode, availableBusinesses, appointments, invitations] = await Promise.all([
-    getApportionServiceLimit(actor.userCategory) > 0 ? getOrCreateWorkspaceAppointmentShareCode(actorIdentifier) : Promise.resolve(null),
+    getApportionServiceLimit(actor.userCategory) > 0 || Boolean(ownBranding) ? getOrCreateWorkspaceAppointmentShareCode(actorIdentifier) : Promise.resolve(null),
     listWorkspaceAppointmentBusinesses(),
     listApportionAppointmentsForActor(actorIdentifier),
     listApportionInvitationsForActor(actorIdentifier),

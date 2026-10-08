@@ -413,7 +413,7 @@ export async function GET(
       ]);
       const queues = Object.entries(appointments
         .filter((appointment) => (appointment.serviceId || "consultation") === option.id)
-        .filter((appointment) => appointment.currentStatus === "pending" || appointment.currentStatus === "present-in-person" || appointment.currentStatus === "pushed-back")
+        .filter((appointment) => appointment.currentStatus === "pending" || appointment.currentStatus === "present-in-person" || appointment.currentStatus === "pushed-back" || appointment.currentStatus === "delayed")
         .reduce<Record<string, number>>((result, appointment) => {
           const key = `${appointment.locationId}::${appointment.serviceDateKey}`;
           result[key] = (result[key] ?? 0) + 1;
@@ -487,7 +487,7 @@ export async function GET(
   const queueCounts = Object.entries(
     ownerAppointments
       .filter((appointment) => (appointment.serviceId || "consultation") === serviceId)
-      .filter((appointment) => appointment.currentStatus === "pending" || appointment.currentStatus === "present-in-person" || appointment.currentStatus === "pushed-back")
+      .filter((appointment) => appointment.currentStatus === "pending" || appointment.currentStatus === "present-in-person" || appointment.currentStatus === "pushed-back" || appointment.currentStatus === "delayed")
       .reduce<Record<string, number>>((counts, appointment) => {
         const key = `${appointment.locationId}::${appointment.serviceDateKey}`;
         counts[key] = (counts[key] ?? 0) + 1;
@@ -677,7 +677,7 @@ export async function POST(
       const ownerAppointments = await listApportionAppointmentsForOwner(business.ownerIdentifier);
       const activeAppointments = ownerAppointments.filter((appointment) => appointment.locationId === location.id
         && (appointment.serviceId || "consultation") === serviceId
-        && ["pending", "present-in-person", "pushed-back"].includes(appointment.currentStatus));
+        && ["pending", "present-in-person", "pushed-back", "delayed"].includes(appointment.currentStatus));
       const occurrences = dateKeys.map((serviceDateKey) => {
         const branding = getLocationBranding(serviceDateKey);
         if (business.branding.justAddToList) {
@@ -748,7 +748,7 @@ export async function POST(
       && (appointment.serviceId || "consultation") === serviceId
       && (appointment.currentStatus === "pending"
         || appointment.currentStatus === "present-in-person"
-        || appointment.currentStatus === "pushed-back"),
+        || appointment.currentStatus === "pushed-back" || appointment.currentStatus === "delayed"),
     );
 
     if (recurrence) {
@@ -758,7 +758,7 @@ export async function POST(
         && appointment.serviceDateKey === recurringDateKey
         && (appointment.currentStatus === "pending"
           || appointment.currentStatus === "present-in-person"
-          || appointment.currentStatus === "pushed-back"),
+          || appointment.currentStatus === "pushed-back" || appointment.currentStatus === "delayed"),
       ));
 
       if (conflictingDateKey) {

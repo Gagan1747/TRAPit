@@ -4,7 +4,7 @@ import { createEntityId, getApportionBookableServices, getApportionWeeklyInterva
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getApportionBusinessContext, type ApportionBusinessContext } from "./apportion-directory";
-import { getApportionLifecycleBoundaries, resolveAppointmentLocationSchedule, validateAppointmentLocationSlot } from "./appointment-locations";
+import { getApportionLifecycleBoundaries, getApportionSlotExpiry, resolveAppointmentLocationSchedule, validateAppointmentLocationSlot } from "./appointment-locations";
 
 const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
@@ -34,6 +34,9 @@ export type ApportionAppointment = {
   notes: string | null;
   originalStartsAt?: string;
   slotEndsAt?: string;
+  slotExpiresAt?: string;
+  slotRestoredAt?: string;
+  queueConversionReviewAt?: string;
   queueExpiresAt?: string;
   queueConvertedAt?: string;
   ownerIdentifier: string;
@@ -56,6 +59,7 @@ export type ApportionAppointmentMessage = {
 };
 
 export type ApportionAppointmentStatus =
+  | "delayed"
   | "pending"
   | "present-in-person"
   | "done"
@@ -65,6 +69,8 @@ export type ApportionAppointmentStatus =
   | "cancelled";
 
 export type ApportionAppointmentHistoryAction =
+  | "delayed"
+  | "slot-restored"
   | "booked"
   | "present-in-person"
   | "done"
@@ -122,6 +128,8 @@ export class ApportionInvitationError extends Error {
 }
 
 export type ApportionNotification = {
+  mobilePushEligible?: boolean;
+  webPushEligible?: boolean;
   id: string;
   recipientIdentifier: string;
   title: string;
@@ -156,7 +164,8 @@ function withAppointmentLock<Result>(operation: () => Promise<Result>): Promise<
 }
 
 function normalizeStatus(value: string | null | undefined, canceledAt: string | null): ApportionAppointmentStatus {
-  if (value === "pending"
+  if (value === "delayed"
+    || value === "pending"
     || value === "present-in-person"
     || value === "done"
     || value === "pushed-back"
@@ -170,7 +179,9 @@ function normalizeStatus(value: string | null | undefined, canceledAt: string | 
 }
 
 function normalizeHistoryAction(value: string | null | undefined): ApportionAppointmentHistoryAction | null {
-  if (value === "booked"
+  if (value === "delayed"
+    || value === "slot-restored"
+    || value === "booked"
     || value === "present-in-person"
     || value === "done"
     || value === "pushed-back"
@@ -320,7 +331,7 @@ async function resolveBookingContext(ownerIdentifier: string, locationId: string
 }
 
 function isActiveStatus(status: ApportionAppointmentStatus) {
-  return status === "pending" || status === "present-in-person" || status === "pushed-back";
+  return status === "pending" || status === "present-in-person" || status === "pushed-back" || status === "delayed";
 }
 
 function addAppointmentNotifications(appointment: ApportionAppointment, title: string, body: string, timestamp: string, controllerIdentifier?: string | null) {
@@ -374,6 +385,28 @@ async function applyMissedTransitions(state: ApportionState) {
 
   for (const appointment of state.appointments) {
     if (!isActiveStatus(appointment.currentStatus)) continue;
+    if (appointment.justAddToList && appointment.queueConvertedAt && !appointment.slotRestoredAt) {
+      const conversionIndex = appointment.history.findIndex((entry) => entry.action === "pushed-back"
+        && entry.actorIdentifier === "system" && entry.at === appointment.queueConvertedAt);
+      const automaticallyConverted = appointment.bookedSettings?.justAddToList === false && conversionIndex >= 0
+        && !appointment.history.slice(conversionIndex + 1).some((entry) => ["rejected", "pushed-back", "rescheduled"].includes(entry.action));
+      if (automaticallyConverted) {
+        appointment.justAddToList = false;
+        delete appointment.queueConvertedAt;
+        appointment.slotRestoredAt = timestamp;
+        appointment.currentStatus = "pending";
+        appointment.history.push(createHistoryEntry({ action: "slot-restored", actorIdentifier: "system", at: timestamp,
+          toStartsAt: appointment.startsAt, note: "Restored an automatically converted slot; original history retained." }));
+        for (const notice of appointment.notifications ?? []) {
+          if (notice.title === "Appointment moved to queue" && !notice.deliveredAt) notice.deliveredAt = timestamp;
+        }
+        changed = true;
+      } else if (!appointment.queueConversionReviewAt && conversionIndex >= 0) {
+        console.warn("Unable to safely restore automatically converted appointment; manual review required.", { appointmentId: appointment.id });
+        appointment.queueConversionReviewAt = timestamp;
+        changed = true;
+      }
+    }
     if (!appointment.slotEndsAt || !appointment.queueExpiresAt) {
       if (!contexts.has(appointment.ownerIdentifier)) contexts.set(appointment.ownerIdentifier, await getApportionBusinessContext(appointment.ownerIdentifier));
       const context = contexts.get(appointment.ownerIdentifier) ?? null;
@@ -384,11 +417,18 @@ async function applyMissedTransitions(state: ApportionState) {
       appointment.queueExpiresAt ||= boundaries.queueExpiresAt;
       changed = true;
     }
-    if (Date.now() < new Date(appointment.queueExpiresAt!).getTime()) {
-      if (!appointment.justAddToList && Date.now() >= new Date(appointment.slotEndsAt!).getTime()) {
-        moveToQueue(state, appointment, timestamp, "system", "pushed-back");
+    if (!appointment.justAddToList && !appointment.slotExpiresAt) {
+      appointment.slotExpiresAt = getApportionSlotExpiry(appointment.slotEndsAt!);
+      changed = true;
+    }
+    const expiresAt = appointment.justAddToList ? appointment.queueExpiresAt! : appointment.slotExpiresAt!;
+    if (Date.now() < new Date(expiresAt).getTime()) {
+      if (!appointment.justAddToList && appointment.currentStatus !== "delayed" && Date.now() >= new Date(appointment.slotEndsAt!).getTime()) {
+        appointment.currentStatus = "delayed";
+        appointment.statusUpdatedAt = timestamp;
+        appointment.history.push(createHistoryEntry({ action: "delayed", actorIdentifier: "system", at: timestamp, toStartsAt: appointment.startsAt }));
         const { controllerIdentifier } = await resolveApportionAppointmentAccess(appointment, "system");
-        addAppointmentNotifications(appointment, "Appointment moved to queue", `${appointment.serviceName || "Consultation"} at ${appointment.locationName}: the booked slot ended. Your appointment remains in the service-day queue without a fixed time.`, timestamp, controllerIdentifier);
+        addAppointmentNotifications(appointment, "Appointment delayed", `${appointment.serviceName || "Consultation"} at ${appointment.locationName}: the booked slot ended. The appointment remains active with its original slot time.`, timestamp, controllerIdentifier);
         changed = true;
       }
       continue;
@@ -403,7 +443,7 @@ async function applyMissedTransitions(state: ApportionState) {
       toStartsAt: appointment.startsAt,
     }));
     const { controllerIdentifier } = await resolveApportionAppointmentAccess(appointment, "system");
-    addAppointmentNotifications(appointment, "Appointment missed", `${appointment.serviceName || "Consultation"} at ${appointment.locationName} on ${appointment.serviceDateKey} was not completed before the service-day queue expired.`, timestamp, controllerIdentifier);
+    addAppointmentNotifications(appointment, "Appointment missed", `${appointment.serviceName || "Consultation"} at ${appointment.locationName} on ${appointment.serviceDateKey} was not completed before its day-end cutoff.`, timestamp, controllerIdentifier);
     changed = true;
   }
 
@@ -848,6 +888,13 @@ async function buildApportionAppointment(state: ApportionState, input: Apportion
     startsAt: startsAt.toISOString(),
   };
   appointment.messages = normalizeMessages(appointment);
+  if (!appointment.justAddToList) appointment.slotExpiresAt = getApportionSlotExpiry(appointment.slotEndsAt!);
+  appointment.notifications!.push({
+    mobilePushEligible: false,
+    id: createEntityId("apportion-notification"), recipientIdentifier: appointment.ownerIdentifier,
+    title: "New appointment", body: `A new ${appointment.serviceName || "Consultation"} appointment was booked at ${appointment.locationName}.`,
+    url: `/user?section=apportion&appointmentId=${encodeURIComponent(appointment.id)}`, createdAt, deliveredAt: null,
+  });
 
   return appointment;
 }
@@ -995,6 +1042,9 @@ export async function createApportionInvitation(input: {
       expiresAt: occurrences[0].slotEndsAt, occurrences, appointmentIds: [], notifications: [], bookedSettings: { ...booking.settings },
     };
     addInvitationNotifications(invitation, "Appointment invitation", `${invitation.serviceName} at ${invitation.locationName}: ${occurrences.length} appointment(s) awaiting acceptance.`, timestamp);
+    for (const notification of invitation.notifications) {
+      notification.webPushEligible = matchApportionIdentity(notification.recipientIdentifier, invitation.requesterIdentifier);
+    }
     const state = await readState();
     state.invitations.push(invitation);
     await writeState(state);
@@ -1028,6 +1078,7 @@ export async function respondToApportionInvitation(input: { actorIdentifier: str
         const startsAt = validated.booking.settings.justAddToList ? estimateInvitationQueueStart(staged, invitation, occurrence, validated) : occurrence.startsAt;
         const appointment = await buildApportionAppointment(staged, { ...invitation, ...occurrence, startsAt }, true, validated.booking);
         appointment.sourceInvitationId = invitation.id;
+        appointment.notifications = [];
         staged.appointments.push(appointment);
         appointments.push(appointment);
       }
@@ -1156,7 +1207,7 @@ export async function updateApportionAppointment(input: {
       throw new Error("Only active appointments can be marked present.");
     }
 
-    appointment.currentStatus = "present-in-person";
+    appointment.currentStatus = !appointment.justAddToList && appointment.slotEndsAt && Date.now() >= new Date(appointment.slotEndsAt).getTime() ? "delayed" : "present-in-person";
     appointment.presentInPersonAt = timestamp;
     appointment.statusUpdatedAt = timestamp;
     appointment.history.push(createHistoryEntry({
@@ -1191,6 +1242,7 @@ export async function updateApportionAppointment(input: {
     if (!isActiveStatus(appointment.currentStatus)) {
       throw new Error("Only active appointments can be pushed back.");
     }
+    if (!appointment.justAddToList) throw new Error("Slot appointments cannot be moved into a queue.");
 
     const activeAppointments = state.appointments
       .filter((entry) => appointmentsShareServiceDay(entry, appointment))
@@ -1227,6 +1279,7 @@ export async function updateApportionAppointment(input: {
     if (!isActiveStatus(appointment.currentStatus)) {
       throw new Error("Only active appointments can be rejected.");
     }
+    if (!appointment.justAddToList) throw new Error("Absent is available only for queue appointments.");
 
     moveToQueue(state, appointment, timestamp, actorIdentifier, "rejected");
     addAppointmentNotifications(appointment, "Appointment moved back", `${appointment.serviceName || "Consultation"} at ${appointment.locationName}: marked absent and moved in the service-day queue.`, timestamp, controllerIdentifier);
@@ -1270,6 +1323,7 @@ export async function updateApportionAppointment(input: {
     appointment.startsAt = nextStartsAt.toISOString();
     appointment.serviceDateKey = nextServiceDateKey;
     Object.assign(appointment, bookingBoundaries(appointment, booking.context, appointment.bookedSettings?.slotDurationMinutes ?? booking.settings.slotDurationMinutes));
+    appointment.slotExpiresAt = getApportionSlotExpiry(appointment.slotEndsAt!);
     appointment.currentStatus = "pending";
     appointment.presentInPersonAt = null;
     appointment.statusUpdatedAt = timestamp;

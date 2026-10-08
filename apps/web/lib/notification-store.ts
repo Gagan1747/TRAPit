@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createEntityId } from "@trapit/testing";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
@@ -38,10 +38,42 @@ type NotificationDelivery = {
 };
 
 type NotificationState = {
+  browserBaseline?: boolean;
+  browserObserved?: string[];
+  browserIntents?: BrowserNotificationIntent[];
   deliveries: NotificationDelivery[];
   pushTokens: StoredPushToken[];
   webPushSubscriptions: StoredWebPushSubscription[];
 };
+
+export type BrowserSchedule = {
+  kind: "test" | "poll";
+  id: string;
+  startsAt: string;
+  endsAt: string;
+  recipients: string[];
+};
+
+export type BrowserNotificationIntent = {
+  key: string;
+  instanceKey: string;
+  recipientIdentifier: string;
+  kind: "test" | "poll";
+  entityId: string;
+  phase: "confirmed" | "15min" | "start";
+};
+
+const queueGlobal = globalThis as typeof globalThis & { trapitNotificationQueues?: Map<string, Promise<unknown>> };
+const queues = queueGlobal.trapitNotificationQueues ??= new Map();
+function serialized<T>(operation: () => Promise<T>): Promise<T> {
+  const result = (queues.get(STORE_PATH) ?? Promise.resolve()).then(operation);
+  queues.set(STORE_PATH, result.then(() => undefined, () => undefined));
+  return result;
+}
+
+export function browserScheduleInstanceKey(schedule: BrowserSchedule) {
+  return `${schedule.kind}:${schedule.id}:${schedule.startsAt}`;
+}
 
 function normalizePlatform(value: unknown): StoredPushToken["platform"] {
   return value === "android" || value === "ios" ? value : "unknown";
@@ -73,6 +105,9 @@ async function ensureStoreDirectory() {
 
 function normalizeState(parsed: Partial<NotificationState>): NotificationState {
   return {
+    browserBaseline: parsed.browserBaseline === true,
+    browserObserved: parsed.browserObserved ?? [],
+    browserIntents: parsed.browserIntents ?? [],
     deliveries: (parsed.deliveries ?? []).map((delivery) => ({
       deliveredAt: delivery.deliveredAt ?? new Date().toISOString(),
       key: delivery.key ?? "",
@@ -121,7 +156,9 @@ async function readState() {
 
 async function writeState(state: NotificationState) {
   await ensureStoreDirectory();
-  await writeFile(STORE_PATH, JSON.stringify(state, null, 2), "utf8");
+  const stagingPath = `${STORE_PATH}.${process.pid}.tmp`;
+  await writeFile(stagingPath, JSON.stringify(state, null, 2), "utf8");
+  await rename(stagingPath, STORE_PATH);
 }
 
 export function isExpoPushToken(value: string) {
@@ -129,6 +166,16 @@ export function isExpoPushToken(value: string) {
 }
 
 export async function upsertPushToken(input: {
+  deviceName?: string | null;
+  platform?: string | null;
+  token: string;
+  userIdentifier: string | null;
+  userSub: string | null;
+}) {
+  return serialized(() => upsertPushTokenUnqueued(input));
+}
+
+async function upsertPushTokenUnqueued(input: {
   deviceName?: string | null;
   platform?: string | null;
   token: string;
@@ -172,8 +219,7 @@ export async function upsertPushToken(input: {
 }
 
 export async function listPushTokens() {
-  const state = await readState();
-  return state.pushTokens;
+  return serialized(async () => (await readState()).pushTokens);
 }
 
 export async function upsertWebPushSubscription(input: {
@@ -186,11 +232,21 @@ export async function upsertWebPushSubscription(input: {
   userIdentifier: string | null;
   userSub: string | null;
 }) {
+  return serialized(() => upsertWebPushSubscriptionUnqueued(input));
+}
+
+async function upsertWebPushSubscriptionUnqueued(input: {
+  endpoint: string;
+  keys: { auth?: string; p256dh?: string };
+  userAgent?: string | null;
+  userIdentifier: string | null;
+  userSub: string | null;
+}) {
   const endpoint = input.endpoint.trim();
   const auth = input.keys.auth?.trim() ?? "";
   const p256dh = input.keys.p256dh?.trim() ?? "";
 
-  if (!endpoint || !auth || !p256dh) {
+  if (!endpoint || !auth || !p256dh || !input.userSub?.trim() || !input.userIdentifier?.trim()) {
     throw new Error("A valid web push subscription is required.");
   }
 
@@ -199,11 +255,15 @@ export async function upsertWebPushSubscription(input: {
   const existingSubscription = state.webPushSubscriptions.find((entry) => entry.endpoint === endpoint);
 
   if (existingSubscription) {
+    if (existingSubscription.userSub !== input.userSub?.trim()
+      || existingSubscription.userIdentifier !== input.userIdentifier?.trim()) {
+      existingSubscription.id = createEntityId("web-push-subscription");
+    }
     existingSubscription.keys = { auth, p256dh };
     existingSubscription.lastSeenAt = timestamp;
     existingSubscription.userAgent = input.userAgent?.trim() || existingSubscription.userAgent;
-    existingSubscription.userIdentifier = input.userIdentifier?.trim() || existingSubscription.userIdentifier;
-    existingSubscription.userSub = input.userSub?.trim() || existingSubscription.userSub;
+    existingSubscription.userIdentifier = input.userIdentifier.trim();
+    existingSubscription.userSub = input.userSub.trim();
     await writeState(state);
     return existingSubscription;
   }
@@ -225,16 +285,18 @@ export async function upsertWebPushSubscription(input: {
 }
 
 export async function listWebPushSubscriptions() {
-  const state = await readState();
-  return state.webPushSubscriptions;
+  return serialized(async () => (await readState()).webPushSubscriptions);
 }
 
 export async function hasNotificationDelivery(key: string, tokenId: string) {
-  const state = await readState();
-  return state.deliveries.some((delivery) => delivery.key === key && delivery.tokenId === tokenId);
+  return serialized(async () => (await readState()).deliveries.some((delivery) => delivery.key === key && delivery.tokenId === tokenId));
 }
 
 export async function recordNotificationDelivery(key: string, tokenId: string) {
+  return serialized(() => recordNotificationDeliveryUnqueued(key, tokenId));
+}
+
+async function recordNotificationDeliveryUnqueued(key: string, tokenId: string) {
   const state = await readState();
 
   if (state.deliveries.some((delivery) => delivery.key === key && delivery.tokenId === tokenId)) {
@@ -248,6 +310,56 @@ export async function recordNotificationDelivery(key: string, tokenId: string) {
       tokenId,
     },
     ...state.deliveries,
-  ].slice(0, 5000);
+  ];
   await writeState(state);
+}
+
+export async function removeWebPushSubscription(id: string) {
+  return serialized(async () => {
+    const state = await readState();
+    state.webPushSubscriptions = state.webPushSubscriptions.filter((entry) => entry.id !== id);
+    await writeState(state);
+  });
+}
+
+export async function removeOwnedWebPushSubscription(endpoint: string, userSub: string) {
+  return serialized(async () => {
+    const state = await readState();
+    state.webPushSubscriptions = state.webPushSubscriptions.filter((entry) => entry.endpoint !== endpoint || entry.userSub !== userSub);
+    await writeState(state);
+  });
+}
+
+export async function reconcileBrowserNotificationIntents(schedules: BrowserSchedule[], now = Date.now()) {
+  return serialized(async () => {
+    const state = await readState();
+    const observed = new Set(state.browserObserved);
+    const intents = new Map((state.browserIntents ?? []).map((entry) => [entry.key, entry]));
+    const eligible = new Set<string>();
+    for (const schedule of schedules) {
+      if (!Number.isFinite(Date.parse(schedule.startsAt)) || !Number.isFinite(Date.parse(schedule.endsAt)) || Date.parse(schedule.endsAt) <= now) continue;
+      const instanceKey = browserScheduleInstanceKey(schedule);
+      for (const recipientIdentifier of new Set(schedule.recipients.map((value) => value.trim().toLowerCase()).filter(Boolean))) {
+        const recipientKey = `${instanceKey}:${recipientIdentifier}`;
+        eligible.add(recipientKey);
+        const phases: BrowserNotificationIntent["phase"][] = ["15min", "start"];
+        // Bootstrap marks existing schedules as observed, never replaying old confirmations.
+        if (state.browserBaseline && !observed.has(recipientKey)) phases.push("confirmed");
+        for (const phase of phases) {
+          const key = `browser:${recipientKey}:${phase}`;
+          if (!intents.has(key)) intents.set(key, { key, instanceKey, recipientIdentifier, kind: schedule.kind, entityId: schedule.id, phase });
+        }
+        observed.add(recipientKey);
+      }
+    }
+    state.browserBaseline = true;
+    state.browserObserved = [...observed];
+    state.browserIntents = [...intents.values()].filter((entry) => eligible.has(`${entry.instanceKey}:${entry.recipientIdentifier}`));
+    await writeState(state);
+    return state.browserIntents.filter((entry) => {
+      const schedule = schedules.find((item) => browserScheduleInstanceKey(item) === entry.instanceKey)!;
+      const start = Date.parse(schedule.startsAt);
+      return entry.phase === "confirmed" || (entry.phase === "15min" ? now >= start - 15 * 60 * 1000 && now < start : now >= start);
+    });
+  });
 }

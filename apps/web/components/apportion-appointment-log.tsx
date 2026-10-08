@@ -9,9 +9,9 @@ import type { ApportionInvitation as StoredInvitation } from "../lib/apportion-s
 export type ApportionInvitation = Omit<StoredInvitation, "notifications" | "bookedSettings">;
 type LogRow = { kind: "appointment"; entry: ApportionLogAppointment } | { kind: "invitation"; entry: ApportionInvitation };
 
-type AppointmentStatus = "cancelled" | "done" | "missed" | "pending" | "present-in-person" | "pushed-back" | "rejected";
+type AppointmentStatus = "cancelled" | "delayed" | "done" | "missed" | "pending" | "present-in-person" | "pushed-back" | "rejected";
 type HistoryEntry = {
-  action: "booked" | "cancelled" | "done" | "missed" | "present-in-person" | "pushed-back" | "rejected" | "rescheduled" | "address-opt-out";
+  action: "booked" | "cancelled" | "delayed" | "slot-restored" | "done" | "missed" | "present-in-person" | "pushed-back" | "rejected" | "rescheduled" | "address-opt-out";
   actorIdentifier: string;
   at: string;
   fromStartsAt: string | null;
@@ -138,6 +138,8 @@ function AppointmentHistory({ appointment, contactName, originalTime, formatDate
 function historyActionLabel(action: HistoryEntry["action"]) {
   switch (action) {
     case "booked": return "Booked";
+    case "delayed": return "Delayed";
+    case "slot-restored": return "Slot restored";
     case "rescheduled": return "Rescheduled";
     case "done": return "Done";
     case "rejected": return "Absent";
@@ -407,7 +409,7 @@ export function ApportionAppointmentLog({
           <summary aria-label={`Actions for ${contactName}`} className="button-secondary small-button">Actions</summary>
           <div className="apportion-actions-menu-list">
             {canManage && active ? <button className="button-secondary small-button" disabled={isUpdating || !!updatingId} type="button" onClick={() => void actOnAppointment(appointment, "done")}>Done</button> : null}
-            {canManage && active ? <button className="button-secondary small-button" disabled={isUpdating || !!updatingId} type="button" onClick={() => void actOnAppointment(appointment, "reject")}>Absent</button> : null}
+            {canManage && active && appointment.justAddToList ? <button className="button-secondary small-button" disabled={isUpdating || !!updatingId} type="button" onClick={() => void actOnAppointment(appointment, "reject")}>Absent</button> : null}
             {requesterContext && active ? <button className="button-secondary small-button" disabled={isUpdating || !!updatingId} type="button" onClick={() => void actOnAppointment(appointment, "cancel")}>Cancel</button> : null}
           </div>
         </details>

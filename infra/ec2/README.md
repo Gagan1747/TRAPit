@@ -253,11 +253,11 @@ curl http://127.0.0.1:3000
 
 ## 7.1 Enable free push reminders
 
-The app includes an internal worker endpoint that sends free push notifications for tests and polls starting within the next 15 minutes. Mobile reminders use Expo push tokens. Web reminders use browser Web Push subscriptions. This has no per-message Renflair/SMS cost, but users must open the mobile app or web dashboard once and allow notifications so their token/subscription can be registered.
+The app includes an internal worker endpoint. Browser test/poll alerts cover scheduling confirmation, the existing 15-minute reminder, and the first worker run at/after start, for explicit invitees and assigned group members only. Mobile reminders retain their existing Expo behavior. Browser appointment alerts notify the owner of a customer booking, and the target customer of an owner invitation. This has no per-message Renflair/SMS cost, but users must allow notifications so their token/subscription can be registered. HTTPS is required; iOS browser push requires a supported Home Screen installation.
 
-The same authenticated endpoint also catches up Apportion slot-end queue conversions, service-day Missed transitions, durable provider leave cancellations and pending notification retries. It runs inside the existing web process; cron must not run a separate script that writes the appointment files. Keep exactly one web app process while persistence is file-backed.
+The same authenticated endpoint catches up Apportion slot-end Delayed transitions, day-end Missed transitions, durable provider leave cancellations and pending notification retries. Slots retain their type/time until Done or Missed at the first IST midnight at/after their saved end; queues retain their existing expiry/Absent behavior. Proven automatically converted active slots are restored; ambiguous conversions are logged with appointment IDs for review. It runs inside the existing web process; cron must not run a separate script that writes the appointment files. Keep exactly one web app process while persistence is file-backed.
 
-Apportion booking/dashboard refinements add per-user message read cursors, accepted-invitation origin and duration-based recurrence metadata to the appointment file. Back up the entire persistent data directory before deployment, including both testing-workspace.json and apportion-appointments.json. Legacy invitations and booked slot snapshots remain unchanged. New repeats use 1–6 weeks/months instead of six occurrences; service quotas apply separately at each address. Existing notification cron settings remain one minute with the connection/request timeouts above. No database or additional worker process is required.
+Back up the entire persistent data directory before deployment, including testing-workspace.json, apportion-appointments.json and notification-state.json (or the configured TRAPIT_NOTIFICATION_FILE). The notification store now retains scheduling intents, observed recipient/instance keys, the historical baseline and per-subscription deliveries. Preexisting schedules are not replayed as new confirmations on first initialization; scheduling hooks baseline before mutation and the worker recovers missing intents after restart. DynamoDB polls still require this persistent local notification store. Existing notification cron settings remain one minute with the connection/request timeouts above. No database or additional worker process is required.
 
 Add a cron job on the EC2 instance to call the worker every minute:
 
@@ -278,6 +278,8 @@ curl -i -X POST https://trapit.in/api/internal/notifications/run -H "Authorizati
 ```
 
 The response includes `tokensChecked`, `browserSubscriptionsChecked`, and `sent`. Duplicate reminders are prevented by `notification-state.json` under `TRAPIT_DATA_DIR`.
+
+Delivery failures return HTTP 503 with diagnostic errors and remain retryable. Verify VAPID configuration and worker responses after deployment; expired browser subscriptions are removed on 404/410 responses. A successful transport followed by a crash before recording can still redeliver. Browser/OS delivery latency is outside the worker's control.
 
 Replace the previous five-minute entry rather than adding a second job. Missed runs catch up on the next successful call; normal transition latency is up to roughly one minute. Overlapping worker requests are serialized in the app process. Successful push deliveries are recorded per device so ordinary retries do not repeat them, but a crash between delivery and recording can still redeliver a push. In-app notices remain durable without notification permission; browser delivery requires subscriptions and VAPID configuration.
 

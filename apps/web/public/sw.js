@@ -1,6 +1,16 @@
+function safeNotificationUrl(value) {
+  try {
+    if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return `${self.location.origin}/user`;
+    const url = new URL(value, self.location.origin);
+    return url.origin === self.location.origin ? url.href : `${self.location.origin}/user`;
+  } catch {
+    return `${self.location.origin}/user`;
+  }
+}
+
 self.addEventListener("push", (event) => {
   let payload = {
-    body: "A TRAPit.in item is starting soon.",
+    body: "Sign in to view your TRAPit.in update.",
     data: { url: "/user" },
     title: "TRAPit.in reminder",
   };
@@ -9,24 +19,24 @@ self.addEventListener("push", (event) => {
     try {
       payload = event.data.json();
     } catch {
-      payload.body = event.data.text();
+      // Malformed push payloads must not expose arbitrary content on the lock screen.
     }
   }
 
   const options = {
-    body: payload.body,
-    data: payload.data || { url: "/user" },
+    body: "Sign in to view your TRAPit.in update.",
+    data: { url: safeNotificationUrl(payload?.data?.url) },
     icon: "/favicon.ico",
-    tag: `${payload.data?.kind || "trapit"}:${payload.data?.testId || payload.data?.pollId || Date.now()}`,
+    tag: payload?.data?.deliveryKey || `trapit:${Date.now()}`,
   };
 
-  event.waitUntil(self.registration.showNotification(payload.title, options));
+  event.waitUntil(self.registration.showNotification("TRAPit.in notification", options));
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const targetUrl = new URL(event.notification.data?.url || "/user", self.location.origin).href;
+  const targetUrl = safeNotificationUrl(event.notification.data?.url);
 
   event.waitUntil((async () => {
     const windowClients = await clients.matchAll({ type: "window", includeUncontrolled: true });

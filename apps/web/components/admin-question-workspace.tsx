@@ -54,7 +54,7 @@ import { ApportionBusinessSearch } from "./apportion-business-search";
 import { ApportionRolePanel } from "./apportion-role-panel";
 import { AssessmentLogTable, type AssessmentLogRow } from "./assessment-log-table";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
-import { BusinessTimeRangeSelector } from "./business-time-range-selector";
+import { BusinessHoursGrid } from "./business-hours-grid";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 import { FloatingWindowCloseButton } from "./floating-window-close-button";
 import { NotificationBell } from "./notification-bell";
@@ -239,14 +239,6 @@ const BUSINESS_DAILY_HOURS_DAYS = [
   { key: "Sat", label: "Sat", name: "Saturday", weekday: 6 },
 ] as const;
 
-function intervalsForWeekday(intervals: Array<{ endMinute: number; startMinute: number }>, weekday: number) {
-  const dayStart = weekday * 24 * 60;
-  return [-7 * 24 * 60, 0, 7 * 24 * 60].flatMap((weekOffset) => intervals.map((interval) => ({
-    endMinutes: interval.endMinute + weekOffset - dayStart,
-    startMinutes: interval.startMinute + weekOffset - dayStart,
-  }))).filter((interval) => interval.endMinutes > 0 && interval.startMinutes < 2 * 24 * 60);
-}
-
 function BusinessWeeklyHoursEditor({
   blockedWeeklyIntervals = [],
   dailyHours,
@@ -263,23 +255,7 @@ function BusinessWeeklyHoursEditor({
   workingDays: string;
 }) {
   const activeDays = parseBusinessDays(workingDays);
-  return (
-    <div className="business-weekly-hours business-hours-grid" role="group" aria-label={`${label} weekdays`}>
-      <div className="business-hours-grid-head"><span>Day</span><span>Operating hours 1</span><span>Operating hours 2</span></div>
-        {BUSINESS_DAILY_HOURS_DAYS.map((day) => {
-          const isActive = activeDays.includes(day.key);
-          const hours = dailyHours.find((entry) => entry.weekday === day.weekday);
-          const blockedIntervals = intervalsForWeekday(blockedWeeklyIntervals, day.weekday);
-          return (
-            <div className="business-hours-grid-row" key={day.key}>
-              <label className="business-hours-day"><input aria-label={`${label} works on ${day.name}`} checked={isActive} type="checkbox" onChange={() => onDayToggle(day.weekday)} />{day.label}</label>
-              <div><BusinessTimeRangeSelector disabled={!isActive} blockedIntervals={blockedIntervals} blockedRanges={[hours?.workingHoursSecondWindow ?? ""].filter(Boolean)} label={`${label} ${day.name} operating hours 1`} value={hours?.workingHours ?? ""} onChange={(value) => onHoursChange(day.weekday, "workingHours", value)} /></div>
-              <div><BusinessTimeRangeSelector disabled={!isActive} blockedIntervals={blockedIntervals} blockedRanges={[hours?.workingHours ?? ""].filter(Boolean)} label={`${label} ${day.name} operating hours 2`} value={hours?.workingHoursSecondWindow ?? ""} onChange={(value) => onHoursChange(day.weekday, "workingHoursSecondWindow", value)} /></div>
-            </div>
-          );
-        })}
-    </div>
-  );
+  return <BusinessHoursGrid label={label} dailyHours={dailyHours} activeWeekdays={BUSINESS_DAILY_HOURS_DAYS.filter((day) => activeDays.includes(day.key)).map((day) => day.weekday)} blockedWeeklyIntervals={blockedWeeklyIntervals} onDayToggle={onDayToggle} onHoursChange={onHoursChange} />;
 }
 
 function copyScheduleToBlankActiveDays(
@@ -632,9 +608,9 @@ type ApportionAppointment = {
   canceledByIdentifier: string | null;
   bookedQueuePosition: number;
   createdAt: string;
-  currentStatus: "cancelled" | "done" | "missed" | "pending" | "present-in-person" | "pushed-back" | "rejected";
+  currentStatus: "cancelled" | "delayed" | "done" | "missed" | "pending" | "present-in-person" | "pushed-back" | "rejected";
   history: Array<{
-    action: "address-opt-out" | "booked" | "cancelled" | "done" | "missed" | "present-in-person" | "pushed-back" | "rejected" | "rescheduled";
+    action: "address-opt-out" | "booked" | "cancelled" | "delayed" | "slot-restored" | "done" | "missed" | "present-in-person" | "pushed-back" | "rejected" | "rescheduled";
     actorIdentifier: string;
     at: string;
     fromStartsAt: string | null;
@@ -1203,11 +1179,13 @@ function getFirstAvailableDraftDateKey(input: {
 }
 
 function isActiveApportionStatus(status: ApportionAppointment["currentStatus"]) {
-  return status === "pending" || status === "present-in-person" || status === "pushed-back";
+  return status === "pending" || status === "present-in-person" || status === "pushed-back" || status === "delayed";
 }
 
 function getApportionStatusLabel(status: ApportionAppointment["currentStatus"]) {
   switch (status) {
+    case "delayed":
+      return "Delayed";
     case "present-in-person":
       return "Move in";
     case "done":
@@ -1819,6 +1797,7 @@ export function AdminQuestionWorkspace({
   const [isBrandingDragActive, setIsBrandingDragActive] = useState(false);
   const [businessAdvanceBookingWeeks, setBusinessAdvanceBookingWeeks] = useState("4");
   const [businessAppointmentQrCode, setBusinessAppointmentQrCode] = useState<string | null>(null);
+  const [businessQrError, setBusinessQrError] = useState<string | null>(null);
   const [businessAppointmentShareCode, setBusinessAppointmentShareCode] = useState<string | null>(null);
   const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("1");
   const [businessAppointmentNotesPrompt, setBusinessAppointmentNotesPrompt] = useState(DEFAULT_APPOINTMENT_NOTES_PROMPT);
@@ -2264,11 +2243,14 @@ export function AdminQuestionWorkspace({
 
     if (!shareCode) {
       setBusinessAppointmentQrCode(null);
+      setBusinessQrError(null);
       return () => {
         isMounted = false;
       };
     }
 
+    setBusinessAppointmentQrCode(null);
+    setBusinessQrError(null);
     void QRCode.toDataURL(getApportionAccessUrl(shareCode), { errorCorrectionLevel: "H", margin: 4, width: 320 })
       .then((qrCode: string) => new Promise<string>((resolve, reject) => {
         const canvas = document.createElement("canvas");
@@ -2301,8 +2283,11 @@ export function AdminQuestionWorkspace({
       .then((qrCode: string) => {
         if (isMounted) setBusinessAppointmentQrCode(qrCode);
       })
-      .catch(() => {
-        if (isMounted) setBusinessAppointmentQrCode(null);
+      .catch((error: unknown) => {
+        if (isMounted) {
+          setBusinessAppointmentQrCode(null);
+          setBusinessQrError(error instanceof Error ? error.message : "Unable to generate the business QR code.");
+        }
       });
 
     return () => {
@@ -5151,6 +5136,7 @@ export function AdminQuestionWorkspace({
   ).filter((appointment) =>
     appointment.currentStatus === "pending"
     || appointment.currentStatus === "present-in-person"
+    || appointment.currentStatus === "delayed"
     || appointment.currentStatus === "pushed-back",
   ).length;
   const brandingPreview = normalizeBrandingInput({
@@ -5993,6 +5979,7 @@ export function AdminQuestionWorkspace({
                       {businessLinkActions}
                       <FloatingWindowCloseButton label="Close Business Panel" onClick={() => setIsApportionBusinessPanelOpen(false)} />
                     </div>
+                    {businessQrError ? <p className="form-error business-qr-error" role="alert">{businessQrError}</p> : null}
                     <ApportionRolePanel
                       actorIdentifier={currentAdminIdentifier}
                       canCreateBusiness={getApportionServiceLimit(currentUserCategory ?? "trapit-normal") > 0}
@@ -6036,7 +6023,7 @@ export function AdminQuestionWorkspace({
                       currentIdentifier={currentAdminIdentifier}
                       formatDateTime={formatShortDateTimeIst}
                       getStatusHelper={(appointment) => {
-                        if (appointment.scope === "owner") return null;
+                        if (appointment.scope === "owner" || !appointment.justAddToList) return null;
                         return getRequesterQueueStatusLabel({
                           currentStatus: appointment.currentStatus,
                           queuePosition: appointment.queuePosition,
@@ -6046,6 +6033,7 @@ export function AdminQuestionWorkspace({
                         }).helperText;
                       }}
                       getStatusLabel={(appointment) => {
+                        if (appointment.currentStatus === "delayed") return "Delayed";
                         const requesterStatus = getRequesterQueueStatusLabel({
                           currentStatus: appointment.currentStatus,
                           queuePosition: appointment.queuePosition,

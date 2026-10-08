@@ -4510,8 +4510,20 @@ button:disabled {
 .business-hours-grid .business-time-selector-actions { gap: 3px; min-width: 0; }
 .business-hours-grid .business-time-trigger { flex: 0 1 32px; justify-content: center; width: 32px; min-height: 32px; padding: 5px; }
 .business-hours-grid .business-time-selector-actions > .icon-button { width: 28px; min-width: 28px; min-height: 32px; padding: 4px; }
-.business-hours-grid .business-time-bar-shell { position: absolute; top: 100%; width: min(420px, calc(100vw - 64px)); max-width: none; z-index: 5; }
-.business-hours-grid-row > div:last-child .business-time-bar-shell { right: 0; }
+.business-shared-timeline { min-width: 0; margin-bottom: 12px; }
+.business-shared-timeline .business-time-bar-shell { position: static; width: 100%; box-sizing: border-box; }
+.business-time-bar-tools { flex-wrap: wrap; }
+.business-hours-trigger { width: 100%; min-width: 0; padding: 8px; font-size: 0.75rem; overflow-wrap: anywhere; }
+.business-hours-clear { margin-top: 4px; }
+.business-qr-error { margin: 0; padding: 8px 22px; }
+.apportion-recurrence-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.apportion-recurrence-grid.is-duration { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.apportion-recurrence-choice { border: 1px solid var(--line); border-radius: 6px; padding: 10px 6px; background: #eef2f1; color: #596765; min-width: 0; cursor: pointer; }
+.apportion-recurrence-choice[aria-pressed="true"] { background: #183b43; color: #fff; border-color: #183b43; }
+.apportion-recurrence-choice:disabled { opacity: 0.5; cursor: not-allowed; }
+.apportion-recurrence-choice:focus-visible, .business-choice-button:focus-visible { outline: 2px solid #183b43; outline-offset: 3px; }
+.business-hours-day { justify-content: center; padding: 8px 4px; }
+.business-hours-grid .business-choice-button[aria-pressed="true"] { background: #183b43; color: #fff; }
 .business-time-more { flex: 0 0 40px; align-self: center; margin-left: 48px; position: relative; z-index: 1; }
 .business-time-label { pointer-events: none; }
 .business-mode-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -4524,13 +4536,16 @@ button:disabled {
 .apportion-drawer-header > div:first-child { flex: 1 1 auto; min-width: 0; }
 .apportion-drawer-header .section-title { font-size: 1.1rem; overflow-wrap: anywhere; }
 .apportion-drawer-header .apportion-link-actions { flex: 0 0 auto; margin: 0; gap: 4px; }
+.apportion-business-drawer > .apportion-drawer-header { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; }
+.apportion-business-drawer > .apportion-drawer-header > .floating-window-close-button { position: static; margin: 0; }
 .apportion-origin { display: inline-flex; width: 32px; height: 32px; align-items: center; justify-content: center; flex-shrink: 0; font-size: 0.85rem; }
 .apportion-origin.is-direct-sent { border: 1px solid currentColor; border-radius: 2px; }
 .apportion-origin:is(.is-invite-outgoing, .is-invite-incoming) { border: 1px solid currentColor; border-radius: 50%; }
 .apportion-origin.is-invite-incoming { border: 3px double currentColor; }
 .apportion-thread-trigger { position: relative; width: 100%; min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: 4px; background: #f3f6f4; }
 .apportion-thread-trigger > svg { flex-shrink: 0; }
-.apportion-thread-trigger > span:not(.apportion-unread-dot) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.apportion-thread-trigger > span:not(.apportion-unread-dot) { display: block; white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; }
+.apportion-status-chip.is-delayed { background: #fff0cc; color: #704800; border-color: #c8932b; }
 .apportion-unread-dot { position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border: 2px solid white; border-radius: 50%; background: #21864f; }
 .apportion-series-summary { font-size: 0.75rem; margin-top: 4px; }
 .apportion-series-summary summary { cursor: pointer; }

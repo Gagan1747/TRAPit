@@ -480,6 +480,7 @@ describe("Apportion invitations", () => {
     await store.createApportionInvitation(input());
     const outbox = await store.listApportionPendingNotifications();
     expect(outbox).toHaveLength(2);
+    expect(outbox.filter((notice) => notice.webPushEligible).map((notice) => notice.recipientIdentifier)).toEqual([TARGET]);
     expect(await store.listApportionNotificationsForActor(TARGET)).toHaveLength(1);
     await store.markApportionNotificationDelivered(outbox[0].id);
     const saved = await persisted();

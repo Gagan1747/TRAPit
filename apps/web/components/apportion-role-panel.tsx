@@ -4,7 +4,7 @@ import { APPORTION_NEW_DURATION_MINUTES, getApportionBookableServices, getApport
 import { ChevronLeft, ChevronRight, Plus, Save, Search, Unlink } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApportionPanelInput, getApportionPanel } from "../lib/apportion-directory";
-import { BusinessTimeRangeSelector } from "./business-time-range-selector";
+import { BusinessHoursGrid } from "./business-hours-grid";
 
 type Panel = Omit<Awaited<ReturnType<typeof getApportionPanel>>, "canCreateBusiness"> & { canCreateBusiness?: boolean };
 type Business = Panel["businesses"][number];
@@ -100,16 +100,6 @@ function BusinessRoles({ business, save, busy }: { business: Business; save: Sav
 }
 
 const SCHEDULE_WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-const MINUTES_PER_DAY = 24 * 60;
-const MINUTES_PER_WEEK = 7 * MINUTES_PER_DAY;
-
-function intervalsForWeekday(intervals: ApportionWeeklyInterval[], weekday: number) {
-  const dayStart = weekday * MINUTES_PER_DAY;
-  return [-MINUTES_PER_WEEK, 0, MINUTES_PER_WEEK].flatMap((weekOffset) => intervals.map((interval) => ({
-    endMinutes: interval.endMinute + weekOffset - dayStart,
-    startMinutes: interval.startMinute + weekOffset - dayStart,
-  }))).filter((interval) => interval.endMinutes > 0 && interval.startMinutes < 2 * MINUTES_PER_DAY);
-}
 
 function getWeeklyIntervals(dailyHours: ApportionDailyHours[]) {
   return getApportionWeeklyIntervals({ dailyHours });
@@ -130,22 +120,11 @@ function ProviderScheduleEditor({
   onDayToggle: (weekday: number, enabled: boolean) => void;
   onHoursChange: (weekday: number, field: "workingHours" | "workingHoursSecondWindow", value: string) => void;
 }) {
-  return <div className="business-weekly-hours business-hours-grid" role="group" aria-label="Staff working weekdays">
-    <div className="business-hours-grid-head"><span>Day</span><span>Operating hours 1</span><span>Operating hours 2</span></div>
-      {SCHEDULE_WEEKDAYS.map((day, weekday) => {
-        const current = dailyHours.find((entry) => entry.weekday === weekday);
-        const active = Boolean(current?.workingHours || current?.workingHoursSecondWindow);
-        const masterSchedule = masterDailyHours.find((entry) => entry.weekday === weekday);
-        const hasMasterHours = Boolean(masterSchedule?.workingHours || masterSchedule?.workingHoursSecondWindow);
-        const allowedIntervals = intervalsForWeekday(masterWeeklyIntervals, weekday);
-        const blockedIntervals = intervalsForWeekday(blockedWeeklyIntervals, weekday);
-        return <div className="business-hours-grid-row" key={day}>
-          <label className="business-hours-day"><input aria-label={`Work ${day}`} checked={active} disabled={!hasMasterHours} type="checkbox" onChange={(event) => onDayToggle(weekday, event.target.checked)} />{day.slice(0, 3)}</label>
-          <div><BusinessTimeRangeSelector disabled={!active} allowedIntervals={allowedIntervals} blockedIntervals={blockedIntervals} blockedRanges={[current?.workingHoursSecondWindow ?? ""].filter(Boolean)} label={`${day} operating hours 1`} value={current?.workingHours ?? ""} onChange={(value) => onHoursChange(weekday, "workingHours", value)} /></div>
-          <div><BusinessTimeRangeSelector disabled={!active} allowedIntervals={allowedIntervals} blockedIntervals={blockedIntervals} blockedRanges={[current?.workingHours ?? ""].filter(Boolean)} label={`${day} operating hours 2`} value={current?.workingHoursSecondWindow ?? ""} onChange={(value) => onHoursChange(weekday, "workingHoursSecondWindow", value)} /></div>
-        </div>;
-      })}
-  </div>;
+  const activeWeekdays = dailyHours.filter((entry) => entry.workingHours || entry.workingHoursSecondWindow).map((entry) => entry.weekday);
+  return <BusinessHoursGrid label="Staff" dailyHours={dailyHours} activeWeekdays={activeWeekdays} disabledWeekdays={SCHEDULE_WEEKDAYS.flatMap((_, weekday) => {
+    const master = masterDailyHours.find((entry) => entry.weekday === weekday);
+    return master?.workingHours || master?.workingHoursSecondWindow ? [] : [weekday];
+  })} allowedWeeklyIntervals={masterWeeklyIntervals} blockedWeeklyIntervals={blockedWeeklyIntervals} onDayToggle={(weekday) => onDayToggle(weekday, !activeWeekdays.includes(weekday))} onHoursChange={onHoursChange} />;
 }
 
 function getOtherProviderWeeklyIntervals(panel: Panel, membership: Membership, actorIdentifier: string | null) {

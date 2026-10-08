@@ -16,6 +16,21 @@ function validDate(value: string) {
   return date;
 }
 
+function matchesRecurringDate(date: Date, recurrence: ApportionRecurrence) {
+  if (recurrence.mode === "weekly") return (recurrence.weekdayKeys ?? []).includes(WEEKDAYS[date.getUTCDay()]);
+  const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+  return (recurrence.monthDays ?? []).some((day) => Math.min(day, lastDay) === date.getUTCDate());
+}
+
+export function findNextApportionRecurringDate(todayDateKey: string, horizonDateKey: string, recurrence: ApportionRecurrence, canBookDate: (dateKey: string) => boolean): string | null {
+  const horizon = validDate(horizonDateKey);
+  for (const date = validDate(todayDateKey); date <= horizon; date.setUTCDate(date.getUTCDate() + 1)) {
+    const key = date.toISOString().slice(0, 10);
+    if (matchesRecurringDate(date, recurrence) && canBookDate(key)) return key;
+  }
+  return null;
+}
+
 export function planApportionDateKeys(startDateKey: string, recurrence: ApportionRecurrence | null, isWorkingDate: (dateKey: string) => boolean, absoluteHorizonDateKey?: string) {
   const start = validDate(startDateKey);
   const duration = recurrence?.durationCount;
@@ -42,10 +57,7 @@ export function planApportionDateKeys(startDateKey: string, recurrence: Apportio
   const result: string[] = [];
   for (const cursor = new Date(start); (isDuration ? cursor < end : cursor <= end) && (isDuration || result.length < 6); cursor.setUTCDate(cursor.getUTCDate() + 1)) {
     const dateKey = cursor.toISOString().slice(0, 10);
-    const lastDay = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0)).getUTCDate();
-    const matches = !recurrence || (recurrence.mode === "weekly"
-      ? weekdays.includes(WEEKDAYS[cursor.getUTCDay()])
-      : monthDays.some((day) => Math.min(day, lastDay) === cursor.getUTCDate()));
+    const matches = !recurrence || matchesRecurringDate(cursor, recurrence);
     if (matches && isWorkingDate(dateKey)) result.push(dateKey);
   }
   if (!result.length) throw new Error("No working dates match this appointment selection.");

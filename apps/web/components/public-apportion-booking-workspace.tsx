@@ -2,7 +2,7 @@
 
 import { ChevronLeft, ChevronRight, LoaderCircle, Search, Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { matchApportionIdentity, planApportionDateKeys, resolveApportionDailySchedule } from "@trapit/testing";
+import { findNextApportionRecurringDate, matchApportionIdentity, planApportionDateKeys, resolveApportionDailySchedule } from "@trapit/testing";
 
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
@@ -560,11 +560,12 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
   const [recurringMonthDays, setRecurringMonthDays] = useState<number[]>([]);
   const [recurringEndDateKey, setRecurringEndDateKey] = useState("");
   const [recurringWeekdayKeys, setRecurringWeekdayKeys] = useState<string[]>([]);
-  const [selectedDateKey, setSelectedDateKey] = useState(getIstDateKey(new Date()));
+  const [onceDateKey, setSelectedDateKey] = useState(getIstDateKey(new Date()));
   const [selectedServiceId, setSelectedServiceId] = useState(initialServiceId ?? "");
   const [selectedOwnerIdentifier, setSelectedOwnerIdentifier] = useState(initialOwnerIdentifier ?? "");
   const [selectedLocationId, setSelectedLocationId] = useState("");
-  const [selectedSlotIso, setSelectedSlotIso] = useState<string | null>(null);
+  const [onceSlotIso, setSelectedSlotIso] = useState<string | null>(null);
+  const [recurringTime, setRecurringTime] = useState<{ dayOffset: number; minutes: number } | null>(null);
   const [slotPage, setSlotPage] = useState(0);
   const [weekOffset, setWeekOffset] = useState(0);
   const normalizedTargetPhone = targetPhone.trim().replace(/[\s()-]/g, "");
@@ -575,6 +576,31 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
     && matchApportionIdentity(payload.businessOwnerIdentifier, selectedOwnerIdentifier));
   const isTargeted = canInvite && Boolean(normalizedTargetPhone);
   const targetIsVerified = Boolean(isTargeted && verifiedTarget?.context === lookupContext);
+  const recurrenceActive = isTargeted && Boolean(payload?.business.recurringBookingsEnabled) && recurrenceMode !== "none";
+  const todayKey = getIstDateKey(new Date(clock));
+  const horizon = createDateFromKey(todayKey);
+  horizon.setMonth(horizon.getMonth() + 6);
+  const recurrenceLocation = payload?.business.locations.find((location) => location.id === selectedLocationId);
+  const recurrenceStart = recurrenceActive && payload && recurrenceLocation
+    ? findNextApportionRecurringDate(todayKey, createDateKey(horizon), {
+      mode: recurrenceMode === "monthly" ? "monthly" : "weekly", weekdayKeys: recurringWeekdayKeys, monthDays: recurringMonthDays,
+    }, (dateKey) => {
+      const effective = resolveEffectiveLocation(payload.business, recurrenceLocation, dateKey);
+      if (!effective) return false;
+      const duration = payload.business.slotDurationMinutes ?? 10;
+      if (payload.business.justAddToList) return Boolean(estimateQueueStart({
+        activeCount: payload.queueCounts.find((entry) => entry.locationId === selectedLocationId && entry.dateKey === dateKey)?.count ?? 0,
+        appointmentsPerSlot: payload.business.appointmentsPerSlot, selectedDateKey: dateKey, slotDurationMinutes: duration,
+        workingHours: effective.workingHours, workingHoursSecondWindow: effective.workingHoursSecondWindow,
+      }));
+      return buildSlotStartsForDate({ selectedDateKey: dateKey, slotDurationMinutes: duration, workingHours: effective.workingHours, workingHoursSecondWindow: effective.workingHoursSecondWindow })
+        .some((slot) => (!recurringTime || (slot.dayOffset === recurringTime.dayOffset && slot.minutes === recurringTime.minutes))
+          && new Date(slot.startsAt).getTime() > clock
+          && (payload.slotCounts.find((entry) => entry.locationId === selectedLocationId && entry.startsAt === slot.startsAt)?.count ?? 0) < payload.business.appointmentsPerSlot);
+    }) : null;
+  const selectedDateKey = recurrenceActive ? recurrenceStart ?? "" : onceDateKey;
+  const selectedSlotIso = recurrenceActive && recurringTime && selectedDateKey
+    ? createUtcSlotIso(selectedDateKey, recurringTime.dayOffset, recurringTime.minutes) : onceSlotIso;
 
   useEffect(() => {
     lookupVersionRef.current += 1;
@@ -582,6 +608,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
     setLookupError(null);
     setRecurrenceMode("none");
     setRecurringMonthDays([]);
+    setRecurringTime(null);
   }, [targetPhone, selectedOwnerIdentifier, selectedServiceId, shareCode]);
 
   async function lookupTarget() {
@@ -634,6 +661,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
         : undefined;
       setSelectedLocationId(requestedLocation?.id ?? previousLocation?.id ?? nextPayload.business.locations[0]?.id ?? "");
       setSelectedSlotIso(null);
+      setRecurringTime(null);
       setSlotPage(0);
       setCarouselIndex(0);
       setFailedPromotionalImages([]);
@@ -654,6 +682,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
     if (!payload) {
       return;
     }
+    if (recurrenceActive) return;
 
     if (!payload.business.recurringBookingsEnabled) {
       setRecurrenceMode("none");
@@ -718,10 +747,10 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
       setRecurringEndDateKey(createDateKey(nextWorkingDate));
       setRecurringWeekdayKeys([WEEKDAY_KEYS[nextWorkingDate.getDay()] ?? "Sun"]);
     } else setSelectedDateKey("");
-  }, [payload, selectedLocationId, selectedDateKey, clock]);
+  }, [payload, selectedLocationId, selectedDateKey, clock, recurrenceActive]);
 
   useEffect(() => {
-    if (!payload || payload.business.justAddToList || !selectedLocationId) return;
+    if (!payload || payload.business.justAddToList || !selectedLocationId || !selectedDateKey) return;
     const location = payload.business.locations.find((entry) => entry.id === selectedLocationId);
     if (!location) return;
     const effective = resolveEffectiveLocation(payload.business, location, selectedDateKey);
@@ -963,6 +992,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
   let recurrenceError: string | null = null;
   if (recurringAllowed && recurrenceMode !== "none") {
     try {
+      if (!recurrenceStart) throw new Error("No available upcoming date matches the selected recurring days and time.");
       plannedDateKeys = planApportionDateKeys(selectedDateKey, {
         mode: recurrenceMode,
         durationCount: recurringDuration,
@@ -1075,6 +1105,36 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                 {lookupError ? <p className="apportion-queue-warning" role="alert">{lookupError}</p> : null}
               </div>
             ) : null}
+            {recurringAllowed ? (
+              <div className="field apportion-recurrence-controls">
+                <span className="field-label">Repeat</span>
+                <div className="apportion-recurrence-grid" role="group" aria-label="Repeat">
+                  {(["none", "weekly", "monthly"] as const).map((mode) => <button className="apportion-recurrence-choice" aria-pressed={recurrenceMode === mode} key={mode} type="button" onClick={() => {
+                    setRecurrenceMode(mode);
+                    setRecurringTime(null);
+                    setSelectedSlotIso(null);
+                    setSlotPage(0);
+                    setRecurringWeekdayKeys([getWeekdayKeyForDateKey(onceDateKey || todayKey)]);
+                    setRecurringMonthDays([createDateFromKey(onceDateKey || todayKey).getDate()]);
+                    setFeedback(null);
+                  }}>{mode === "none" ? "Once" : mode === "weekly" ? "Weekly" : "Monthly"}</button>)}
+                </div>
+                {recurrenceMode !== "none" ? <>
+                  <span className="field-label">Duration</span>
+                  <div className="apportion-recurrence-grid is-duration" role="group" aria-label="Duration">{[1, 2, 3, 4, 5, 6].map((count) => <button className="apportion-recurrence-choice" aria-pressed={recurringDuration === count} key={count} type="button" onClick={() => setRecurringDuration(count)}>{count}{recurrenceMode === "weekly" ? "W" : "M"}</button>)}</div>
+                  <div className={`apportion-repeat-days${recurrenceMode === "monthly" ? " is-monthly" : ""}`} role="group" aria-label={recurrenceMode === "weekly" ? "Recurring weekdays" : "Recurring month dates"}>
+                    {recurrenceMode === "weekly" ? WEEKDAY_KEYS.map((day) => (
+                      <button aria-pressed={effectiveRecurringWeekdays.includes(day)} className="apportion-recurrence-choice" disabled={!recurringWorkingWeekdays.includes(day)} key={day} type="button" onClick={() => { setSlotPage(0); setRecurringWeekdayKeys((days) => days.includes(day) ? days.filter((entry) => entry !== day) : [...days, day]); }}>{day}</button>
+                    )) : Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
+                      <button aria-pressed={recurringMonthDays.includes(day)} className="apportion-recurrence-choice" key={day} type="button" onClick={() => { setSlotPage(0); setRecurringMonthDays((days) => days.includes(day) ? days.filter((entry) => entry !== day) : [...days, day]); }}>{day}</button>
+                    ))}
+                  </div>
+                  <p className="muted-text" role="status">{recurrenceStart ? `Starts ${recurrenceStart} · ` : ""}{plannedDateKeys.length} appointments</p>
+                  {plannedDateKeys.length ? <details><summary>Dates</summary><ol>{plannedDateKeys.map((dateKey) => <li key={dateKey}>{dateKey}</li>)}</ol></details> : null}
+                  {recurrenceError ? <p className="apportion-queue-warning" role="alert">{recurrenceError}</p> : null}
+                </> : null}
+              </div>
+            ) : null}
             {addressServices.length > 1 ? (
               <div className="field">
                 <label htmlFor="apportion-service">Service</label>
@@ -1149,6 +1209,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                         setSelectedOwnerIdentifier(context.ownerIdentifier);
                         setSelectedServiceId(context.serviceId);
                         setSelectedSlotIso(null);
+                        setRecurringTime(null);
                         setSlotPage(0);
                         setWeekOffset(0);
                         setFeedback(null);
@@ -1165,7 +1226,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
               </div>
             </div>
 
-            {selectedLocation ? (
+            {selectedLocation && !recurrenceActive ? (
               <div className="apportion-week-calendar-shell">
                 <div className="apportion-week-calendar-head">
                   <button
@@ -1257,7 +1318,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                         className={`apportion-slot-chip${selectedSlotIso === slot.startsAt ? " is-selected" : ""}`}
                         key={slot.startsAt}
                         type="button"
-                        onClick={() => { setSelectedSlotIso(slot.startsAt); setFeedback(null); }}
+                        onClick={() => { setSelectedSlotIso(slot.startsAt); if (recurrenceActive) setRecurringTime({ dayOffset: slot.dayOffset, minutes: slot.minutes }); setFeedback(null); }}
                       >
                         {slot.label}
                         {payload.business.showRemainingBookings && payload.business.appointmentsPerSlot > 1 ? <span>{slot.remainingCount} left</span> : null}
@@ -1279,34 +1340,6 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                 onChange={(event) => setNotes(event.target.value)}
               />
             </div>
-            {recurringAllowed ? (
-              <div className="field apportion-recurrence-controls">
-                <label htmlFor="apportion-recurrence">Repeat</label>
-                <select className="select-field" id="apportion-recurrence" value={recurrenceMode} onChange={(event) => {
-                  const mode = event.target.value as typeof recurrenceMode;
-                  setRecurrenceMode(mode);
-                  setRecurringEndDateKey(selectedDateKey);
-                  setRecurringWeekdayKeys([getWeekdayKeyForDateKey(selectedDateKey)]);
-                  setRecurringMonthDays([createDateFromKey(selectedDateKey).getDate()]);
-                }}>
-                  <option value="none">Once</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option>
-                </select>
-                {recurrenceMode !== "none" ? <>
-                  <label htmlFor="apportion-repeat-duration">Duration</label>
-                  <select className="select-field" id="apportion-repeat-duration" value={recurringDuration} onChange={(event) => setRecurringDuration(Number(event.target.value))}>{[1, 2, 3, 4, 5, 6].map((count) => <option key={count} value={count}>{count} {recurrenceMode === "weekly" ? "week" : "month"}{count > 1 ? "s" : ""}</option>)}</select>
-                  <div className={`apportion-repeat-days${recurrenceMode === "monthly" ? " is-monthly" : ""}`} role="group" aria-label={recurrenceMode === "weekly" ? "Recurring weekdays" : "Recurring month dates"}>
-                    {recurrenceMode === "weekly" ? WEEKDAY_KEYS.map((day) => (
-                      <button aria-pressed={effectiveRecurringWeekdays.includes(day)} className="button-secondary" disabled={!recurringWorkingWeekdays.includes(day)} key={day} type="button" onClick={() => setRecurringWeekdayKeys((days) => days.includes(day) ? days.filter((entry) => entry !== day) : [...days, day])}>{day}</button>
-                    )) : Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
-                      <button aria-pressed={recurringMonthDays.includes(day)} className="button-secondary" key={day} type="button" onClick={() => setRecurringMonthDays((days) => days.includes(day) ? days.filter((entry) => entry !== day) : [...days, day])}>{day}</button>
-                    ))}
-                  </div>
-                  <p className="muted-text" role="status">{plannedDateKeys.length} appointments</p>
-                  {plannedDateKeys.length ? <details><summary>Dates</summary><ol>{plannedDateKeys.map((dateKey) => <li key={dateKey}>{dateKey}</li>)}</ol></details> : null}
-                  {recurrenceError ? <p className="apportion-queue-warning" role="alert">{recurrenceError}</p> : null}
-                </> : null}
-              </div>
-            ) : null}
             {feedback ? <p className="muted-text" role="status">{feedback}{ticketUrl ? <> <a href={ticketUrl}>My Dashboard</a></> : null}</p> : null}
             <div className="inline-actions">
               <button className="button" disabled={isBooking || isLookingUp || (isTargeted && !targetIsVerified) || !selectedLocation || !selectedDateKey || (!payload.business.justAddToList && !selectedSlot) || (payload.business.justAddToList && !queueEstimate) || (recurringAllowed && recurrenceMode !== "none" && (!!recurrenceError || !plannedDateKeys.length))} type="button" onClick={() => void handleBookAppointment()}>

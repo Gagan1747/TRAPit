@@ -3,7 +3,7 @@ import { normalizeWorkspaceBranding } from "../src/quiz";
 import { validateAppointmentLocations } from "../../../apps/web/lib/appointment-locations";
 
 const fixtures = vi.hoisted(() => ({
-  actor: { identifier: "+919222222222", userCategory: "trapit-normal" },
+  actor: { identifier: "+919222222222", userCategory: "trapit-normal", isSuperAdmin: false },
   authConfigured: true,
   registeredUsers: [{ identifier: "+919333333333", label: "Registered Name" }],
   appointments: [] as Array<Record<string, unknown>>,
@@ -47,7 +47,7 @@ const OWNER = "+919111111111";
 const STAFF = "+919222222222";
 beforeEach(() => {
   vi.clearAllMocks();
-  fixtures.actor = { identifier: STAFF, userCategory: "trapit-normal" };
+  fixtures.actor = { identifier: STAFF, userCategory: "trapit-normal", isSuperAdmin: false };
   fixtures.authConfigured = true;
   fixtures.registeredUsers = [{ identifier: "+919333333333", label: "Registered Name" }];
   fixtures.invite.mockReset().mockResolvedValue({ id: "invitation", status: "pending" });
@@ -73,6 +73,16 @@ beforeEach(() => {
 });
 
 describe("Apportion API role and service contracts", () => {
+  it("resolves a Super Admin's own existing business QR share code without granting business creation", async () => {
+    fixtures.actor = { identifier: OWNER, userCategory: "trapit-normal", isSuperAdmin: true };
+    const payload = await (await dashboard.GET(new Request("https://trapit.in/api/user/apportion"))).json();
+    expect(payload.appointmentShareCode).toBe("SHARE");
+    expect(fixtures.share).toHaveBeenCalledWith(OWNER);
+    fixtures.actor = { identifier: STAFF, userCategory: "trapit-normal", isSuperAdmin: false };
+    fixtures.share.mockClear();
+    await dashboard.GET(new Request("https://trapit.in/api/user/apportion"));
+    expect(fixtures.share).not.toHaveBeenCalled();
+  });
   it("loads each owner's context once for a large dashboard including missing contexts", async () => {
     fixtures.appointments = Array.from({ length: 297 }, (_, index) => ({
       id: `appointment-${index}`,

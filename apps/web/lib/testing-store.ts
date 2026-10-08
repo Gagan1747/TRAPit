@@ -1,6 +1,7 @@
 import "server-only";
 
 import { isAppointmentBusinessProfileComplete } from "./appointment-locations";
+import { reconcileBrowserNotificationIntents, type BrowserSchedule } from "./notification-store";
 
 import {
   buildPollRecurrenceCycles,
@@ -1744,6 +1745,13 @@ export async function listScheduledPolls(actorId: string | null = null) {
 }
 
 export async function createScheduledPoll(input: CreateScheduledPollStoreInput) {
+  await recoverBrowserSchedulingNotifications();
+  const result = await createScheduledPollWithoutNotifications(input);
+  await recoverBrowserSchedulingNotifications();
+  return result;
+}
+
+async function createScheduledPollWithoutNotifications(input: CreateScheduledPollStoreInput) {
   if (isDynamoDbPollStoreEnabled()) {
     return withPollStoreFallback(
       () => createScheduledPollInBackend(input),
@@ -1799,6 +1807,13 @@ export async function createScheduledPoll(input: CreateScheduledPollStoreInput) 
 }
 
 export async function updateScheduledPoll(input: CreateScheduledPollStoreInput & { pollId: string }) {
+  await recoverBrowserSchedulingNotifications();
+  const result = await updateScheduledPollWithoutNotifications(input);
+  await recoverBrowserSchedulingNotifications();
+  return result;
+}
+
+async function updateScheduledPollWithoutNotifications(input: CreateScheduledPollStoreInput & { pollId: string }) {
   if (isDynamoDbPollStoreEnabled()) {
     return withPollStoreFallback(
       () => updateScheduledPollInBackend(input),
@@ -2799,7 +2814,14 @@ export async function listScheduledTests(actorId: string | null = null) {
   return filterScheduledTestsForActor(hydrateScheduledTests(state), actorId);
 }
 
-export async function createScheduledTest(input: {
+export async function createScheduledTest(input: Parameters<typeof createScheduledTestWithoutNotifications>[0]) {
+  await recoverBrowserSchedulingNotifications();
+  const result = await createScheduledTestWithoutNotifications(input);
+  await recoverBrowserSchedulingNotifications();
+  return result;
+}
+
+async function createScheduledTestWithoutNotifications(input: {
   actorIdentifier?: string | null;
   branding?: WorkspaceBranding | null;
   createdBy: string | null;
@@ -2885,7 +2907,14 @@ export async function createScheduledTest(input: {
   return filterScheduledTestsForActor(hydrateScheduledTests(state), input.createdBy);
 }
 
-export async function updateScheduledTest(input: {
+export async function updateScheduledTest(input: Parameters<typeof updateScheduledTestWithoutNotifications>[0]) {
+  await recoverBrowserSchedulingNotifications();
+  const result = await updateScheduledTestWithoutNotifications(input);
+  await recoverBrowserSchedulingNotifications();
+  return result;
+}
+
+async function updateScheduledTestWithoutNotifications(input: {
   actorIdentifier?: string | null;
   branding?: WorkspaceBranding | null;
   createdBy: string | null;
@@ -3146,6 +3175,35 @@ export async function listAvailableTestsForParticipant(
 
       return new Date(right.startsAt).getTime() - new Date(left.startsAt).getTime();
     });
+}
+
+export async function listBrowserNotificationSchedules(): Promise<BrowserSchedule[]> {
+  const state = await readStore();
+  // Do not silently use stale file data when the configured DynamoDB backend is unavailable.
+  const polls = isDynamoDbPollStoreEnabled()
+    ? await listAllScheduledPollsFromBackend()
+    : hydrateScheduledPolls(state);
+  return [
+    ...hydrateScheduledTests(state).filter((test) => test.status !== "completed").map((test) => ({
+      kind: "test" as const,
+      id: test.id,
+      startsAt: test.startsAt,
+      endsAt: getScheduledTestEndTime(test),
+      recipients: resolveParticipantIdentifiers(state, test.participantIds, test.participantGroupIds),
+    })),
+    ...polls.filter((poll) => poll.status !== "completed").map((poll) => ({
+      kind: "poll" as const,
+      id: poll.id,
+      startsAt: poll.startsAt,
+      endsAt: poll.endsAt,
+      // Public/open access and past responses are not notification invitations.
+      recipients: resolveParticipantIdentifiers(state, [], poll.participantGroupIds),
+    })),
+  ];
+}
+
+async function recoverBrowserSchedulingNotifications() {
+  return reconcileBrowserNotificationIntents(await listBrowserNotificationSchedules());
 }
 
 export async function listAvailablePollsForParticipant(identifier: string): Promise<ScheduledPoll[]> {

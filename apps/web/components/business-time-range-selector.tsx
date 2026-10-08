@@ -11,6 +11,7 @@ type TimeRange = {
 type MinuteInterval = TimeRange;
 
 type BusinessTimeRangeSelectorProps = {
+  timelineOnly?: boolean;
   disabled?: boolean;
   allowedRanges?: string[];
   allowedIntervals?: MinuteInterval[];
@@ -82,7 +83,7 @@ function mergeIntervals(intervals: MinuteInterval[]) {
   return merged;
 }
 
-export function BusinessTimeRangeSelector({ disabled = false, allowedRanges, allowedIntervals, blockedRanges = [], blockedIntervals = [], label, onChange, value }: BusinessTimeRangeSelectorProps) {
+export function BusinessTimeRangeSelector({ timelineOnly = false, disabled = false, allowedRanges, allowedIntervals, blockedRanges = [], blockedIntervals = [], label, onChange, value }: BusinessTimeRangeSelectorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [firstPoint, setFirstPoint] = useState<number | null>(null);
   const [visibleEnd, setVisibleEnd] = useState(MINUTES_PER_DAY);
@@ -98,8 +99,8 @@ export function BusinessTimeRangeSelector({ disabled = false, allowedRanges, all
   const points = Array.from({ length: Math.floor(requiredEnd / STEP_MINUTES) + 1 }, (_, index) => index * STEP_MINUTES);
 
   useEffect(() => {
-    if (isOpen && timelineRef.current) timelineRef.current.scrollLeft = (8 * 60 / STEP_MINUTES) * 42;
-  }, [isOpen]);
+    if ((isOpen || timelineOnly) && timelineRef.current) timelineRef.current.scrollLeft = (8 * 60 / STEP_MINUTES) * 42;
+  }, [isOpen, timelineOnly]);
 
   function overlapsBlockedRange(startMinutes: number, endMinutes: number) {
     const interval = { endMinutes, startMinutes };
@@ -132,7 +133,7 @@ export function BusinessTimeRangeSelector({ disabled = false, allowedRanges, all
 
   return (
     <div className="business-time-selector">
-      <div className="business-time-selector-actions">
+      {!timelineOnly ? <><div className="business-time-selector-actions">
         <button
           aria-expanded={isOpen}
           disabled={disabled}
@@ -155,13 +156,13 @@ export function BusinessTimeRangeSelector({ disabled = false, allowedRanges, all
           </button>
         ) : null}
       </div>
-      <span className="business-saved-hours">{value || "Not set"}</span>
+      <span className="business-saved-hours">{value || "Not set"}</span></> : null}
 
-      {isOpen ? (
+      {isOpen || timelineOnly ? (
         <div className="business-time-bar-shell">
           <div className="business-time-bar-tools">
             <strong>{label}</strong>
-            <button className="button-secondary" type="button" disabled={firstPoint === null || overlapsBlockedRange(firstPoint, firstPoint + MINUTES_PER_DAY) || !fitsAllowedRange(firstPoint, firstPoint + MINUTES_PER_DAY)} onClick={() => {
+            <button className="button-secondary" type="button" disabled={disabled || firstPoint === null || overlapsBlockedRange(firstPoint, firstPoint + MINUTES_PER_DAY) || !fitsAllowedRange(firstPoint, firstPoint + MINUTES_PER_DAY)} onClick={() => {
               if (firstPoint !== null) choosePoint(firstPoint + MINUTES_PER_DAY);
             }}>24 hours</button>
           </div>
@@ -182,7 +183,7 @@ export function BusinessTimeRangeSelector({ disabled = false, allowedRanges, all
                   aria-label={formatTimelineTime(minutes)}
                   aria-pressed={isSelected}
                   className={`business-time-point${isHour ? " is-hour" : " is-half-hour"}${isBlocked ? " is-blocked" : ""}${isSelected ? " is-selected" : ""}${isNextDay ? " is-next-day" : ""}`}
-                  disabled={isBlocked || isOutOfSelection || isOutsideAllowed || (firstPoint === null && isNextDay)}
+                  disabled={disabled || isBlocked || isOutOfSelection || isOutsideAllowed || (firstPoint === null && isNextDay)}
                   key={minutes}
                   type="button"
                   onClick={() => choosePoint(minutes)}
@@ -192,7 +193,7 @@ export function BusinessTimeRangeSelector({ disabled = false, allowedRanges, all
                 </button>
               );
             })}
-            <button aria-label="Reveal next-day times" title="Reveal next-day times" className="button-secondary icon-button business-time-more" disabled={requiredEnd >= maximumEnd} type="button" onClick={() => setVisibleEnd(Math.min(maximumEnd, requiredEnd + 60))}><Plus aria-hidden="true" size={18} /></button>
+            <button aria-label="Reveal next-day times" title="Reveal next-day times" className="button-secondary icon-button business-time-more" disabled={disabled || requiredEnd >= maximumEnd} type="button" onClick={() => setVisibleEnd(Math.min(maximumEnd, requiredEnd + 60))}><Plus aria-hidden="true" size={18} /></button>
           </div>
         </div>
       ) : null}
