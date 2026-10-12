@@ -295,9 +295,11 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-The checked-in Nginx config includes larger proxy header buffers for Cognito sign-in responses. If you already had a live config before this change, copy the updated file to the server again and reload Nginx so the buffer settings take effect.
+The checked-in Nginx config includes larger proxy header buffers for Cognito sign-in responses. For an existing site, compare the sample with the live configuration and merge only the required buffer/upload directives, preserving existing Certbot TLS and HTTP/2 settings. Validate with `nginx -t` before reloading.
 
 Business image uploads now require the supplied `client_max_body_size 20m` setting. Without it, Nginx's default 1 MB limit can reject valid base64 image payloads with an HTML 413 response before Next.js receives them. The application limits combined branding requests to 18 MiB and each image to 2 MB; the proxy returns JSON for its own 413 errors. Reapply the updated configuration, run `nginx -t`, and reload Nginx. These repository changes do not update a running server automatically.
+
+Use the named `@trapit_upload_too_large` error handler as supplied. Redirecting 413 errors to a normal internal URI can trigger the same body-size check again and produce an HTML 413 instead of the JSON response. Verify that an unauthenticated 18 MiB request reaches application authentication and a 21 MiB request returns HTTP 413 with `Content-Type: application/json`; these checks do not replace an authenticated image-upload test.
 
 Back up the full persistent directory before the delegation-capacity migration. First panel/directory access creates a one-time backup beside the workspace store, removes over-capacity delegations and notifies owners to appoint replacements. Appointment dates, status and history are preserved.
 
