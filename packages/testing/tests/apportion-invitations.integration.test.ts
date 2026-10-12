@@ -8,7 +8,7 @@ import type { ApportionBusinessContext } from "../../../apps/web/lib/apportion-d
 
 const fixtures = vi.hoisted(() => ({ context: null as import("../../../apps/web/lib/apportion-directory").ApportionBusinessContext | null, getContext: vi.fn() }));
 vi.mock("server-only", () => ({}));
-vi.mock("../../../apps/web/lib/apportion-directory", () => ({ getApportionBusinessContext: fixtures.getContext }));
+vi.mock("../../../apps/web/lib/apportion-directory", () => ({ getApportionBusinessContext: fixtures.getContext, getApportionBusinessContexts: async (owners: string[]) => new Map(await Promise.all([...new Set(owners)].map(async (owner) => [owner, await fixtures.getContext(owner)] as const))) }));
 const OWNER = "+919111111111";
 const STAFF = "+919222222222";
 const TARGET = "+919444444444";
@@ -219,17 +219,17 @@ describe("Apportion invitations", () => {
     await expect(respond(invitation.id)).rejects.toThrow("no longer pending");
     expect((await persisted()).appointments).toEqual([]);
   });
-  it.each([false, true])("recovers delayed leave identically with an intervening expiry read: %s", async (readFirst) => {
+  it.each([false, true])("legacy leave retries preserve invitations with an intervening expiry read: %s", async (readFirst) => {
     const invitation = await store.createApportionInvitation(input(["2026-10-06", "2026-10-07"]));
     const leaveAt = new Date().toISOString();
     fixtures.context!.providerClosedDateKeys = { [STAFF]: ["2026-10-06"] };
     vi.setSystemTime(new Date("2026-10-06T05:00:00.000Z"));
     if (readFirst) expect((await store.listApportionInvitationsForActor(TARGET))[0].status).toBe("expired");
+    const before = await persisted();
     await store.applyApportionProviderLeave(STAFF, ["2026-10-06"], "2026-10-05", leaveAt);
     const saved = (await persisted()).invitations[0];
-    expect(saved).toMatchObject({ id: invitation.id, status: "pending", expiresAt: "2026-10-07T04:30:00.000Z", statusUpdatedAt: "2026-10-06T05:00:00.000Z" });
-    expect(saved.occurrences).toEqual([{ ...occurrence("2026-10-07"), slotEndsAt: "2026-10-07T04:30:00.000Z" }]);
-    expect(saved.notifications.map((notice: { title: string }) => notice.title)).toEqual(["Appointment invitation", "Appointment invitation", "Appointment invitation updated", "Appointment invitation updated"]);
+    expect(saved).toEqual(before.invitations[0]);
+    expect(saved.id).toBe(invitation.id);
     await store.applyApportionProviderLeave(STAFF, ["2026-10-06"], "2026-10-05", leaveAt);
     expect((await persisted()).invitations[0]).toEqual(saved);
   });
@@ -244,20 +244,20 @@ describe("Apportion invitations", () => {
     await store.markApportionNotificationDelivered(expiry.id);
     await store.applyApportionProviderLeave(STAFF, ["2026-10-06"], "2026-10-05", leaveAt);
     const saved = (await persisted()).invitations[0];
-    expect(saved.status).toBe("pending");
+    expect(saved.status).toBe("expired");
     expect(saved.notifications.filter((notice: { title: string }) => notice.title === "Appointment invitation")).toEqual(originalNotices);
-    expect(saved.notifications.filter((notice: { title: string }) => notice.title === "Appointment invitation expired")).toEqual([expect.objectContaining({ id: expiry.id, deliveredAt: "2026-10-06T05:00:00.000Z" })]);
+    expect(saved.notifications.filter((notice: { title: string }) => notice.title === "Appointment invitation expired")).toContainEqual(expect.objectContaining({ id: expiry.id, deliveredAt: "2026-10-06T05:00:00.000Z" }));
   });
-  it.each([false, true])("cancels delayed leave's final date without stale expiry notices (read first: %s)", async (readFirst) => {
+  it.each([false, true])("leave does not remove an invitation's final date (read first: %s)", async (readFirst) => {
     await store.createApportionInvitation(input(["2026-10-06"]));
     const leaveAt = new Date().toISOString();
     fixtures.context!.providerClosedDateKeys = { [STAFF]: ["2026-10-06"] };
     vi.setSystemTime(new Date("2026-10-06T05:00:00.000Z"));
     if (readFirst) await store.listApportionInvitationsForActor(TARGET);
+    const before = await persisted();
     await store.applyApportionProviderLeave(STAFF, ["2026-10-06"], "2026-10-05", leaveAt);
     const saved = (await persisted()).invitations[0];
-    expect(saved).toMatchObject({ status: "cancelled", occurrences: [] });
-    expect(saved.notifications.map((notice: { title: string }) => notice.title)).toEqual(["Appointment invitation", "Appointment invitation", "Appointment invitation cancelled", "Appointment invitation cancelled"]);
+    expect(saved).toEqual(before.invitations[0]);
   });
   it.each(["accept", "decline", "cancel"] as const)("never resurrects an invitation already resolved by %s", async (action) => {
     const invitation = await store.createApportionInvitation(input(["2026-10-06", "2026-10-07"]));
@@ -442,26 +442,26 @@ describe("Apportion invitations", () => {
     await expect(respond(invitation.id)).rejects.toThrow("business hours");
     expect((await persisted()).appointments).toEqual([]);
   });
-  it("preserves same-day leave occurrences and removes only matching future dates durably", async () => {
+  it("preserves all existing invitation occurrences on leave", async () => {
     const invitation = await store.createApportionInvitation(input(["2026-10-05", "2026-10-06", "2026-10-07"]));
     fixtures.context!.providerClosedDateKeys = { [STAFF]: ["2026-10-05", "2026-10-06"] };
     expect(await store.applyApportionProviderLeave(STAFF, ["2026-10-05", "2026-10-06"], "2026-10-05", new Date().toISOString())).toEqual([]);
     const pending = (await store.listApportionInvitationsForActor(TARGET))[0];
-    expect(pending.occurrences.map((entry) => entry.serviceDateKey)).toEqual(["2026-10-05", "2026-10-07"]);
+    expect(pending.occurrences.map((entry) => entry.serviceDateKey)).toEqual(["2026-10-05", "2026-10-06", "2026-10-07"]);
     expect(pending.expiresAt).toBe(invitation.expiresAt);
-    expect(pending.notifications).toHaveLength(2);
+    expect(pending.notifications).toHaveLength(1);
     const saved = await persisted();
     await store.applyApportionProviderLeave(STAFF, ["2026-10-06"], "2026-10-05", new Date().toISOString());
     expect(await persisted()).toEqual(saved);
   });
-  it("recomputes the first remaining end and cancels when future leave removes the final date", async () => {
+  it("leave does not change invitation deadlines or remove future occurrences", async () => {
     const invitation = await store.createApportionInvitation(input(["2026-10-06", "2026-10-07"]));
     fixtures.context!.providerClosedDateKeys = { [STAFF]: ["2026-10-06"] };
     await store.applyApportionProviderLeave(STAFF, ["2026-10-06"], "2026-10-05", new Date().toISOString());
-    expect((await store.listApportionInvitationsForActor(TARGET))[0].expiresAt).toBe("2026-10-07T04:30:00.000Z");
+    expect((await store.listApportionInvitationsForActor(TARGET))[0].expiresAt).toBe(invitation.expiresAt);
     fixtures.context!.providerClosedDateKeys = { [STAFF]: ["2026-10-06", "2026-10-07"] };
     await store.applyApportionProviderLeave(STAFF, ["2026-10-07"], "2026-10-05", new Date().toISOString());
-    expect((await store.listApportionInvitationsForActor(TARGET))[0]).toMatchObject({ id: invitation.id, status: "cancelled", occurrences: [] });
+    expect((await store.listApportionInvitationsForActor(TARGET))[0]).toMatchObject({ id: invitation.id, status: "pending", occurrences: invitation.occurrences });
   });
   it("does not prune reopened, reassigned or unassigned services on old provider/owner leave", async () => {
     const unassigned = await store.createApportionInvitation({ ...input(["2026-10-06"]), serviceId: "unassigned" });

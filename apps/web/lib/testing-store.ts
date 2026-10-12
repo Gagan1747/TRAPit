@@ -72,7 +72,8 @@ import {
   validatePollQuestionDraft,
   validateQuestionDraft,
 } from "@trapit/testing";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
@@ -1278,11 +1279,32 @@ async function persistStore(state: TestingWorkspaceState, changedFields?: Set<ke
   const temporaryStorePath = `${STORE_PATH}.${process.pid}.${Date.now()}.tmp`;
 
   await writeFile(temporaryStorePath, JSON.stringify(state, null, 2), "utf8");
-  await rename(temporaryStorePath, STORE_PATH);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(temporaryStorePath, STORE_PATH);
+      break;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(code ?? "") || attempt >= 5) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
 }
 
 export async function readApportionWorkspaceState() {
   return readStore();
+}
+
+export async function backupApportionDelegationStore(state: TestingWorkspaceState) {
+  await mkdir(path.dirname(STORE_PATH), { recursive: true });
+  try {
+    await copyFile(STORE_PATH, `${STORE_PATH}.delegation-capacity-v1.backup`, constants.COPYFILE_EXCL);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      await writeFile(`${STORE_PATH}.delegation-capacity-v1.backup`, JSON.stringify(state), { flag: "wx" });
+    } else if (code !== "EEXIST") throw error;
+  }
 }
 
 export function withSerializedTestingMutation<T>(

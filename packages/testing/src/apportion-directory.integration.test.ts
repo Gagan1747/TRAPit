@@ -131,16 +131,17 @@ describe("persistent Apportion directory", () => {
     await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("duplicate", "9222222222") })).rejects.toThrow("only one service");
     await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("consultation", STAFF) })).rejects.toThrow("Consultation");
     await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("unknown-address", null, true, ["missing"]) })).rejects.toThrow("valid assigned");
-    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("empty", null, true, []) })).rejects.toThrow("valid assigned");
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("empty", null, true, []) });
+    expect((await persisted()).apportionDirectory?.businesses[OWNER].services.find((entry) => entry.id === "empty")?.active).toBe(false);
   });
 
-  it("counts personal and distinct linked addresses together and delegation costs no address", async () => {
+  it("counts personal, staff and delegated addresses together without double-counting the same address", async () => {
     await seed({ [OWNER]: branding(), [STAFF]: branding("1:00 PM", "2:00 PM"), [OTHER]: branding("3:00 PM", "4:00 PM") });
     fixtures.assignments.push(assignment(OTHER));
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: STAFF });
     expect((await persisted()).apportionDirectory?.memberships).toHaveLength(0);
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", STAFF) });
-    await expect(directory.updateApportionPanel(actor(OTHER), { operation: "set-service", service: service("staff", "9222222222") })).rejects.toThrow("Staff address unavailable");
+    await expect(directory.updateApportionPanel(actor(OTHER), { operation: "set-service", service: service("staff", "9222222222") })).rejects.toThrow("Address capacity exceeded");
   });
 
   it("allows two businesses for one provider, shares global settings, and enforces per-address master hours", async () => {
@@ -161,13 +162,13 @@ describe("persistent Apportion directory", () => {
     expect((await directory.getApportionBusinessContext(OWNER))?.memberships).toEqual([]);
     await seed();
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", STAFF) });
-    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", ADMIN) })).rejects.toThrow("Conflict");
+    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", ADMIN) })).rejects.toThrow("Unselect all");
     await directory.updateApportionPanel(actor(STAFF), { operation: "unlink-address", ownerIdentifier: OWNER, locationId: "location-1" });
     const afterUnlink = await directory.getApportionBusinessContext(OWNER);
     expect(afterUnlink?.memberships).toEqual([]);
     expect(afterUnlink?.business.services.find((entry) => entry.id === "staff")?.active).toBe(false);
     expect(afterUnlink?.business.services.find((entry) => entry.id === "consultation")).toMatchObject({ active: true, assignedIdentifier: OWNER });
-    await expect(store.updateWorkspaceBranding(null, OWNER)).rejects.toThrow("Conflict");
+    await expect(store.updateWorkspaceBranding(null, OWNER)).rejects.toThrow("Address deletion");
   });
 
   it("fails closed for unknown and Free owners without deleting migrated history", async () => {

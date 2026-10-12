@@ -45,6 +45,8 @@ import { Fragment, type DragEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowLeft, ArrowRight, Check, Copy, ExternalLink, QrCode, X } from "lucide-react";
 import QRCode from "qrcode";
+import { readJsonResponse } from "../lib/read-json-response";
+import { createBusinessBookingQrCode } from "../lib/business-booking-qr";
 
 import { formatShortDate, formatShortDateTime, formatShortDateTimeIst } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
@@ -1257,6 +1259,9 @@ function getRequesterQueueStatusLabel(input: {
 }
 
 async function fileToDataUrl(file: File) {
+  if (!file.type.startsWith("image/") || file.size > MAX_PROMOTIONAL_IMAGE_BYTES) {
+    throw new Error("Choose a valid image up to 2 MB.");
+  }
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
 
@@ -1374,13 +1379,7 @@ type ParticipantSearchPickerProps = {
 };
 
 async function readJson<T>(response: Response): Promise<T> {
-  const payload = (await response.json()) as T & { error?: string };
-
-  if (!response.ok) {
-    throw new Error((payload as { error?: string }).error ?? "Request failed.");
-  }
-
-  return payload;
+  return readJsonResponse<T>(response);
 }
 
 function getTestReleaseTimestamp(
@@ -1797,6 +1796,7 @@ export function AdminQuestionWorkspace({
   const [isBrandingDragActive, setIsBrandingDragActive] = useState(false);
   const [businessAdvanceBookingWeeks, setBusinessAdvanceBookingWeeks] = useState("4");
   const [businessAppointmentQrCode, setBusinessAppointmentQrCode] = useState<string | null>(null);
+  const [personalAddressLimit, setPersonalAddressLimit] = useState(2);
   const [businessQrError, setBusinessQrError] = useState<string | null>(null);
   const [businessAppointmentShareCode, setBusinessAppointmentShareCode] = useState<string | null>(null);
   const [businessAppointmentsPerSlot, setBusinessAppointmentsPerSlot] = useState("1");
@@ -1930,6 +1930,7 @@ export function AdminQuestionWorkspace({
   const [visibleParticipantReviewTestIds, setVisibleParticipantReviewTestIds] = useState<string[]>([]);
   const [visibleReviewTestIds, setVisibleReviewTestIds] = useState<string[]>([]);
   const [workspaceBranding, setWorkspaceBranding] = useState<WorkspaceBranding | null>(null);
+  const [businessPanelRevision, setBusinessPanelRevision] = useState(0);
   const apportionUpdatePendingRef = useRef(false);
   const participantAnswersRef = useRef<Record<string, number | undefined>>({});
   const participantIsSubmittingRef = useRef(false);
@@ -1992,8 +1993,8 @@ export function AdminQuestionWorkspace({
     try {
       const [brandingPayload, apportionPayload] =
         await Promise.all([
-          readJson<BrandingResponse>(await fetch("/api/admin/branding")),
-          readJson<ApportionDashboardResponse>(await fetch("/api/user/apportion")),
+          fetch("/api/admin/branding").then(readJson<BrandingResponse>),
+          fetch("/api/user/apportion").then(readJson<ApportionDashboardResponse>),
         ]);
 
       setWorkspaceBranding(brandingPayload.branding);
@@ -2251,35 +2252,7 @@ export function AdminQuestionWorkspace({
 
     setBusinessAppointmentQrCode(null);
     setBusinessQrError(null);
-    void QRCode.toDataURL(getApportionAccessUrl(shareCode), { errorCorrectionLevel: "H", margin: 4, width: 320 })
-      .then((qrCode: string) => new Promise<string>((resolve, reject) => {
-        const canvas = document.createElement("canvas");
-        const context = canvas.getContext("2d");
-        const qrImage = new Image();
-        qrImage.onload = () => {
-          if (!context) {
-            reject(new Error("Canvas is unavailable."));
-            return;
-          }
-          canvas.width = 320;
-          canvas.height = 320;
-          context.drawImage(qrImage, 0, 0, 320, 320);
-          const brandImage = new Image();
-          brandImage.onload = () => {
-            const markSize = 48;
-            const backingSize = 64;
-            const markOrigin = (320 - markSize) / 2;
-            context.fillStyle = "#ffffff";
-            context.fillRect((320 - backingSize) / 2, (320 - backingSize) / 2, backingSize, backingSize);
-            context.drawImage(brandImage, markOrigin, markOrigin, markSize, markSize);
-            resolve(canvas.toDataURL("image/png"));
-          };
-          brandImage.onerror = () => resolve(qrCode);
-          brandImage.src = "/trapit-qr-mark.svg";
-        };
-        qrImage.onerror = () => reject(new Error("QR image could not be rendered."));
-        qrImage.src = qrCode;
-      }))
+    void createBusinessBookingQrCode(getApportionAccessUrl(shareCode))
       .then((qrCode: string) => {
         if (isMounted) setBusinessAppointmentQrCode(qrCode);
       })
@@ -4211,6 +4184,7 @@ export function AdminQuestionWorkspace({
 
       setWorkspaceBranding(payload.branding);
       setBusinessAppointmentShareCode(payload.branding?.appointmentShareCode ?? businessAppointmentShareCode);
+      setBusinessPanelRevision((current) => current + 1);
       isBrandingDraftDirtyRef.current = false;
       syncBrandingDraft(payload.branding);
       setBrandingFeedback(payload.branding ? "Business details saved." : "Business details cleared.");
@@ -4355,6 +4329,7 @@ export function AdminQuestionWorkspace({
       setWorkspaceBranding(payload.branding);
       syncBrandingDraft(payload.branding);
       setBrandingFeedback("Business details cleared.");
+      setBusinessPanelRevision((current) => current + 1);
     } catch (error) {
       setBrandingFeedback(error instanceof Error ? error.message : "Unable to clear business details.");
     }
@@ -5215,7 +5190,7 @@ export function AdminQuestionWorkspace({
             >
               <QrCode aria-hidden="true" className="apportion-action-icon" />
             </a>
-          ) : null}
+          ) : <button aria-label="QR code unavailable" className="button-secondary small-button icon-button" disabled title={businessQrError || "Generating QR code..."} type="button"><QrCode aria-hidden="true" className="apportion-action-icon" /></button>}
         </div>
       ) : null;
   const businessDetailsPanel = (
@@ -5314,6 +5289,7 @@ export function AdminQuestionWorkspace({
           <span className="field-label">Address 2</span>
           <button
             className="button-secondary"
+            disabled={personalAddressLimit < 2}
             type="button"
             onClick={() => {
               markBrandingDraftDirty();
@@ -5325,8 +5301,12 @@ export function AdminQuestionWorkspace({
         </div>
       )}
       </section>
+      </div>
+    </div>
+  );
+  const businessConfigurationPanel = (
       <section className="business-form-section">
-        <h3>Slot &amp; Booking Rules</h3>
+        <h3>Bookings Configuration</h3>
       <div className="field business-field-card">
         <span className="field-label">Slot configuration</span>
         <span className="field-label">Appointments per slot</span>
@@ -5370,6 +5350,8 @@ export function AdminQuestionWorkspace({
         </div>
       </div>
       </section>
+  );
+  const businessBrandingPanel = (
       <section className="business-form-section">
         <h3>Branding</h3>
       <div className="field business-field-card">
@@ -5514,8 +5496,6 @@ export function AdminQuestionWorkspace({
         ) : null}
       </div>
       </section>
-      </div>
-    </div>
   );
   const businessPanelFooter = (
       <footer className="business-form-footer">
@@ -5982,8 +5962,10 @@ export function AdminQuestionWorkspace({
                     {businessQrError ? <p className="form-error business-qr-error" role="alert">{businessQrError}</p> : null}
                     <ApportionRolePanel
                       actorIdentifier={currentAdminIdentifier}
+                      refreshVersion={businessPanelRevision}
                       canCreateBusiness={getApportionServiceLimit(currentUserCategory ?? "trapit-normal") > 0}
                       onPersonalConsultationLocationsChange={setPersonalConsultationLocationIds}
+                      onPersonalAddressLimitChange={setPersonalAddressLimit}
                       onProviderSettingsSaved={(settings) => {
                         setBusinessAppointmentsPerSlot(String(settings.appointmentsPerSlot));
                         setBusinessSlotDurationMinutes(String(settings.slotDurationMinutes));
@@ -5996,6 +5978,8 @@ export function AdminQuestionWorkspace({
                         } : branding);
                       }}
                       personalBusinessForm={businessDetailsPanel}
+                      personalBusinessConfiguration={businessConfigurationPanel}
+                      personalBusinessBranding={businessBrandingPanel}
                       personalBusinessFooter={businessPanelFooter}
                       onUpgrade={() => openUpgradePanel({ message: "Upgrade to Pro to create your business.", featureLabel: "Business Panel", targetCategory: "trapit-pro" })}
                     />

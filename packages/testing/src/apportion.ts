@@ -47,6 +47,7 @@ export type ApportionAddressMembership = {
 };
 
 export type ApportionDirectory = {
+  delegationCapacityVersion?: number;
   businesses: Record<string, ApportionBusiness>;
   providerSettings: Record<string, ApportionProviderSettings>;
   memberships: ApportionAddressMembership[];
@@ -132,6 +133,7 @@ export function migrateApportionDirectory(
     });
   }
   return { businesses, providerSettings, memberships: structuredClone(existing?.memberships ?? []),
+    ...(existing?.delegationCapacityVersion !== undefined ? { delegationCapacityVersion: existing.delegationCapacityVersion } : {}),
     ...(existing?.providerClosedDateKeys ? { providerClosedDateKeys: structuredClone(existing.providerClosedDateKeys) } : {}),
     scheduleNotifications: structuredClone(existing?.scheduleNotifications ?? []),
     ...(existing?.pendingProviderLeaves ? { pendingProviderLeaves: structuredClone(existing.pendingProviderLeaves) } : {}),
@@ -219,7 +221,7 @@ export function resolveApportionDailySchedule(schedule: ApportionScheduleInput):
     }
   } else {
     const workingWeekdays = new Set((schedule.workingDays ?? "")
-      .split(/[,;|]/)
+      .split(/[\s,;|/]+/)
       .map((day) => WEEKDAY_ALIASES[day.trim().toLowerCase()])
       .filter((weekday): weekday is number => weekday !== undefined));
     for (const weekday of workingWeekdays) {
@@ -348,11 +350,13 @@ export function assertApportionAddressCapacity(input: {
   locationIds: string[];
   personalLocations: AppointmentLocation[];
   memberships: ApportionAddressMembership[];
+  delegatedLocations?: Array<{ ownerIdentifier: string; locationId: string }>;
 }) {
   const links = new Set(input.memberships
     .filter((membership) => participantIdentifiersMatch(membership.providerIdentifier, input.providerIdentifier))
     .map((membership) => `${membership.ownerIdentifier}::${membership.locationId}`));
   for (const location of input.personalLocations) links.add(`${input.providerIdentifier}::${location.id}`);
+  for (const location of input.delegatedLocations ?? []) links.add(`${location.ownerIdentifier}::${location.locationId}`);
   for (const locationId of input.locationIds) links.add(`${input.ownerIdentifier}::${locationId}`);
-  if (links.size > 2) throw new Error("Staff address unavailable");
+  if (links.size > 2) throw new Error("Address capacity exceeded: personal, staff and delegated addresses share a two-address limit.");
 }

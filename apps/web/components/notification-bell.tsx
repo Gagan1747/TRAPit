@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { registerBrowserPush as saveBrowserPushSubscription } from "./browser-push-prompt";
 
 export type NotificationBellItem = {
   actionHref?: string;
@@ -28,19 +29,6 @@ function BellIcon() {
       />
     </svg>
   );
-}
-
-function urlBase64ToUint8Array(value: string) {
-  const padding = "=".repeat((4 - value.length % 4) % 4);
-  const base64 = `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-
-  for (let index = 0; index < rawData.length; index += 1) {
-    outputArray[index] = rawData.charCodeAt(index);
-  }
-
-  return outputArray;
 }
 
 function isBrowserPushSupported() {
@@ -100,9 +88,23 @@ export function NotificationBell({ browserPushPublicKey, enableBrowserPush = fal
     }
 
     if (Notification.permission === "granted") {
-      setBrowserPushStatus("registered");
+      let active = true;
+      setBrowserPushStatus("registering");
+      void saveBrowserPushSubscription(browserPushPublicKey!).then(() => {
+        if (active) {
+          setBrowserPushStatus("registered");
+          setBrowserPushFeedback(null);
+        }
+      }).catch((error: unknown) => {
+        if (active) {
+          setBrowserPushStatus("idle");
+          setBrowserPushFeedback(error instanceof Error ? error.message : "Unable to enable browser notifications.");
+        }
+      });
+      return () => { active = false; };
     }
-  }, [canRegisterBrowserPush]);
+    setBrowserPushStatus("idle");
+  }, [canRegisterBrowserPush, browserPushPublicKey, isOpen]);
 
   async function registerBrowserPush() {
     if (!browserPushPublicKey || !isBrowserPushSupported()) {
@@ -115,7 +117,12 @@ export function NotificationBell({ browserPushPublicKey, enableBrowserPush = fal
       setBrowserPushStatus("registering");
       setBrowserPushFeedback(null);
 
-      const permission = await Notification.requestPermission();
+      if (Notification.permission === "denied") {
+        setBrowserPushFeedback("Notifications are blocked. Allow notifications in your browser's site settings, then retry.");
+        setBrowserPushStatus("idle");
+        return;
+      }
+      const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
 
       if (permission !== "granted") {
         setBrowserPushFeedback("Browser notification permission was not granted.");
@@ -123,22 +130,7 @@ export function NotificationBell({ browserPushPublicKey, enableBrowserPush = fal
         return;
       }
 
-      const registration = await navigator.serviceWorker.register("/sw.js");
-      const existingSubscription = await registration.pushManager.getSubscription();
-      const subscription = existingSubscription ?? await registration.pushManager.subscribe({
-        applicationServerKey: urlBase64ToUint8Array(browserPushPublicKey),
-        userVisibleOnly: true,
-      });
-      const response = await fetch("/api/user/web-push-subscriptions", {
-        body: JSON.stringify(subscription),
-        headers: { "Content-Type": "application/json" },
-        method: "POST",
-      });
-
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(payload?.error ?? "Unable to save browser notification settings.");
-      }
+      await saveBrowserPushSubscription(browserPushPublicKey);
 
       setBrowserPushFeedback("Browser notifications are enabled.");
       setBrowserPushStatus("registered");

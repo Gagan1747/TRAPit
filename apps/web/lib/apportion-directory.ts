@@ -15,6 +15,7 @@ import {
   type AppointmentDailyHours,
   type ApportionAddressMembership,
   type ApportionBusiness,
+  type ApportionDirectory,
   type ApportionProviderSettings,
   type ApportionService,
   type AppointmentLocation,
@@ -27,6 +28,7 @@ import {
   mutateWorkspaceBrandingState,
   readApportionWorkspaceState,
   withSerializedTestingMutation,
+  backupApportionDelegationStore,
 } from "./testing-store";
 import { listUserCategoryManagementState } from "./user-category-store";
 import type { WorkspaceActor } from "./workspace-actor";
@@ -44,6 +46,7 @@ export type ApportionBusinessContext = {
   providerSettings: Record<string, ApportionProviderSettings>;
   memberships: ApportionAddressMembership[];
   providerClosedDateKeys?: Record<string, string[]>;
+  pendingAddressOptOuts?: ApportionDirectory["pendingAddressOptOuts"];
 };
 
 export type ApportionPanelInput =
@@ -64,6 +67,54 @@ function identifierKey<T>(values: Record<string, T>, identifier: string) {
 function directory(state: TestingWorkspaceState) {
   state.apportionDirectory ??= migrateApportionDirectory(state.workspaceBrandingByActor);
   return state.apportionDirectory;
+}
+
+function delegatedLocations(state: TestingWorkspaceState, provider: string) {
+  return Object.values(directory(state).businesses).flatMap((business) => {
+    if (!business.adminDelegateIdentifier || !matches(business.adminDelegateIdentifier, provider)) return [];
+    const key = identifierKey(state.workspaceBrandingByActor, business.ownerIdentifier);
+    return (key ? state.workspaceBrandingByActor[key].appointmentLocations ?? [] : [])
+      .map((location) => ({ ownerIdentifier: business.ownerIdentifier, locationId: location.id }));
+  });
+}
+
+function assertAddressCapacity(state: TestingWorkspaceState, provider: string, owner: string, locationIds: string[], personalLocations?: AppointmentLocation[]) {
+  const key = identifierKey(state.workspaceBrandingByActor, provider);
+  assertApportionAddressCapacity({
+    providerIdentifier: provider, ownerIdentifier: owner, locationIds,
+    personalLocations: personalLocations ?? (key ? state.workspaceBrandingByActor[key].appointmentLocations ?? [] : []),
+    memberships: directory(state).memberships, delegatedLocations: delegatedLocations(state, provider),
+  });
+}
+
+export async function reconcileApportionDelegationCapacity() {
+  if ((await readApportionWorkspaceState()).apportionDirectory?.delegationCapacityVersion === 1) return;
+  await withSerializedTestingMutation(async (state) => {
+    const values = directory(state);
+    if (values.delegationCapacityVersion === 1) return;
+    await backupApportionDelegationStore(state);
+    const invalid = Object.values(values.businesses).filter((business) => {
+      if (!business.adminDelegateIdentifier) return false;
+      try {
+        assertAddressCapacity(state, business.adminDelegateIdentifier, business.ownerIdentifier, []);
+        return false;
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.startsWith("Address capacity exceeded:")) throw error;
+        return true;
+      }
+    });
+    for (const business of invalid) {
+      const delegate = business.adminDelegateIdentifier!;
+      business.adminDelegateIdentifier = null;
+      for (const recipientIdentifier of [business.ownerIdentifier, delegate]) {
+        values.scheduleNotifications.push({
+          id: createEntityId("apportion-schedule-notification"), recipientIdentifier, createdAt: new Date().toISOString(),
+          message: "Admin delegation was removed because personal, staff and delegated addresses exceed the two-address limit. The owner must appoint an Admin with available capacity. Existing appointments are unchanged.",
+        });
+      }
+    }
+    values.delegationCapacityVersion = 1;
+  });
 }
 
 function actorIdentifier(actor: WorkspaceActor) {
@@ -89,8 +140,8 @@ async function resolveRegisteredPhone(state: TestingWorkspaceState, input: strin
   return user.identifier.trim().toLowerCase();
 }
 
-async function resolveOwnerCategory(state: TestingWorkspaceState, ownerIdentifier: string, verifiedActor?: WorkspaceActor) {
-  const { activeAssignments } = await listUserCategoryManagementState();
+async function resolveOwnerCategory(state: TestingWorkspaceState, ownerIdentifier: string, verifiedActor?: WorkspaceActor, categoryState?: Awaited<ReturnType<typeof listUserCategoryManagementState>>) {
+  const { activeAssignments } = categoryState ?? await listUserCategoryManagementState();
   const phoneAssignments = activeAssignments.filter((entry) => entry.userIdentifier && matches(entry.userIdentifier, ownerIdentifier));
   let assignments = phoneAssignments;
   if (!assignments.length) {
@@ -125,6 +176,7 @@ function contextFromState(state: TestingWorkspaceState, identifier: string, owne
     ownerCategory,
     providerSettings: Object.fromEntries(providers.map((provider) => [provider, ownSettings(state, provider)])),
     memberships: values.memberships.filter((membership) => matches(membership.ownerIdentifier, business.ownerIdentifier)),
+    pendingAddressOptOuts: values.pendingAddressOptOuts?.filter((entry) => matches(entry.ownerIdentifier, business.ownerIdentifier)),
     providerClosedDateKeys: Object.fromEntries(providers.map((provider) => {
       const closedKey = identifierKey(values.providerClosedDateKeys ?? {}, provider);
       return [provider, closedKey ? values.providerClosedDateKeys![closedKey] : []];
@@ -133,16 +185,28 @@ function contextFromState(state: TestingWorkspaceState, identifier: string, owne
 }
 
 export async function getApportionBusinessContext(ownerIdentifier: string): Promise<ApportionBusinessContext | null> {
+  await reconcileApportionDelegationCapacity();
   const state = await readApportionWorkspaceState();
   const category = await resolveOwnerCategory(state, ownerIdentifier);
   return contextFromState(state, ownerIdentifier, category);
 }
 
+export async function getApportionBusinessContexts(ownerIdentifiers: string[]) {
+  if (!ownerIdentifiers.length) return new Map<string, ApportionBusinessContext | null>();
+  await reconcileApportionDelegationCapacity();
+  const [state, categories] = await Promise.all([readApportionWorkspaceState(), listUserCategoryManagementState()]);
+  const entries = await Promise.all([...new Set(ownerIdentifiers)].map(async (owner) => [
+    owner, contextFromState(state, owner, await resolveOwnerCategory(state, owner, undefined, categories)),
+  ] as const));
+  return new Map(entries);
+}
+
 export async function listApportionDirectLinkServices(providerIdentifier: string) {
   const state = await readApportionWorkspaceState();
   const values = directory(state);
+  const categories = await listUserCategoryManagementState();
   const directServices = await Promise.all(Object.values(values.businesses).map(async (business) => {
-    const category = await resolveOwnerCategory(state, business.ownerIdentifier);
+    const category = await resolveOwnerCategory(state, business.ownerIdentifier, undefined, categories);
     if (!getApportionServiceLimit(category)) return [];
     const brandingKey = identifierKey(state.workspaceBrandingByActor, business.ownerIdentifier);
     const branding = brandingKey ? state.workspaceBrandingByActor[brandingKey] : null;
@@ -172,13 +236,14 @@ export async function listApportionDirectLinkServices(providerIdentifier: string
 async function panelFromState(state: TestingWorkspaceState, actor: WorkspaceActor) {
   const identifier = actorIdentifier(actor);
   const values = directory(state);
+  const categories = await listUserCategoryManagementState();
   const businesses: Array<ApportionBusinessContext & { role: "owner" | "admin" | "staff"; bookableServiceIds: string[] }> = [];
   for (const business of Object.values(values.businesses)) {
     const role = matches(business.ownerIdentifier, identifier) ? "owner"
       : business.adminDelegateIdentifier && matches(business.adminDelegateIdentifier, identifier) ? "admin"
       : business.services.some((service) => service.assignedIdentifier && matches(service.assignedIdentifier, identifier)) ? "staff" : null;
     if (!role) continue;
-    const category = await resolveOwnerCategory(state, business.ownerIdentifier, actor);
+    const category = await resolveOwnerCategory(state, business.ownerIdentifier, actor, categories);
     const context = contextFromState(state, business.ownerIdentifier, category);
     if (!context) continue;
     const bookableServiceIds = getApportionBookableServices(business, category).map((service) => service.id);
@@ -199,8 +264,14 @@ async function panelFromState(state: TestingWorkspaceState, actor: WorkspaceActo
       businesses.push({ ...context, role, bookableServiceIds });
     }
   }
+  const occupied = new Set([
+    ...values.memberships.filter((entry) => matches(entry.providerIdentifier, identifier) && !matches(entry.ownerIdentifier, identifier)).map((entry) => `${entry.ownerIdentifier}::${entry.locationId}`),
+    ...delegatedLocations(state, identifier).map((entry) => `${entry.ownerIdentifier}::${entry.locationId}`),
+  ]);
+  const personalAddressLimit = Math.max(0, 2 - occupied.size);
   return {
-    canCreateBusiness: getApportionServiceLimit(await resolveOwnerCategory(state, identifier, actor)) > 0,
+    personalAddressLimit,
+    canCreateBusiness: personalAddressLimit > 0 && getApportionServiceLimit(await resolveOwnerCategory(state, identifier, actor, categories)) > 0,
     businesses,
     providerSettings: ownSettings(state, identifier),
     memberships: values.memberships.filter((membership) => matches(membership.providerIdentifier, identifier)),
@@ -212,6 +283,7 @@ async function panelFromState(state: TestingWorkspaceState, actor: WorkspaceActo
 }
 
 export async function getApportionPanel(actor: WorkspaceActor) {
+  await reconcileApportionDelegationCapacity();
   await reconcileApportionAddressOptOuts();
   await reconcileApportionProviderLeaves();
   return panelFromState(await readApportionWorkspaceState(), actor);
@@ -241,13 +313,6 @@ export async function reconcileApportionProviderLeaves(): Promise<void> {
   for (const operation of pending) {
     const values = (await readApportionWorkspaceState()).apportionDirectory;
     if (!values?.pendingProviderLeaves?.some((entry) => entry.id === operation.id)) continue;
-    const key = identifierKey(values.providerClosedDateKeys ?? {}, operation.providerIdentifier);
-    const closedDates = key ? values.providerClosedDateKeys![key] : [];
-    const closedDateKeys = operation.closedDateKeys.filter((date) => date > operation.leaveDateKey && closedDates.includes(date));
-    if (closedDateKeys.length) {
-      const { applyApportionProviderLeave } = await import("./apportion-store");
-      await applyApportionProviderLeave(operation.providerIdentifier, closedDateKeys, operation.leaveDateKey, operation.leaveAt);
-    }
     await withSerializedTestingMutation((state) => {
       const latest = directory(state);
       latest.pendingProviderLeaves = (latest.pendingProviderLeaves ?? []).filter((entry) => entry.id !== operation.id);
@@ -416,7 +481,7 @@ function saveSettings(state: TestingWorkspaceState, provider: string, settings: 
 }
 
 function conflict(): never {
-  throw new ApportionDirectoryError("Conflict: this change could strand existing bookings. Address removal or reassignment requires the booking lifecycle integration.");
+  throw new ApportionDirectoryError("Address deletion is not supported while linked services exist. Edit the address or operating hours instead; existing appointments remain unchanged.");
 }
 
 export async function prepareApportionBrandingMutation(state: TestingWorkspaceState, input: WorkspaceBranding | null, actorKey?: string | null, updateProviderSettings = false, verifiedActor?: WorkspaceActor) {
@@ -432,6 +497,9 @@ export async function prepareApportionBrandingMutation(state: TestingWorkspaceSt
   }
   if (input.appointmentLocations && (!Array.isArray(input.appointmentLocations) || input.appointmentLocations.length > 2)) throw new ApportionDirectoryError("Configure no more than two business addresses.");
   if (input.promotionalImageDataUrls && (!Array.isArray(input.promotionalImageDataUrls) || input.promotionalImageDataUrls.length > 4 || input.promotionalImageDataUrls.some((image) => typeof image !== "string" || !image.startsWith("data:image/") || image.length > 2_800_000))) throw new ApportionDirectoryError("Upload no more than four valid promotional images up to 2 MB each.");
+  if ([input.imageDataUrl, input.profileImageDataUrl].some((image) => image != null && (typeof image !== "string" || !image.startsWith("data:image/") || image.length > 2_800_000))) {
+    throw new ApportionDirectoryError("Logo and profile images must be valid images up to 2 MB each.");
+  }
   const incomingSettings = assertSettings({ appointmentsPerSlot: input.appointmentsPerSlot!, justAddToList: input.justAddToList, slotDurationMinutes: input.slotDurationMinutes! });
   const settings = existing && !updateProviderSettings ? ownSettings(state, key) : incomingSettings;
   const branding = normalizeWorkspaceBranding(input);
@@ -448,7 +516,8 @@ export async function prepareApportionBrandingMutation(state: TestingWorkspaceSt
   locations.forEach((location) => weeklyIntervals(location));
   const retainedIds = new Set(locations.map((location) => location.id));
   if (existing?.appointmentLocations?.some((location) => !retainedIds.has(location.id))) conflict();
-  assertApportionAddressCapacity({ providerIdentifier: key, ownerIdentifier: key, locationIds: locations.map((location) => location.id), personalLocations: [], memberships: values.memberships });
+  assertAddressCapacity(state, key, key, locations.map((location) => location.id), []);
+  if (business?.adminDelegateIdentifier) assertAddressCapacity(state, business.adminDelegateIdentifier, business.ownerIdentifier, locations.map((location) => location.id));
   for (const membership of values.memberships.filter((entry) => matches(entry.ownerIdentifier, key))) {
     const master = locations.find((location) => location.id === membership.locationId);
     if (!master) conflict();
@@ -473,6 +542,8 @@ export async function prepareApportionBrandingMutation(state: TestingWorkspaceSt
   }
   if (existing?.appointmentShareCode) branding.appointmentShareCode = existing.appointmentShareCode;
   state.workspaceBrandingByActor[key] = branding;
+  const consultation = business?.services.find((service) => service.id === "consultation");
+  if (consultation) { consultation.locationIds = locations.map((location) => location.id); consultation.active = true; }
   assertProviderHours(state, key);
   saveSettings(state, key, settings);
   for (const membership of values.memberships.filter((entry) => matches(entry.ownerIdentifier, key))) assertProviderHours(state, membership.providerIdentifier);
@@ -483,6 +554,7 @@ export async function prepareApportionBrandingMutation(state: TestingWorkspaceSt
 export async function updateApportionPanel(actor: WorkspaceActor, input: ApportionPanelInput) {
   const identifier = actorIdentifier(actor);
   if (!input || typeof input !== "object" || typeof input.operation !== "string") throw new ApportionDirectoryError("An Apportion operation is required.");
+  await reconcileApportionDelegationCapacity();
   await reconcileApportionAddressOptOuts();
   if (input.operation !== "set-leaves") await reconcileApportionProviderLeaves();
   await withSerializedTestingMutation(async (state) => {
@@ -500,6 +572,13 @@ export async function updateApportionPanel(actor: WorkspaceActor, input: Apporti
       let branding = input.branding;
       if (isAdmin) {
         if (!branding) throw new ApportionDirectoryError("Only the owner may clear a business.", 403);
+        const brandingKey = identifierKey(state.workspaceBrandingByActor, owner);
+        const saved = brandingKey ? state.workspaceBrandingByActor[brandingKey] : undefined;
+        if (!saved || branding.instituteName !== saved.instituteName || branding.address !== saved.address
+          || JSON.stringify((branding.appointmentLocations ?? []).map(({ id, name, address }) => ({ id, name, address })))
+            !== JSON.stringify((saved.appointmentLocations ?? []).map(({ id, name, address }) => ({ id, name, address })))) {
+          throw new ApportionDirectoryError("Only the business owner may change the business name or addresses.", 403);
+        }
         branding = { ...branding, ...ownSettings(state, owner) };
       }
       const prepared = await prepareApportionBrandingMutation(state, branding, key ?? owner, isOwner && input.updateProviderSettings === true, actor);
@@ -514,17 +593,8 @@ export async function updateApportionPanel(actor: WorkspaceActor, input: Apporti
       if (!assigned) throw new ApportionDirectoryError("Only a provider assigned to a service may manage personal leave dates.", 403);
       values.providerClosedDateKeys ??= {};
       const existingKey = identifierKey(values.providerClosedDateKeys, identifier) ?? identifier;
-      const previousDates = values.providerClosedDateKeys[existingKey] ?? [];
       const closedDateKeys = Array.from(new Set(input.closedDateKeys)).sort();
-      const leaveAt = new Date().toISOString();
-      const leaveDateKey = new Date(new Date(leaveAt).getTime() + 330 * 60_000).toISOString().slice(0, 10);
-      const addedFutureDates = closedDateKeys.filter((date) => date > leaveDateKey && !previousDates.includes(date));
       values.providerClosedDateKeys[existingKey] = closedDateKeys;
-      if (addedFutureDates.length) {
-        values.pendingProviderLeaves ??= [];
-        values.pendingProviderLeaves.push({ id: createEntityId("apportion-provider-leave"), providerIdentifier: identifier,
-          closedDateKeys: addedFutureDates, leaveDateKey, leaveAt });
-      }
     } else {
       if (!business) throw new ApportionDirectoryError("Unknown business.");
       if (input.operation === "set-hours" || input.operation === "unlink-address") {
@@ -565,6 +635,10 @@ export async function updateApportionPanel(actor: WorkspaceActor, input: Apporti
         if (!isOwner) throw new ApportionDirectoryError("Only the owner may appoint or remove an Admin delegate.", 403);
         const delegate = input.delegateIdentifier === null ? null : await resolveRegisteredPhone(state, input.delegateIdentifier);
         if (delegate && matches(delegate, owner)) throw new ApportionDirectoryError("The owner cannot be their own Admin delegate.");
+        if (delegate) {
+          const brandingKey = identifierKey(state.workspaceBrandingByActor, business.ownerIdentifier);
+          assertAddressCapacity(state, delegate, business.ownerIdentifier, brandingKey ? (state.workspaceBrandingByActor[brandingKey].appointmentLocations ?? []).map((location) => location.id) : []);
+        }
         business.adminDelegateIdentifier = delegate;
       } else if (input.operation === "set-service") {
         if (!isOwner && !isAdmin) throw new ApportionDirectoryError("Business owner or appointed Admin access is required.", 403);
@@ -576,17 +650,27 @@ export async function updateApportionPanel(actor: WorkspaceActor, input: Apporti
         if (incoming.id !== "consultation" && incoming.assignedIdentifier && matches(incoming.assignedIdentifier, owner)) throw new ApportionDirectoryError("The owner is assigned to Consultation only.");
         if (incoming.id === "consultation" && (!incoming.assignedIdentifier || !matches(incoming.assignedIdentifier, owner))) throw new ApportionDirectoryError("The default Consultation ID and owner assignment cannot change.");
         const assignedIdentifier = incoming.id === "consultation" ? business.ownerIdentifier : incoming.assignedIdentifier === null ? null : await resolveRegisteredPhone(state, incoming.assignedIdentifier);
-        const service: ApportionService = { id: incoming.id, name: incoming.name.trim(), active: incoming.active, assignedIdentifier, locationIds: [...new Set(incoming.locationIds)] };
+        const service: ApportionService = { id: incoming.id, name: incoming.name.trim(), active: incoming.locationIds.length > 0, assignedIdentifier, locationIds: [...new Set(incoming.locationIds)] };
         const brandingKey = identifierKey(state.workspaceBrandingByActor, owner);
         const locations = brandingKey ? state.workspaceBrandingByActor[brandingKey].appointmentLocations ?? [] : [];
+        if (service.id === "consultation") { service.locationIds = locations.map((location) => location.id); service.active = service.locationIds.length > 0; }
         if ((service.active && !service.locationIds.length) || service.locationIds.some((locationId) => !locations.some((location) => location.id === locationId))) throw new ApportionDirectoryError("Active services need at least one valid assigned business address.");
-        if (previous && ((previous.assignedIdentifier === null) !== (service.assignedIdentifier === null)
-          || (previous.assignedIdentifier && service.assignedIdentifier && !matches(previous.assignedIdentifier, service.assignedIdentifier))
-          || incoming.id !== "consultation" && previous.locationIds.some((locationId) => !service.locationIds.includes(locationId)))) conflict();
+        if (previous && incoming.id !== "consultation" && previous.locationIds.length
+          && (previous.name !== service.name || !matches(previous.assignedIdentifier ?? "", service.assignedIdentifier ?? "") && previous.assignedIdentifier !== service.assignedIdentifier)) {
+          throw new ApportionDirectoryError("Unselect all linked addresses before editing the service name or staff assignment.");
+        }
+        if (previous?.assignedIdentifier && incoming.id !== "consultation") {
+          const removed = previous.locationIds.filter((id) => !service.locationIds.includes(id));
+          for (const locationId of removed) {
+            values.pendingAddressOptOuts ??= [];
+            values.pendingAddressOptOuts.push({ id: createEntityId("apportion-opt-out"), ownerIdentifier: business.ownerIdentifier, locationId, providerIdentifier: previous.assignedIdentifier, optedOutAt: new Date().toISOString() });
+          }
+          values.memberships = values.memberships.filter((entry) => !(matches(entry.ownerIdentifier, owner)
+            && matches(entry.providerIdentifier, previous.assignedIdentifier!) && removed.includes(entry.locationId)));
+        }
         assertApportionServiceAssignment(business, service, category);
         if (assignedIdentifier && !matches(assignedIdentifier, owner)) {
-          const personalKey = identifierKey(state.workspaceBrandingByActor, assignedIdentifier);
-          assertApportionAddressCapacity({ providerIdentifier: assignedIdentifier, ownerIdentifier: business.ownerIdentifier, locationIds: service.locationIds, personalLocations: personalKey ? state.workspaceBrandingByActor[personalKey].appointmentLocations ?? [] : [], memberships: values.memberships });
+          assertAddressCapacity(state, assignedIdentifier, business.ownerIdentifier, service.locationIds);
           for (const locationId of service.locationIds) {
             if (values.memberships.some((entry) => matches(entry.ownerIdentifier, owner) && entry.locationId === locationId && matches(entry.providerIdentifier, assignedIdentifier))) continue;
             const location = locations.find((entry) => entry.id === locationId)!;

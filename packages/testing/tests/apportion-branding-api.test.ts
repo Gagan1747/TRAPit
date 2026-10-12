@@ -27,6 +27,22 @@ beforeEach(() => {
 });
 
 describe("branding API payload and settings contracts", () => {
+  it("accepts supported image payloads above the old proxy default and rejects oversized individual images", async () => {
+    const image = `data:image/png;base64,${"A".repeat(1_500_000)}`;
+    const response = await brandingApi.POST(request(JSON.stringify({ branding: { ...branding(), slotDurationMinutes: 10, imageDataUrl: image, promotionalImageDataUrls: [image] } })));
+    expect(await response.clone().json()).not.toHaveProperty("error");
+    expect(response.status).toBe(200);
+    const oversized = `data:image/png;base64,${"A".repeat(2_800_000)}`;
+    const rejected = await brandingApi.POST(request(JSON.stringify({ branding: { ...branding(), slotDurationMinutes: 10, profileImageDataUrl: oversized } })));
+    expect(rejected.status).toBe(400);
+    expect((await rejected.json()).error).toContain("2 MB");
+  });
+  it("rejects aggregate payloads above the application limit with JSON and no mutation", async () => {
+    const response = await brandingApi.POST(request(`{"padding":"${"A".repeat(18 * 1024 * 1024)}"}`));
+    expect(response.status).toBe(413);
+    expect(response.headers.get("content-type")).toContain("application/json");
+    expect(fixtures.prepare).not.toHaveBeenCalled();
+  });
   it.each(["{", "null", "[]", "42", "{}", '{"branding":42}', '{"branding":null,"updateProviderSettings":"true"}'])("rejects invalid branding body %s without mutation", async (body) => {
     const response = await brandingApi.POST(request(body));
     expect(response.status).toBe(400);

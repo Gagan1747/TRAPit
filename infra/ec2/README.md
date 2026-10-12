@@ -255,7 +255,7 @@ curl http://127.0.0.1:3000
 
 The app includes an internal worker endpoint. Browser test/poll alerts cover scheduling confirmation, the existing 15-minute reminder, and the first worker run at/after start, for explicit invitees and assigned group members only. Mobile reminders retain their existing Expo behavior. Browser appointment alerts notify the owner of a customer booking, and the target customer of an owner invitation. This has no per-message Renflair/SMS cost, but users must allow notifications so their token/subscription can be registered. HTTPS is required; iOS browser push requires a supported Home Screen installation.
 
-The same authenticated endpoint catches up Apportion slot-end Delayed transitions, day-end Missed transitions, durable provider leave cancellations and pending notification retries. Slots retain their type/time until Done or Missed at the first IST midnight at/after their saved end; queues retain their existing expiry/Absent behavior. Proven automatically converted active slots are restored; ambiguous conversions are logged with appointment IDs for review. It runs inside the existing web process; cron must not run a separate script that writes the appointment files. Keep exactly one web app process while persistence is file-backed.
+The same authenticated endpoint catches up Apportion slot-end Delayed transitions, day-end Missed transitions, durable staff management handovers and pending notification retries. Slots retain their type/time until Done or Missed at the first IST midnight at/after their saved end; queues retain their existing expiry/Absent behavior. Proven automatically converted active slots are restored; ambiguous conversions are logged with appointment IDs for review. It runs inside the existing web process; cron must not run a separate script that writes the appointment files. Keep exactly one web app process while persistence is file-backed.
 
 Back up the entire persistent data directory before deployment, including testing-workspace.json, apportion-appointments.json and notification-state.json (or the configured TRAPIT_NOTIFICATION_FILE). The notification store now retains scheduling intents, observed recipient/instance keys, the historical baseline and per-subscription deliveries. Preexisting schedules are not replayed as new confirmations on first initialization; scheduling hooks baseline before mutation and the worker recovers missing intents after restart. DynamoDB polls still require this persistent local notification store. Existing notification cron settings remain one minute with the connection/request timeouts above. No database or additional worker process is required.
 
@@ -296,6 +296,10 @@ sudo systemctl reload nginx
 ```
 
 The checked-in Nginx config includes larger proxy header buffers for Cognito sign-in responses. If you already had a live config before this change, copy the updated file to the server again and reload Nginx so the buffer settings take effect.
+
+Business image uploads now require the supplied `client_max_body_size 20m` setting. Without it, Nginx's default 1 MB limit can reject valid base64 image payloads with an HTML 413 response before Next.js receives them. The application limits combined branding requests to 18 MiB and each image to 2 MB; the proxy returns JSON for its own 413 errors. Reapply the updated configuration, run `nginx -t`, and reload Nginx. These repository changes do not update a running server automatically.
+
+Back up the full persistent directory before the delegation-capacity migration. First panel/directory access creates a one-time backup beside the workspace store, removes over-capacity delegations and notifies owners to appoint replacements. Appointment dates, status and history are preserved.
 
 At this stage HTTP should work, but HTTPS will not until the certificate is created.
 

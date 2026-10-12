@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { findNextApportionRecurringDate, planApportionDateKeys } from "../src/apportion-recurrence";
+import { findNextApportionRecurringDate, planApportionDateKeys, planApportionDates } from "../src/apportion-recurrence";
 
 describe("Apportion invitation recurrence", () => {
+  it("reports monthly off days without extending the period or adding replacements", () => {
+    const plan = planApportionDates("2026-10-05", { mode: "monthly", durationCount: 2, monthDays: [5, 11] }, (key) =>
+      new Date(`${key}T00:00:00Z`).getUTCDay() === 0 ? "Weekly off day" : true);
+    expect(plan.dateKeys).toEqual(["2026-10-05", "2026-11-05", "2026-11-11"]);
+    expect(plan.skipped).toEqual([{ dateKey: "2026-10-11", reason: "Weekly off day" }]);
+  });
+  it("returns reasons for an all-unavailable preview while submission rejects it", () => {
+    const recurrence = { mode: "monthly" as const, durationCount: 1, monthDays: [5] };
+    expect(planApportionDates("2026-10-05", recurrence, () => "Provider on leave")).toEqual({ dateKeys: [], skipped: [{ dateKey: "2026-10-05", reason: "Provider on leave" }] });
+    expect(() => planApportionDateKeys("2026-10-05", recurrence, () => false)).toThrow("No working dates");
+  });
   it("anchors Wed 7th Tue/Thu/Sat selections to the nearest Thursday", () => {
     expect(findNextApportionRecurringDate("2026-10-07", "2027-04-07", { mode: "weekly", weekdayKeys: ["Tue", "Thu", "Sat"] }, () => true)).toBe("2026-10-08");
   });

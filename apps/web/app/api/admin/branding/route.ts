@@ -8,6 +8,7 @@ import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 
 const MAX_PROMOTIONAL_IMAGES = 4;
 const MAX_PROMOTIONAL_IMAGE_DATA_URL_LENGTH = 2_800_000;
+const MAX_BRANDING_BODY_BYTES = 18 * 1024 * 1024;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -105,7 +106,14 @@ export async function POST(request: Request) {
   }
 
   try {
-    const body: unknown = await request.json();
+    if (Number(request.headers.get("content-length")) > MAX_BRANDING_BODY_BYTES) {
+      return NextResponse.json({ error: "The combined branding upload is too large. Reduce image sizes and retry." }, { status: 413 });
+    }
+    const text = await request.text();
+    if (Buffer.byteLength(text, "utf8") > MAX_BRANDING_BODY_BYTES) {
+      return NextResponse.json({ error: "The combined branding upload is too large. Reduce image sizes and retry." }, { status: 413 });
+    }
+    const body: unknown = JSON.parse(text);
     if (!isObject(body) || !("branding" in body) || (body.updateProviderSettings !== undefined && typeof body.updateProviderSettings !== "boolean")) {
       throw new Error("A branding payload and valid settings update flag are required.");
     }
@@ -114,6 +122,7 @@ export async function POST(request: Request) {
       validateAppointmentBusinessProfile(body.branding);
       validateAppointmentDateOverrides(body.branding);
       validatePromotionalImages(body.branding.promotionalImageDataUrls);
+      validatePromotionalImages([body.branding.imageDataUrl, body.branding.profileImageDataUrl].filter((image): image is string => Boolean(image)));
     }
 
     const input = body.branding;

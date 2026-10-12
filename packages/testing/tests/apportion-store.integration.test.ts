@@ -6,7 +6,10 @@ import { normalizeWorkspaceBranding } from "../src/quiz";
 import type { ApportionBusinessContext } from "../../../apps/web/lib/apportion-directory";
 
 vi.mock("server-only", () => ({}));
-vi.mock("../../../apps/web/lib/apportion-directory", () => ({ getApportionBusinessContext: vi.fn(async () => fixtures.context) }));
+vi.mock("../../../apps/web/lib/apportion-directory", () => ({
+  getApportionBusinessContext: vi.fn(async () => fixtures.context),
+  getApportionBusinessContexts: vi.fn(async (owners: string[]) => new Map([...new Set(owners)].map((owner) => [owner, fixtures.context]))),
+}));
 const directoryApi = await import("../../../apps/web/lib/apportion-directory");
 const fixtures = vi.hoisted(() => ({ context: null as import("../../../apps/web/lib/apportion-directory").ApportionBusinessContext | null }));
 const OWNER = "+919111111111";
@@ -63,6 +66,23 @@ beforeEach(async () => {
 });
 
 describe("canonical appointment store", () => {
+  it("honors pending handovers immediately and does not transfer new bookings after relinking", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-10-01T10:00:00.000Z"));
+      const previous = await store.createApportionAppointment(booking());
+      const optedOutAt = new Date().toISOString();
+      fixtures.context!.pendingAddressOptOuts = [{ ownerIdentifier: OWNER, locationId: "location-1", providerIdentifier: STAFF, optedOutAt }];
+      vi.setSystemTime(new Date("2026-10-01T10:01:00.000Z"));
+      const relinked = await store.createApportionAppointment(booking("therapy", "2099-10-05T04:30:00.000Z"));
+      expect(await store.resolveApportionAppointmentAccess(previous, STAFF)).toMatchObject({ controllerIdentifier: ADMIN, canManage: false });
+      expect(await store.resolveApportionAppointmentAccess(relinked, STAFF)).toMatchObject({ controllerIdentifier: STAFF, canManage: true });
+      expect((await store.applyApportionAddressOptOut(OWNER, "location-1", STAFF, undefined, optedOutAt)).map((entry) => entry.id)).toEqual([previous.id]);
+      expect(await store.resolveApportionAppointmentAccess(relinked, STAFF)).toMatchObject({ controllerIdentifier: STAFF, canManage: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("persists a new appointment notification for the owner only", async () => {
     const appointment = await store.createApportionAppointment(booking());
     const notices = (await persisted()).appointments.find((entry) => entry.id === appointment.id)!.notifications!;
@@ -78,11 +98,11 @@ describe("canonical appointment store", () => {
     const projected = await store.listApportionAppointmentsForActor(STAFF);
     expect(projected).toHaveLength(297);
     expect(projected.every((entry) => entry.canManage && !entry.canMessage)).toBe(true);
-    expect(directoryApi.getApportionBusinessContext).toHaveBeenCalledTimes(1);
+    expect(directoryApi.getApportionBusinessContexts).toHaveBeenCalledTimes(1);
     vi.clearAllMocks();
     fixtures.context = null;
     expect(await store.listApportionAppointmentsForActor(ADMIN)).toEqual([]);
-    expect(directoryApi.getApportionBusinessContext).toHaveBeenCalledTimes(1);
+    expect(directoryApi.getApportionBusinessContexts).toHaveBeenCalledTimes(1);
   });
   it("notifies the Admin fallback controller when an unassigned slot converts or expires", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -98,7 +118,7 @@ describe("canonical appointment store", () => {
       expect((await store.listApportionNotificationsForActor(ADMIN)).filter((notice) => notice.url.includes(entry.id))).toHaveLength(2);
     } finally { vi.useRealTimers(); }
   });
-  it("cancels future assigned leave bookings only and stores recipient notices once", async () => {
+  it("preserves all existing bookings when leave is marked and rejects new bookings on leave", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(new Date("2026-10-05T03:00:00.000Z"));
@@ -107,18 +127,19 @@ describe("canonical appointment store", () => {
       const unassigned = await store.createApportionAppointment({ ...booking("unassigned"), startsAt: "2026-10-06T04:00:00.000Z", serviceDateKey: "2026-10-06" });
       fixtures.context!.providerClosedDateKeys = { [STAFF]: ["2026-10-05", "2026-10-06"] };
       const changed = await store.applyApportionProviderLeave(STAFF, ["2026-10-05", "2026-10-06"], "2026-10-05", new Date().toISOString());
-      expect(changed.map((entry) => entry.id)).toEqual([future.id]);
-      expect(changed[0].notifications?.filter((entry) => entry.title === "Appointment cancelled").map((entry) => entry.recipientIdentifier).sort()).toEqual([OWNER, STAFF, REQUESTER].sort());
+      expect(changed).toEqual([]);
       const entries = (await persisted()).appointments;
       expect(entries.find((entry) => entry.id === today.id)?.currentStatus).toBe("pending");
       expect(entries.find((entry) => entry.id === unassigned.id)?.currentStatus).toBe("pending");
+      expect(entries.find((entry) => entry.id === future.id)?.currentStatus).toBe("pending");
+      await expect(store.createApportionAppointment({ ...booking(), startsAt: "2026-10-06T05:00:00.000Z", serviceDateKey: "2026-10-06" })).rejects.toThrow("unavailable");
       const saved = await persisted();
       expect(await store.applyApportionProviderLeave(STAFF, ["2026-10-06"], "2026-10-05", new Date().toISOString())).toEqual([]);
       expect(await persisted()).toEqual(saved);
     } finally { vi.useRealTimers(); }
   });
 
-  it("recovers future leave cancellation after expiry using the original cutoff and respects reopened dates", async () => {
+  it("legacy leave retries do not rewrite bookings; normal expiry remains independent", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(new Date("2026-10-05T03:00:00.000Z"));
@@ -128,9 +149,8 @@ describe("canonical appointment store", () => {
       fixtures.context!.providerClosedDateKeys = { [STAFF]: ["2026-10-06"] };
       vi.setSystemTime(new Date("2026-10-08T03:00:00.000Z"));
       const changed = await store.applyApportionProviderLeave(STAFF, ["2026-10-06", "2026-10-07"], "2026-10-05", leaveAt);
-      expect(changed.map((entry) => entry.id)).toEqual([future.id]);
-      expect(changed[0].history.at(-1)).toMatchObject({ action: "cancelled", note: "Provider marked future leave." });
-      expect(changed[0].notifications?.filter((entry) => entry.title !== "New appointment").every((entry) => entry.title === "Appointment cancelled")).toBe(true);
+      expect(changed).toEqual([]);
+      expect((await persisted()).appointments.find((entry) => entry.id === future.id)?.currentStatus).toBe("pending");
       await store.reconcileApportionLifecycle();
       expect((await persisted()).appointments.find((entry) => entry.id === reopened.id)?.currentStatus).toBe("missed");
     } finally { vi.useRealTimers(); }
@@ -157,7 +177,7 @@ describe("canonical appointment store", () => {
     expect(appointment.serviceId).toBe("unassigned");
     expect(appointment.assignedStaffIdentifier).toBeNull();
   });
-  it("replays the original IST cutoff after midnight and cancels only future-at-unlink bookings", async () => {
+  it("unlink retries transfer management without changing statuses, including historical appointments", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(new Date("2026-10-04T18:29:00.000Z"));
@@ -173,8 +193,8 @@ describe("canonical appointment store", () => {
       fixtures.context!.memberships = [];
       vi.setSystemTime(new Date("2026-10-05T18:29:00.000Z"));
       const nextDayChanges = await store.applyApportionAddressOptOut(OWNER, "location-1", STAFF, "2026-10-04", optedOutAt);
-      expect(nextDayChanges.map((entry) => entry.id)).toEqual([nextDay.id, later.id]);
-      expect((await persisted()).appointments.find((entry) => entry.id === sameDay.id)?.currentStatus).toBe("missed");
+      expect(nextDayChanges.map((entry) => entry.id)).toEqual([sameDay.id, nextDay.id, later.id, completed.id, cancelled.id]);
+      expect((await persisted()).appointments.find((entry) => entry.id === sameDay.id)?.currentStatus).toBe("pending");
       expect((await persisted()).appointments.find((entry) => entry.id === completed.id)?.currentStatus).toBe("done");
       expect((await persisted()).appointments.find((entry) => entry.id === cancelled.id)?.canceledByIdentifier).toBe(REQUESTER);
       vi.setSystemTime(new Date("2026-10-06T18:31:00.000Z"));
@@ -184,8 +204,9 @@ describe("canonical appointment store", () => {
       await writeFile(storePath, JSON.stringify(saved));
       const recovered = await store.applyApportionAddressOptOut(OWNER, "location-1", STAFF, "2026-10-04", optedOutAt);
       expect(recovered.map((entry) => entry.id)).toEqual([expired.id]);
-      expect(recovered[0].currentStatus).toBe("cancelled");
-      expect(recovered[0].history.slice(-2).map((entry) => entry.action)).toEqual(["missed", "cancelled"]);
+      expect(recovered[0].currentStatus).toBe("pending");
+      expect(recovered[0].history).toEqual(expired.history);
+      expect(recovered[0].managementTransferred).toBe(true);
       const finalState = await persisted();
       expect(await store.applyApportionAddressOptOut(OWNER, "location-1", STAFF, "2026-10-04", optedOutAt)).toEqual([]);
       expect(await persisted()).toEqual(finalState);
@@ -391,7 +412,7 @@ describe("canonical appointment store", () => {
     await expect(store.updateApportionAppointment({ appointmentId: appointment.id, actorIdentifier: REQUESTER, action: "reschedule", nextStartsAt: "2099-10-09T04:00:00.000Z" })).rejects.toThrow("Staff address unavailable");
   });
 
-  it("cancels only future opted-out address bookings durably, preserves today and is replay idempotent", async () => {
+  it("preserves opted-out bookings, hands management to Admin, and is replay idempotent", async () => {
     const today = new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10);
     const tomorrow = new Date(Date.now() + 330 * 60_000 + 86400_000).toISOString().slice(0, 10);
     fixtures.context!.providerSettings[STAFF].justAddToList = true;
@@ -401,7 +422,7 @@ describe("canonical appointment store", () => {
     fixtures.context!.memberships = fixtures.context!.memberships.filter((entry) => entry.locationId !== "location-1");
     expect(await store.applyApportionAddressOptOut("9111111111", "location-1", "9222222222")).toHaveLength(2);
     const saved = await persisted();
-    expect(saved.appointments.find((entry) => entry.id === future.id)).toMatchObject({ currentStatus: "cancelled", assignedStaffIdentifier: STAFF });
+    expect(saved.appointments.find((entry) => entry.id === future.id)).toMatchObject({ currentStatus: "pending", assignedStaffIdentifier: STAFF, managementTransferred: true });
     expect(saved.appointments.find((entry) => entry.id === current.id)).toMatchObject({ currentStatus: "pending" });
     expect(saved.appointments.find((entry) => entry.id === otherAddress.id)).toMatchObject({ currentStatus: "pending" });
     expect(await store.resolveApportionAppointmentAccess(current, ADMIN)).toMatchObject({ canManage: true });
@@ -409,13 +430,13 @@ describe("canonical appointment store", () => {
     expect(await store.resolveApportionAppointmentAccess(otherAddress, STAFF)).toMatchObject({ canManage: true });
     await expect(store.createApportionAppointment(booking("therapy", "2099-10-06T04:00:00.000Z"))).rejects.toThrow("Staff address unavailable");
     const pending = (await store.listApportionPendingNotifications()).filter((entry) => entry.title !== "New appointment");
-    expect(pending).toHaveLength(4);
-    expect(await store.listApportionNotificationsForActor("9444444444")).toHaveLength(1);
+    expect(pending).toHaveLength(6);
+    expect(await store.listApportionNotificationsForActor("9444444444")).toHaveLength(2);
     expect(await store.applyApportionAddressOptOut(OWNER, "location-1", STAFF)).toEqual([]);
     expect(await persisted()).toEqual(saved);
     await store.markApportionNotificationDelivered(pending[0].id);
     await store.markApportionNotificationDelivered(pending[0].id);
-    expect((await store.listApportionPendingNotifications()).filter((entry) => entry.title !== "New appointment")).toHaveLength(3);
+    expect((await store.listApportionPendingNotifications()).filter((entry) => entry.title !== "New appointment")).toHaveLength(5);
     await store.updateApportionAppointment({ appointmentId: current.id, actorIdentifier: ADMIN, action: "done" });
     fixtures.context!.business.adminDelegateIdentifier = null;
     expect(await store.resolveApportionAppointmentAccess(current, OWNER)).toMatchObject({ canManage: true });

@@ -1,5 +1,5 @@
 import { getSessionDisplayName, getSessionIdentifier } from "@trapit/auth";
-import { getApportionBookableServices, normalizeApportionProviderSettings, matchApportionIdentity, planApportionDateKeys, type ApportionRecurrence, type WorkspaceBranding } from "@trapit/testing";
+import { getApportionBookableServices, normalizeApportionProviderSettings, matchApportionIdentity, planApportionDateKeys, resolveApportionDailySchedule, type ApportionRecurrence, type WorkspaceBranding } from "@trapit/testing";
 import { NextResponse } from "next/server";
 
 import { isWebAuthConfigured } from "../../../../lib/auth-config";
@@ -9,7 +9,7 @@ import { publishWorkspaceEvent } from "../../../../lib/realtime-events";
 import { getWebSession } from "../../../../lib/session";
 import { getWorkspaceBrandingByAppointmentShareCode, listParticipants } from "../../../../lib/testing-store";
 import { resolveAppointmentLocationSchedule } from "../../../../lib/appointment-locations";
-import { assertApportionHoursWithinMaster, getApportionBusinessContext, listApportionDirectLinkServices } from "../../../../lib/apportion-directory";
+import { assertApportionHoursWithinMaster, getApportionBusinessContext, getApportionBusinessContexts, listApportionDirectLinkServices } from "../../../../lib/apportion-directory";
 
 function canInviteForOwner(viewerIdentifier: string | null, linkedOwnerIdentifier: string, ownerIdentifier: string) {
   return Boolean(viewerIdentifier && matchApportionIdentity(viewerIdentifier, ownerIdentifier)
@@ -25,8 +25,8 @@ async function resolveRegisteredTarget(phone: string) {
   return users.find((entry) => matchApportionIdentity(entry.identifier, normalizedPhone));
 }
 
-async function resolveServiceBusiness(ownerIdentifier: string, serviceId: string) {
-  const ownerContext = await getApportionBusinessContext(ownerIdentifier);
+async function resolveServiceBusiness(ownerIdentifier: string, serviceId: string, savedContext?: Awaited<ReturnType<typeof getApportionBusinessContext>>) {
+  const ownerContext = savedContext === undefined ? await getApportionBusinessContext(ownerIdentifier) : savedContext;
   if (!ownerContext) throw new Error("Appointment business is unavailable.");
   const services = getApportionBookableServices(ownerContext.business, ownerContext.ownerCategory);
   const service = services.find((entry) => entry.id === serviceId);
@@ -400,16 +400,30 @@ export async function GET(
     }
   }
 
+  const contexts = await getApportionBusinessContexts(directServices.map((option) => option.ownerIdentifier)
+    .filter((owner) => !matchApportionIdentity(owner, business.ownerIdentifier)));
+  contexts.set(business.ownerIdentifier, business.ownerContext);
+  const appointmentReads = new Map<string, ReturnType<typeof listApportionAppointmentsForOwner>>();
+  const countReads = new Map<string, ReturnType<typeof listApportionSlotCounts>>();
+  function appointmentsFor(owner: string) {
+    if (!appointmentReads.has(owner)) appointmentReads.set(owner, listApportionAppointmentsForOwner(owner));
+    return appointmentReads.get(owner)!;
+  }
+  function countsFor(owner: string, service: string) {
+    const key = `${owner}::${service}`;
+    if (!countReads.has(key)) countReads.set(key, listApportionSlotCounts(owner, undefined, service));
+    return countReads.get(key)!;
+  }
   const [ownerAppointments, slotCounts, addressOptions] = await Promise.all([
-    listApportionAppointmentsForOwner(business.ownerIdentifier),
-    listApportionSlotCounts(business.ownerIdentifier, undefined, serviceId),
+    appointmentsFor(business.ownerIdentifier),
+    countsFor(business.ownerIdentifier, serviceId),
     Promise.all(directServices.map(async (option) => {
       let serviceBusiness: Awaited<ReturnType<typeof resolveServiceBusiness>>;
-      try { serviceBusiness = await resolveServiceBusiness(option.ownerIdentifier, option.id); }
+      try { serviceBusiness = await resolveServiceBusiness(option.ownerIdentifier, option.id, contexts.get(option.ownerIdentifier) ?? null); }
       catch { return []; }
       const [appointments, counts] = await Promise.all([
-        listApportionAppointmentsForOwner(serviceBusiness.ownerIdentifier),
-        listApportionSlotCounts(serviceBusiness.ownerIdentifier, undefined, option.id),
+        appointmentsFor(serviceBusiness.ownerIdentifier),
+        countsFor(serviceBusiness.ownerIdentifier, option.id),
       ]);
       const queues = Object.entries(appointments
         .filter((appointment) => (appointment.serviceId || "consultation") === option.id)
@@ -662,6 +676,11 @@ export async function POST(
       }
       const dateKeys = planApportionDateKeys(slotDateKey, body.recurrence ?? null, (dateKey) => {
         try {
+          if (body.recurrence?.mode === "monthly") {
+            const weekday = new Date(`${dateKey}T00:00:00Z`).getUTCDay();
+            const hours = resolveApportionDailySchedule(location)[weekday];
+            if (!hours.workingHours && !hours.workingHoursSecondWindow) return false;
+          }
           const branding = getLocationBranding(dateKey);
           validateBookingDate(branding, dateKey);
           if (selectedTime) {
@@ -678,7 +697,7 @@ export async function POST(
       const activeAppointments = ownerAppointments.filter((appointment) => appointment.locationId === location.id
         && (appointment.serviceId || "consultation") === serviceId
         && ["pending", "present-in-person", "pushed-back", "delayed"].includes(appointment.currentStatus));
-      const occurrences = dateKeys.map((serviceDateKey) => {
+      const occurrences = dateKeys.flatMap((serviceDateKey) => {
         const branding = getLocationBranding(serviceDateKey);
         if (business.branding.justAddToList) {
           const estimate = estimateQueueStart({
@@ -687,15 +706,20 @@ export async function POST(
             branding,
             serviceDateKey,
           });
-          if (!estimate) throw new Error(`Queue booking is unavailable for ${serviceDateKey}.`);
-          return { serviceDateKey, startsAt: estimate.startsAt };
+          if (!estimate) {
+            if (body.recurrence) return [];
+            throw new Error(`Queue booking is unavailable for ${serviceDateKey}.`);
+          }
+          return [{ serviceDateKey, startsAt: estimate.startsAt }];
         }
         const startsAt = createUtcSlotIso(serviceDateKey, selectedTime!.dayOffset, selectedTime!.minutesOfDay)!;
         if (activeAppointments.filter((appointment) => new Date(appointment.startsAt).getTime() === new Date(startsAt).getTime()).length >= (branding.appointmentsPerSlot ?? 1)) {
+          if (body.recurrence) return [];
           throw new Error(`The appointment slot on ${serviceDateKey} is already full.`);
         }
-        return { serviceDateKey, startsAt };
+        return [{ serviceDateKey, startsAt }];
       });
+      if (!occurrences.length) throw new Error("No available dates match this appointment selection.");
       const invitation = await createApportionInvitation({
         actorIdentifier: requesterIdentifier,
         ownerIdentifier: business.ownerIdentifier,

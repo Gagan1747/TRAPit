@@ -94,9 +94,55 @@ beforeEach(async () => {
   fixtures.users = [OWNER, STAFF, ADMIN, OTHER].map((identifier) => ({ identifier, label: identifier, sub: identifier }));
   fixtures.assignments = [assignment(OWNER)];
   await seed();
+  await directory.reconcileApportionDelegationCapacity();
 });
 
 describe("persistent Apportion directory", () => {
+  it("reserves both delegated addresses, blocks personal creation and releases capacity on removal", async () => {
+    const first = branding().appointmentLocations![0];
+    await seed({ [OWNER]: { ...branding(), appointmentLocations: [first, { ...first, id: "location-2", address: "Second street", workingDays: "Tuesday" }] } });
+    fixtures.assignments.push(assignment(ADMIN));
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: ADMIN });
+    const panel = await directory.getApportionPanel(actor(ADMIN));
+    expect(panel).toMatchObject({ personalAddressLimit: 0, canCreateBusiness: false });
+    expect(panel.businesses[0].branding.appointmentLocations).toHaveLength(2);
+    await expect(directory.updateApportionPanel(actor(ADMIN), { operation: "business-branding", branding: branding() })).rejects.toThrow("Address capacity exceeded");
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: null });
+    expect(await directory.getApportionPanel(actor(ADMIN))).toMatchObject({ personalAddressLimit: 2, canCreateBusiness: true });
+  });
+
+  it("backs up and removes over-capacity legacy delegation once without deleting addresses", async () => {
+    const first = branding().appointmentLocations![0];
+    await seed({
+      [OWNER]: { ...branding(), appointmentLocations: [first, { ...first, id: "location-2", workingDays: "Tuesday" }] },
+      [ADMIN]: branding("1:00 PM", "2:00 PM"),
+    });
+    await store.withSerializedTestingMutation((state) => {
+      state.apportionDirectory!.businesses[OWNER].adminDelegateIdentifier = ADMIN;
+      delete state.apportionDirectory!.delegationCapacityVersion;
+    });
+    const before = await persisted();
+    await directory.reconcileApportionDelegationCapacity();
+    const after = await persisted();
+    expect(after.workspaceBrandingByActor).toEqual(before.workspaceBrandingByActor);
+    expect(after.apportionDirectory!.businesses[OWNER].adminDelegateIdentifier).toBeNull();
+    expect(after.apportionDirectory!.scheduleNotifications.map((notice) => notice.recipientIdentifier).sort()).toEqual([OWNER, ADMIN].sort());
+    expect(JSON.parse(await readFile(`${storePath}.delegation-capacity-v1.backup`, "utf8"))).toHaveProperty("workspaceBrandingByActor");
+    await directory.reconcileApportionDelegationCapacity();
+    expect(await persisted()).toEqual(after);
+  });
+
+  it("requires unlinking before staff edits and auto-activates every valid relink", async () => {
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("therapy", STAFF, false) });
+    expect((await persisted()).apportionDirectory!.businesses[OWNER].services.find((entry) => entry.id === "therapy")?.active).toBe(true);
+    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: { ...service("therapy", STAFF), name: "Changed" } })).rejects.toThrow("Unselect all");
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("therapy", STAFF, true, []) });
+    expect((await persisted()).apportionDirectory!.memberships).toEqual([]);
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: { ...service("therapy", ADMIN, false, []), name: "Changed" } });
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: { ...service("therapy", ADMIN, false), name: "Changed" } });
+    expect((await persisted()).apportionDirectory!.businesses[OWNER].services.find((entry) => entry.id === "therapy")).toMatchObject({ name: "Changed", active: true, assignedIdentifier: ADMIN });
+  });
+
   it("searches service names and full owner/staff phones without disclosing staff phones", async () => {
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: { ...service("staff", STAFF), name: "Paediatrician" } });
     for (const query of ["clinic", "paediatric", OWNER, STAFF, "9222222222", "+91 92222 22222"]) {
@@ -110,41 +156,34 @@ describe("persistent Apportion directory", () => {
     }
   });
 
-  it("persists only newly added future personal leave intents before applying without the testing lock", async () => {
+  it("persists deduplicated leave without creating cancellation intents", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(new Date("2026-10-04T18:31:00.000Z"));
-      leaveFixtures.apply.mockImplementationOnce(async (providerIdentifier, closedDateKeys, leaveDateKey, leaveAt) => {
-        const intent = (await persisted()).apportionDirectory!.pendingProviderLeaves![0];
-        expect(intent).toMatchObject({ id: expect.any(String), providerIdentifier, closedDateKeys, leaveDateKey, leaveAt });
-        await store.withSerializedTestingMutation((state) => { state.apportionDirectory!.scheduleNotifications = []; });
-        return [];
-      });
       await directory.updateApportionPanel(actor(OWNER), { operation: "set-leaves", closedDateKeys: ["2026-10-04", "2026-10-05", "2026-10-06", "2026-10-06"] });
-      expect(leaveFixtures.apply).toHaveBeenCalledExactlyOnceWith(OWNER, ["2026-10-06"], "2026-10-05", "2026-10-04T18:31:00.000Z");
-      expect((await persisted()).apportionDirectory!.pendingProviderLeaves).toEqual([]);
+      expect(leaveFixtures.apply).not.toHaveBeenCalled();
+      expect((await persisted()).apportionDirectory!.providerClosedDateKeys?.[OWNER]).toEqual(["2026-10-04", "2026-10-05", "2026-10-06"]);
+      expect((await persisted()).apportionDirectory!.pendingProviderLeaves ?? []).toEqual([]);
       await directory.updateApportionPanel(actor(OWNER), { operation: "set-leaves", closedDateKeys: ["2026-10-05", "2026-10-06"] });
-      expect(leaveFixtures.apply).toHaveBeenCalledTimes(1);
+      expect(leaveFixtures.apply).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("recovers personal leave after midnight using its original cutoff and timestamp", async () => {
+  it("retires legacy cancellation intents without calling the cancellation integration", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       vi.setSystemTime(new Date("2026-10-04T18:29:00.000Z"));
-      leaveFixtures.apply.mockRejectedValueOnce(new Error("Temporary leave recovery failure"));
-      await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-leaves", closedDateKeys: ["2026-10-05"] })).rejects.toThrow("Temporary leave recovery failure");
-      const intent = (await persisted()).apportionDirectory!.pendingProviderLeaves![0];
-      expect(intent).toMatchObject({ leaveDateKey: "2026-10-04", leaveAt: "2026-10-04T18:29:00.000Z" });
+      const intent = { id: "legacy-leave", providerIdentifier: OWNER, closedDateKeys: ["2026-10-05"], leaveDateKey: "2026-10-04", leaveAt: "2026-10-04T18:29:00.000Z" };
+      await store.withSerializedTestingMutation((state) => { state.apportionDirectory!.pendingProviderLeaves = [intent]; });
       expect((await store.readApportionWorkspaceState()).apportionDirectory!.pendingProviderLeaves).toEqual([intent]);
       vi.setSystemTime(new Date("2026-10-05T18:31:00.000Z"));
       expect(await directory.reconcileApportionProviderLeaves()).toBeUndefined();
-      expect(leaveFixtures.apply).toHaveBeenLastCalledWith(OWNER, ["2026-10-05"], intent.leaveDateKey, intent.leaveAt);
+      expect(leaveFixtures.apply).not.toHaveBeenCalled();
       expect((await persisted()).apportionDirectory!.pendingProviderLeaves).toEqual([]);
       await directory.getApportionPanel(actor(OWNER));
-      expect(leaveFixtures.apply).toHaveBeenCalledTimes(2);
+      expect(leaveFixtures.apply).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -164,19 +203,13 @@ describe("persistent Apportion directory", () => {
   });
 
   it("reopening pending leave dates prevents their not-yet-applied cancellation", async () => {
-    leaveFixtures.apply.mockRejectedValueOnce(new Error("Leave recovery unavailable"));
-    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-leaves", closedDateKeys: ["2099-10-05", "2099-10-06"] })).rejects.toThrow("Leave recovery unavailable");
-    const intent = (await persisted()).apportionDirectory!.pendingProviderLeaves![0];
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-leaves", closedDateKeys: ["2099-10-05", "2099-10-06"] });
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-leaves", closedDateKeys: ["2099-10-06"] });
-    expect(leaveFixtures.apply).toHaveBeenLastCalledWith(OWNER, ["2099-10-06"], intent.leaveDateKey, intent.leaveAt);
-    expect((await persisted()).apportionDirectory!.pendingProviderLeaves).toEqual([]);
-
-    leaveFixtures.apply.mockRejectedValueOnce(new Error("Leave recovery unavailable"));
-    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-leaves", closedDateKeys: ["2099-10-05", "2099-10-06"] })).rejects.toThrow("Leave recovery unavailable");
-    leaveFixtures.apply.mockClear();
+    expect(leaveFixtures.apply).not.toHaveBeenCalled();
+    expect((await persisted()).apportionDirectory!.pendingProviderLeaves ?? []).toEqual([]);
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-leaves", closedDateKeys: [] });
     expect(leaveFixtures.apply).not.toHaveBeenCalled();
-    expect((await persisted()).apportionDirectory!.pendingProviderLeaves).toEqual([]);
+    expect((await persisted()).apportionDirectory!.pendingProviderLeaves ?? []).toEqual([]);
   });
 
   it("checks the latest closed dates for each pending leave and only acknowledges that intent ID", async () => {
@@ -187,30 +220,22 @@ describe("persistent Apportion directory", () => {
       state.apportionDirectory!.providerClosedDateKeys = { [OWNER]: ["2099-10-05", "2099-10-06"] };
       state.apportionDirectory!.pendingProviderLeaves = [operation, reopenedOperation];
     });
-    leaveFixtures.apply.mockImplementationOnce(async () => {
-      await store.withSerializedTestingMutation((state) => {
-        state.apportionDirectory!.providerClosedDateKeys = { [OWNER]: ["2099-10-05", "2099-10-07"] };
-        state.apportionDirectory!.pendingProviderLeaves!.push(newerOperation);
-      });
-      return [];
-    });
     await directory.reconcileApportionProviderLeaves();
-    expect(leaveFixtures.apply).toHaveBeenCalledExactlyOnceWith(operation.providerIdentifier, operation.closedDateKeys, operation.leaveDateKey, operation.leaveAt);
+    expect(leaveFixtures.apply).not.toHaveBeenCalled();
+    await store.withSerializedTestingMutation((state) => { state.apportionDirectory!.pendingProviderLeaves!.push(newerOperation); });
     expect((await persisted()).apportionDirectory!.pendingProviderLeaves).toEqual([newerOperation]);
     await directory.reconcileApportionProviderLeaves();
-    expect(leaveFixtures.apply).toHaveBeenLastCalledWith(newerOperation.providerIdentifier, newerOperation.closedDateKeys, newerOperation.leaveDateKey, newerOperation.leaveAt);
+    expect(leaveFixtures.apply).not.toHaveBeenCalled();
     expect((await persisted()).apportionDirectory!.pendingProviderLeaves).toEqual([]);
   });
 
-  it.each(["read", "update"])("retries durable provider leave on panel %s without duplicating intents", async (entryPoint) => {
+  it.each(["read", "update"])("retires legacy provider leave on panel %s without cancelling appointments", async (entryPoint) => {
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", STAFF) });
-    leaveFixtures.apply.mockRejectedValueOnce(new Error("Leave recovery unavailable"));
-    await expect(directory.updateApportionPanel(actor(STAFF), { operation: "set-leaves", closedDateKeys: ["2099-10-05"] })).rejects.toThrow("Leave recovery unavailable");
-    const intent = (await persisted()).apportionDirectory!.pendingProviderLeaves![0];
+    await directory.updateApportionPanel(actor(STAFF), { operation: "set-leaves", closedDateKeys: ["2099-10-05"] });
+    await store.withSerializedTestingMutation((state) => { state.apportionDirectory!.pendingProviderLeaves = [{ id: "legacy", providerIdentifier: STAFF, closedDateKeys: ["2099-10-05"], leaveDateKey: "2026-10-05", leaveAt: "2026-10-05T04:00:00Z" }]; });
     if (entryPoint === "read") await directory.getApportionPanel(actor(STAFF));
     else await directory.updateApportionPanel(actor(STAFF), { operation: "set-settings", settings: { appointmentsPerSlot: 1, justAddToList: true, slotDurationMinutes: 10 } });
-    expect(leaveFixtures.apply).toHaveBeenLastCalledWith(STAFF, ["2099-10-05"], intent.leaveDateKey, intent.leaveAt);
-    expect(leaveFixtures.apply).toHaveBeenCalledTimes(2);
+    expect(leaveFixtures.apply).not.toHaveBeenCalled();
     expect((await persisted()).apportionDirectory!.pendingProviderLeaves).toEqual([]);
   });
 
@@ -220,7 +245,7 @@ describe("persistent Apportion directory", () => {
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", STAFF) });
     await directory.updateApportionPanel(actor(OTHER), { operation: "set-service", service: service("staff", STAFF) });
     await directory.updateApportionPanel(actor(STAFF), { operation: "set-leaves", closedDateKeys: ["2099-10-05"] });
-    expect(leaveFixtures.apply).toHaveBeenCalledExactlyOnceWith(STAFF, ["2099-10-05"], expect.any(String), expect.any(String));
+    expect(leaveFixtures.apply).not.toHaveBeenCalled();
     const state = await persisted();
     expect(state.apportionDirectory!.providerClosedDateKeys).toEqual({ [STAFF]: ["2099-10-05"] });
     expect(state.workspaceBrandingByActor[OWNER].appointmentDateOverrides?.closedDateKeys).toEqual([]);
@@ -358,17 +383,19 @@ describe("persistent Apportion directory", () => {
     expect((await directory.getApportionBusinessContext(OWNER))?.business.services[0].name).toBe("Owner visits");
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: { ...service("consultation", OWNER), name: "Owner visits", active: false } });
     const first = branding().appointmentLocations![0];
-    await directory.updateApportionPanel(actor(OWNER), { operation: "business-branding", branding: { ...branding(), appointmentLocations: [first, { ...first, id: "location-2", address: "Other street" }] } });
+    await directory.updateApportionPanel(actor(OWNER), { operation: "business-branding", branding: { ...branding(), appointmentLocations: [first, { ...first, id: "location-2", address: "Other street", workingDays: "Tuesday" }] } });
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff-one", STAFF) });
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff-two", OTHER, true, ["location-2"]) });
     expect((await directory.getApportionBusinessContext(OWNER))?.memberships).toHaveLength(2);
   });
 
-  it("lets the appointed delegate edit branding without changing owner-global settings", async () => {
+  it("lets delegates edit operating hours but rejects business name and address edits", async () => {
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: ADMIN });
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-settings", settings: { appointmentsPerSlot: 5, justAddToList: false, slotDurationMinutes: 30 } });
-    await directory.updateApportionPanel(actor(ADMIN), { operation: "business-branding", ownerIdentifier: OWNER, branding: { ...branding(), instituteName: "Delegate edit", appointmentsPerSlot: 1, justAddToList: true, slotDurationMinutes: 10 } });
-    expect((await persisted()).workspaceBrandingByActor[OWNER]).toMatchObject({ instituteName: "Delegate edit", appointmentsPerSlot: 5, justAddToList: false, slotDurationMinutes: 30 });
+    await expect(directory.updateApportionPanel(actor(ADMIN), { operation: "business-branding", ownerIdentifier: OWNER, branding: { ...branding(), instituteName: "Delegate edit" } })).rejects.toMatchObject({ status: 403 });
+    await expect(directory.updateApportionPanel(actor(ADMIN), { operation: "business-branding", ownerIdentifier: OWNER, branding: { ...branding(), appointmentLocations: [{ ...branding().appointmentLocations![0], address: "Changed" }] } })).rejects.toMatchObject({ status: 403 });
+    await directory.updateApportionPanel(actor(ADMIN), { operation: "business-branding", ownerIdentifier: OWNER, branding: branding("10:00 AM", "12:00 PM") });
+    expect((await persisted()).workspaceBrandingByActor[OWNER]).toMatchObject({ instituteName: "Clinic", appointmentsPerSlot: 5, justAddToList: false, slotDurationMinutes: 30 });
     await expect(directory.updateApportionPanel(actor(STAFF), { operation: "business-branding", ownerIdentifier: OWNER, branding: branding() })).rejects.toMatchObject({ status: 403 });
   });
 
@@ -471,7 +498,8 @@ describe("persistent Apportion directory", () => {
     await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("duplicate", "9222222222") })).rejects.toThrow("only one service");
     await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("consultation", STAFF) })).rejects.toThrow("Consultation");
     await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("unknown-address", null, true, ["missing"]) })).rejects.toThrow("valid assigned");
-    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("empty", null, true, []) })).rejects.toThrow("valid assigned");
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("empty", null, true, []) });
+    expect((await persisted()).apportionDirectory?.businesses[OWNER].services.find((entry) => entry.id === "empty")?.active).toBe(false);
   });
 
   it("counts personal and distinct linked addresses together and delegation costs no address", async () => {
@@ -480,7 +508,7 @@ describe("persistent Apportion directory", () => {
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: STAFF });
     expect((await persisted()).apportionDirectory?.memberships).toHaveLength(0);
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", STAFF) });
-    await expect(directory.updateApportionPanel(actor(OTHER), { operation: "set-service", service: service("staff", "9222222222") })).rejects.toThrow("Staff address unavailable");
+    await expect(directory.updateApportionPanel(actor(OTHER), { operation: "set-service", service: service("staff", "9222222222") })).rejects.toThrow("Address capacity exceeded");
   });
 
   it("allows two businesses for one provider, shares global settings, and enforces per-address master hours", async () => {
@@ -625,11 +653,11 @@ describe("persistent Apportion directory", () => {
     expect((await directory.getApportionBusinessContext(OWNER))?.memberships).toEqual([]);
     await seed();
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", STAFF) });
-    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", ADMIN) })).rejects.toThrow("Conflict");
+    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", ADMIN) })).rejects.toThrow("Unselect all");
     await directory.updateApportionPanel(actor(STAFF), { operation: "unlink-address", ownerIdentifier: OWNER, locationId: "location-1" });
     expect((await directory.getApportionBusinessContext(OWNER))?.memberships).toEqual([]);
     expect((await directory.getApportionBusinessContext(OWNER))?.business.services.find((entry) => entry.id === "staff")).toMatchObject({ active: false, locationIds: [] });
-    await expect(store.updateWorkspaceBranding(null, OWNER)).rejects.toThrow("Conflict");
+    await expect(store.updateWorkspaceBranding(null, OWNER)).rejects.toThrow("Address deletion");
   });
 
   it("fails closed for unknown and Free owners without deleting migrated history", async () => {

@@ -1,15 +1,16 @@
 import "server-only";
 
-import { createEntityId, getApportionBookableServices, getApportionWeeklyIntervals, intersectApportionWeeklyIntervals, matchApportionIdentity, normalizeApportionProviderSettings, participantIdentifiersMatch, planApportionDateKeys, resolveApportionController, type ApportionRecurrence, type ApportionProviderSettings } from "@trapit/testing";
+import { createEntityId, getApportionBookableServices, getApportionWeeklyIntervals, intersectApportionWeeklyIntervals, matchApportionIdentity, normalizeApportionProviderSettings, participantIdentifiersMatch, planApportionDateKeys, resolveApportionDailySchedule, resolveApportionController, type ApportionRecurrence, type ApportionProviderSettings } from "@trapit/testing";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { getApportionBusinessContext, type ApportionBusinessContext } from "./apportion-directory";
+import { getApportionBusinessContext, getApportionBusinessContexts, type ApportionBusinessContext } from "./apportion-directory";
 import { getApportionLifecycleBoundaries, getApportionSlotExpiry, resolveAppointmentLocationSchedule, validateAppointmentLocationSlot } from "./appointment-locations";
 
 const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
 export type ApportionAppointment = {
+  managementTransferred?: boolean;
   sourceInvitationId?: string;
   messageReadCursors?: Record<string, string>;
   messageReadBaselineId?: string | null;
@@ -283,7 +284,12 @@ function appointmentAccessFromContext(appointment: ApportionAppointment, actorId
     controllerIdentifier = appointment.ownerIdentifier;
   } else if (context) {
     const assignedIdentifier = service?.assignedIdentifier;
-    const linked = assignedIdentifier && service.locationIds.includes(appointment.locationId)
+    const pendingTransfer = context.pendingAddressOptOuts?.some((entry) => entry.locationId === appointment.locationId
+      && participantIdentifiersMatch(entry.providerIdentifier, appointment.assignedStaffIdentifier ?? "")
+      && (!entry.optedOutAt || appointment.createdAt <= entry.optedOutAt));
+    const linked = !appointment.managementTransferred && !pendingTransfer && assignedIdentifier
+      && participantIdentifiersMatch(assignedIdentifier, appointment.assignedStaffIdentifier ?? "")
+      && service.locationIds.includes(appointment.locationId)
       && providerIsLinked(context, assignedIdentifier, appointment.locationId);
     controllerIdentifier = resolveApportionController(context.business, {
       id: serviceId, name: service?.name || appointment.serviceName || serviceId,
@@ -335,7 +341,7 @@ function isActiveStatus(status: ApportionAppointmentStatus) {
 }
 
 function addAppointmentNotifications(appointment: ApportionAppointment, title: string, body: string, timestamp: string, controllerIdentifier?: string | null) {
-  const recipients = [appointment.requesterIdentifier, appointment.ownerIdentifier, appointment.assignedStaffIdentifier, controllerIdentifier]
+  const recipients = [appointment.requesterIdentifier, appointment.ownerIdentifier, controllerIdentifier ?? appointment.assignedStaffIdentifier]
     .filter((identifier): identifier is string => Boolean(identifier))
     .filter((identifier, index, identifiers) => !identifiers.slice(0, index).some((other) => participantIdentifiersMatch(identifier, other)));
   appointment.notifications ??= [];
@@ -744,12 +750,7 @@ export async function listApportionAppointmentsForRequester(requesterIdentifier:
 export async function listApportionAppointmentsForActor(identifier: string) {
   return withAppointmentLock(async () => {
     const state = await readState();
-    const contexts = new Map<string, ApportionBusinessContext | null>();
-    for (const appointment of state.appointments) {
-      if (!contexts.has(appointment.ownerIdentifier)) {
-        contexts.set(appointment.ownerIdentifier, await getApportionBusinessContext(appointment.ownerIdentifier));
-      }
-    }
+    const contexts = await getApportionBusinessContexts(state.appointments.map((appointment) => appointment.ownerIdentifier));
     const projections = state.appointments.map((appointment) => {
       const access = appointmentAccessFromContext(appointment, identifier, contexts.get(appointment.ownerIdentifier) ?? null);
       return access.canView ? { ...appointmentProjection(appointment, identifier), canManage: access.canManage, canMessage: isActiveStatus(appointment.currentStatus) && (access.isRequester || access.canManage) } : null;
@@ -993,6 +994,7 @@ export async function createApportionInvitation(input: {
   recurrenceStartDateKey?: string;
 }) {
   return withAppointmentLock(async () => {
+    const state = await readState();
     if (!input.actorIdentifier?.trim() || !input.ownerIdentifier?.trim() || !input.requesterIdentifier?.trim()) throw new ApportionInvitationError("Owner and registered requester are required.");
     if (!matchApportionIdentity(input.actorIdentifier, input.ownerIdentifier)) throw new ApportionInvitationError("Only the business owner can invite a requester.", 403);
     if (matchApportionIdentity(input.requesterIdentifier, input.ownerIdentifier)) throw new ApportionInvitationError("Use normal booking for your own appointment.");
@@ -1001,6 +1003,11 @@ export async function createApportionInvitation(input: {
     let snapshot: Awaited<ReturnType<typeof resolveBookingContext>> | undefined;
     for (const occurrence of input.occurrences) {
       const { booking } = await validateInvitationOccurrence(input.ownerIdentifier, input.locationId, input.serviceId, occurrence, false, snapshot?.settings, snapshot?.context);
+      if (input.recurrence?.mode === "monthly") {
+        const weekday = new Date(`${occurrence.serviceDateKey}T00:00:00Z`).getUTCDay();
+        const hours = resolveApportionDailySchedule(booking.location)[weekday];
+        if (!hours.workingHours && !hours.workingHoursSecondWindow) throw new ApportionInvitationError("Monthly occurrences cannot fall on a weekly off day.");
+      }
       snapshot ??= booking;
       const startsAt = new Date(occurrence.startsAt).toISOString();
       if (occurrences.some((entry) => entry.serviceDateKey === occurrence.serviceDateKey)) throw new ApportionInvitationError("Choose distinct service days.");
@@ -1020,11 +1027,28 @@ export async function createApportionInvitation(input: {
           const membership = booking.context.memberships.find((entry) => entry.locationId === input.locationId && booking.providerIdentifier && matchApportionIdentity(entry.providerIdentifier, booking.providerIdentifier));
           const provider = membership ? resolveAppointmentLocationSchedule({ ...booking.context.branding, appointmentLocations: [{ ...booking.location, ...membership }], appointmentDateOverrides: { closedDateKeys: [], openedDateKeys: [] }, appointmentDateHoursOverrides: [], appointmentWeeklyHoursOverrides: [] }, input.locationId, dateKey) : master;
           if (!master || !provider) return false;
+          if (input.recurrence?.mode === "monthly") {
+            const weekday = new Date(`${dateKey}T00:00:00Z`).getUTCDay();
+            const hours = resolveApportionDailySchedule(booking.location)[weekday];
+            if (!hours.workingHours && !hours.workingHoursSecondWindow) return false;
+          }
+          const active = state.appointments.filter((entry) => matchApportionIdentity(entry.ownerIdentifier, input.ownerIdentifier)
+            && entry.locationId === input.locationId && entry.serviceId === input.serviceId
+            && entry.serviceDateKey === dateKey && isActiveStatus(entry.currentStatus));
           if (!booking.settings.justAddToList) {
             const first = new Date(input.occurrences[0].startsAt).getTime() - new Date(`${input.occurrences[0].serviceDateKey}T00:00:00+05:30`).getTime();
             const startsAt = new Date(new Date(`${dateKey}T00:00:00+05:30`).getTime() + first).toISOString();
             validateAppointmentLocationSlot({ location: provider, serviceDateKey: dateKey, startsAt, slotDurationMinutes: booking.settings.slotDurationMinutes });
             validateAppointmentLocationSlot({ location: master, serviceDateKey: dateKey, startsAt, slotDurationMinutes: booking.settings.slotDurationMinutes });
+            if (active.filter((entry) => entry.startsAt === startsAt).length >= booking.settings.appointmentsPerSlot) return false;
+          } else {
+            const intervals = intersectApportionWeeklyIntervals(
+              getApportionWeeklyIntervals({ dailyHours: [{ weekday: 0, workingHours: master.workingHours, workingHoursSecondWindow: master.workingHoursSecondWindow }] }),
+              getApportionWeeklyIntervals({ dailyHours: [{ weekday: 0, workingHours: provider.workingHours, workingHoursSecondWindow: provider.workingHoursSecondWindow }] }),
+            );
+            const day = new Date(`${dateKey}T00:00:00+05:30`).getTime();
+            const available = intervals.reduce((total, interval) => total + Math.max(0, day + interval.endMinute * 60_000 - Math.max(Date.now(), day + interval.startMinute * 60_000)) / 60_000, 0);
+            if ((Math.ceil(active.length / booking.settings.appointmentsPerSlot) + 1) * booking.settings.slotDurationMinutes > available) return false;
           }
           return true;
         } catch { return false; }
@@ -1045,7 +1069,6 @@ export async function createApportionInvitation(input: {
     for (const notification of invitation.notifications) {
       notification.webPushEligible = matchApportionIdentity(notification.recipientIdentifier, invitation.requesterIdentifier);
     }
-    const state = await readState();
     state.invitations.push(invitation);
     await writeState(state);
     return invitationProjection(invitation, input.actorIdentifier);
@@ -1372,47 +1395,21 @@ export async function cancelApportionAppointment(input: {
 
 export async function applyApportionAddressOptOut(ownerIdentifier: string, locationId: string, providerIdentifier: string, optedOutDateKey?: string, optedOutAt?: string) {
   return withAppointmentLock(async () => {
-    const state = await readState();
-    const cutoff = optedOutDateKey ?? getAppointmentDayKey(new Date().toISOString());
+    const state = await readState(false);
     const timestamp = new Date().toISOString();
     const changed: ApportionAppointment[] = [];
     for (const appointment of state.appointments) {
-      const latestHistory = appointment.history[appointment.history.length - 1];
-      const missedAfterOptOut = appointment.currentStatus === "missed" && Boolean(optedOutAt)
-        && appointment.serviceDateKey > cutoff && latestHistory?.action === "missed"
-        && latestHistory.actorIdentifier === "system" && latestHistory.at === appointment.statusUpdatedAt
-        && new Date(appointment.statusUpdatedAt).getTime() >= new Date(optedOutAt!).getTime();
       if (!participantIdentifiersMatch(appointment.ownerIdentifier, ownerIdentifier)
         || appointment.locationId !== locationId
         || !appointment.assignedStaffIdentifier
         || !participantIdentifiersMatch(appointment.assignedStaffIdentifier, providerIdentifier)
-        || (!isActiveStatus(appointment.currentStatus) && !missedAfterOptOut)
-        || appointment.serviceDateKey < cutoff) continue;
-      const note = `Provider opted out of address ${locationId}.`;
-      if (appointment.serviceDateKey === cutoff) {
-        if (appointment.history.some((entry) => entry.action === "address-opt-out" && entry.note === note
-          && participantIdentifiersMatch(entry.actorIdentifier, providerIdentifier))) continue;
-        appointment.history.push(createHistoryEntry({ action: "address-opt-out", actorIdentifier: providerIdentifier, at: timestamp, toStartsAt: appointment.startsAt, note }));
-      } else {
-        appointment.currentStatus = "cancelled";
-        appointment.canceledAt = timestamp;
-        appointment.canceledByIdentifier = providerIdentifier;
-        appointment.presentInPersonAt = null;
-        appointment.statusUpdatedAt = timestamp;
-        appointment.history.push(createHistoryEntry({ action: "cancelled", actorIdentifier: providerIdentifier, at: timestamp, toStartsAt: appointment.startsAt, note }));
+        || (optedOutAt && appointment.createdAt > optedOutAt)
+        || appointment.managementTransferred) continue;
+      appointment.managementTransferred = true;
+      if (isActiveStatus(appointment.currentStatus)) {
         const { controllerIdentifier } = await resolveApportionAppointmentAccess(appointment, providerIdentifier);
-        const recipients = [appointment.requesterIdentifier, appointment.ownerIdentifier, providerIdentifier, controllerIdentifier]
-          .filter((identifier): identifier is string => Boolean(identifier))
-          .filter((identifier, index, identifiers) => !identifiers.slice(0, index).some((other) => participantIdentifiersMatch(identifier, other)));
-        appointment.notifications ??= [];
-        for (const recipientIdentifier of recipients) {
-          appointment.notifications.push({
-            id: createEntityId("apportion-notification"), recipientIdentifier,
-            title: "Appointment cancelled",
-            body: `${appointment.serviceName || "Consultation"} at ${appointment.locationName} on ${appointment.serviceDateKey} was cancelled because the provider left this address.`,
-            url: "/user?section=apportion", createdAt: timestamp, deliveredAt: null,
-          });
-        }
+        addAppointmentNotifications(appointment, "Appointment management updated",
+          `${appointment.serviceName || "Consultation"} at ${appointment.locationName}: management transferred to the business delegate or owner. Your booking is unchanged.`, timestamp, controllerIdentifier);
       }
       changed.push(appointment);
     }
@@ -1432,71 +1429,9 @@ export async function reconcileApportionLifecycle() {
   });
 }
 
-export async function applyApportionProviderLeave(providerIdentifier: string, closedDateKeys: string[], leaveDateKey: string, leaveAt: string) {
-  return withAppointmentLock(async () => {
-    const state = await readState(false);
-    const timestamp = new Date().toISOString();
-    const changed: ApportionAppointment[] = [];
-    const contexts = new Map<string, ApportionBusinessContext | null>();
-    for (const appointment of state.appointments) {
-      const missedAfterLeave = appointment.currentStatus === "missed" && appointment.history.at(-1)?.actorIdentifier === "system"
-        && new Date(appointment.statusUpdatedAt).getTime() >= new Date(leaveAt).getTime();
-      if ((!isActiveStatus(appointment.currentStatus) && !missedAfterLeave) || appointment.serviceDateKey <= leaveDateKey
-        || !closedDateKeys.includes(appointment.serviceDateKey) || !appointment.assignedStaffIdentifier
-        || !participantIdentifiersMatch(appointment.assignedStaffIdentifier, providerIdentifier)) continue;
-      if (!contexts.has(appointment.ownerIdentifier)) contexts.set(appointment.ownerIdentifier, await getApportionBusinessContext(appointment.ownerIdentifier));
-      const context = contexts.get(appointment.ownerIdentifier);
-      const service = context?.business.services.find((entry) => entry.id === appointment.serviceId);
-      const stillClosed = Object.entries(context?.providerClosedDateKeys ?? {}).some(([identifier, dates]) => participantIdentifiersMatch(identifier, providerIdentifier) && dates.includes(appointment.serviceDateKey));
-      if (!service?.assignedIdentifier || !participantIdentifiersMatch(service.assignedIdentifier, providerIdentifier)
-        || !service.locationIds.includes(appointment.locationId) || !stillClosed) continue;
-      appointment.currentStatus = "cancelled";
-      appointment.canceledAt = timestamp;
-      appointment.canceledByIdentifier = providerIdentifier;
-      appointment.presentInPersonAt = null;
-      appointment.statusUpdatedAt = timestamp;
-      appointment.history.push(createHistoryEntry({ action: "cancelled", actorIdentifier: providerIdentifier, at: timestamp,
-        toStartsAt: appointment.startsAt, note: "Provider marked future leave." }));
-      const { controllerIdentifier } = await resolveApportionAppointmentAccess(appointment, providerIdentifier);
-      addAppointmentNotifications(appointment, "Appointment cancelled", `${appointment.serviceName || "Consultation"} at ${appointment.locationName} on ${appointment.serviceDateKey} was cancelled because the provider is on leave.`, timestamp, controllerIdentifier);
-      changed.push(appointment);
-    }
-    let invitationsChanged = false;
-    for (const invitation of state.invitations) {
-      const expiredAfterLeave = invitation.status === "expired"
-        && new Date(invitation.statusUpdatedAt).getTime() >= new Date(leaveAt).getTime()
-        && invitation.notifications.some((notice) => notice.title === "Appointment invitation expired" && notice.createdAt === invitation.statusUpdatedAt);
-      if (invitation.status !== "pending" && !expiredAfterLeave) continue;
-      if (!contexts.has(invitation.ownerIdentifier)) contexts.set(invitation.ownerIdentifier, await getApportionBusinessContext(invitation.ownerIdentifier));
-      const context = contexts.get(invitation.ownerIdentifier);
-      const service = context?.business.services.find((entry) => entry.id === invitation.serviceId);
-      if (!service?.assignedIdentifier || !matchApportionIdentity(service.assignedIdentifier, providerIdentifier)
-        || !service.locationIds.includes(invitation.locationId)) continue;
-      const currentClosedDates = Object.entries(context?.providerClosedDateKeys ?? {})
-        .find(([identifier]) => matchApportionIdentity(identifier, providerIdentifier))?.[1] ?? [];
-      const remaining = invitation.occurrences.filter((occurrence) => occurrence.serviceDateKey <= leaveDateKey
-        || !closedDateKeys.includes(occurrence.serviceDateKey) || !currentClosedDates.includes(occurrence.serviceDateKey));
-      if (remaining.length === invitation.occurrences.length) continue;
-      if (expiredAfterLeave) invitation.notifications = invitation.notifications.filter((notice) => notice.deliveredAt
-        || notice.title !== "Appointment invitation expired" || new Date(notice.createdAt).getTime() < new Date(leaveAt).getTime());
-      invitation.occurrences = remaining;
-      invitation.statusUpdatedAt = timestamp;
-      if (remaining.length) {
-        invitation.expiresAt = remaining[0].slotEndsAt;
-        invitation.status = "pending";
-      }
-      else invitation.status = "cancelled";
-      addInvitationNotifications(invitation, remaining.length ? "Appointment invitation updated" : "Appointment invitation cancelled",
-        `${invitation.serviceName} at ${invitation.locationName}: future leave removed appointment dates. ${remaining.length} appointment(s) remain.`, timestamp);
-      invitationsChanged = true;
-    }
-    if (invitationsChanged) expireApportionInvitations(state);
-    if (changed.length || invitationsChanged) {
-      state.appointments = normalizeAppointments(state.appointments);
-      await writeState(state);
-    }
-    return changed;
-  });
+export async function applyApportionProviderLeave(_providerIdentifier: string, _closedDateKeys: string[], _leaveDateKey: string, _leaveAt: string): Promise<ApportionAppointment[]> {
+  // Legacy retry callers must not cancel bookings under the preservation policy.
+  return [];
 }
 
 export async function listApportionNotificationsForActor(identifier: string) {

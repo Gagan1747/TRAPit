@@ -1,101 +1,160 @@
 "use client";
 
-import { APPORTION_NEW_DURATION_MINUTES, getApportionBookableServices, getApportionServiceLimit, getApportionWeeklyIntervals, participantIdentifiersMatch, resolveApportionDailySchedule, type AppointmentLocation, type ApportionDailyHours, type ApportionProviderSettings, type ApportionService, type ApportionWeeklyInterval } from "@trapit/testing";
+import { APPORTION_NEW_DURATION_MINUTES, getApportionServiceLimit, getApportionWeeklyIntervals, participantIdentifiersMatch, resolveApportionDailySchedule, type AppointmentLocation, type ApportionDailyHours, type ApportionProviderSettings, type ApportionService, type ApportionWeeklyInterval } from "@trapit/testing";
 import { ChevronLeft, ChevronRight, Plus, Save, Search, Unlink } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ApportionPanelInput, getApportionPanel } from "../lib/apportion-directory";
 import { BusinessHoursGrid } from "./business-hours-grid";
+import { readJsonResponse } from "../lib/read-json-response";
 
 type Panel = Omit<Awaited<ReturnType<typeof getApportionPanel>>, "canCreateBusiness"> & { canCreateBusiness?: boolean };
 type Business = Panel["businesses"][number];
 type Membership = Panel["memberships"][number];
-type SaveOperation = (input: ApportionPanelInput) => Promise<void>;
+type SaveOperation = (input: ApportionPanelInput) => Promise<boolean>;
 
 async function readResponse<T>(response: Response): Promise<T> {
-  const payload = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(payload.error || "Unable to update Business Panel.");
-  return payload;
+  return readJsonResponse<T>(response);
 }
 
-function RegisteredPhone({ value, onChange, disabled = false }: { value: string; onChange: (value: string) => void; disabled?: boolean }) {
+function RegisteredPhone({ value, onChange, onResolved, disabled = false }: { value: string; onChange: (value: string) => void; onResolved?: (identifier: string | null) => void; disabled?: boolean }) {
   const [match, setMatch] = useState<{ identifier: string; name: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
-  useEffect(() => { setMatch(null); setError(null); }, [value]);
+  const version = useRef(0);
+  useEffect(() => {
+    version.current += 1;
+    setMatch(null); setError(null);
+    if (!value.trim()) return;
+    const current = version.current;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => { void fetch(`/api/user/apportion?lookupPhone=${encodeURIComponent(value)}`, { signal: controller.signal })
+      .then(readResponse<{ user: { identifier: string; name: string } }>)
+      .then((result) => { if (version.current === current) setMatch(result.user); })
+      .catch((failure: unknown) => { if (!controller.signal.aborted && version.current === current) setError(failure instanceof Error ? failure.message : "Unable to find user."); }); }, 400);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [value]);
   async function lookup() {
+    const current = version.current;
     setSearching(true);
     setError(null);
     try {
       const result = await readResponse<{ user: { identifier: string; name: string } }>(await fetch(`/api/user/apportion?lookupPhone=${encodeURIComponent(value)}`));
+      if (version.current !== current) return;
       setMatch(result.user);
+      onResolved?.(result.user.identifier);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : "Unable to find user.");
     } finally { setSearching(false); }
   }
   return <div>
+    <strong aria-live="polite">{match?.name || (value ? "Registered user" : "Unassigned")}</strong>
     <div className="button-row">
-      <input aria-label="Registered phone number" type="tel" value={value} disabled={disabled || searching} onChange={(event) => onChange(event.target.value)} />
+      <input aria-label="Registered phone number" type="tel" value={value} disabled={disabled || searching} onChange={(event) => { onChange(event.target.value); if (!event.target.value.trim()) onResolved?.(null); }} />
       {!disabled ? <button aria-label="Find registered user" title="Find registered user" className="button-secondary icon-button" type="button" disabled={searching || !value.trim()} onClick={() => void lookup()}><Search size={18} /></button> : null}
     </div>
-    {match ? <p className="muted-text">User Name: {match.name}</p> : null}
     {error ? <p role="alert">{error}</p> : null}
   </div>;
 }
 
-function ServiceRow({ business, service, draft, setDraft, locationId, busy, save }: { business: Business; service: ApportionService; draft: ApportionService; setDraft: (value: ApportionService) => void; locationId: string; busy: boolean; save: SaveOperation }) {
+function BusinessAddresses({ business, busy, save }: { business: Business; busy: boolean; save: SaveOperation }) {
+  const [branding, setBranding] = useState(business.branding);
+  const [error, setError] = useState<string | null>(null);
+  const [activeDays, setActiveDays] = useState(() => Object.fromEntries((business.branding.appointmentLocations ?? []).map((location) => [
+    location.id, resolveApportionDailySchedule(location).filter((entry) => entry.workingHours || entry.workingHoursSecondWindow).map((entry) => entry.weekday),
+  ])));
+  useEffect(() => {
+    setBranding(business.branding);
+    setActiveDays(Object.fromEntries((business.branding.appointmentLocations ?? []).map((location) => [
+      location.id, resolveApportionDailySchedule(location).filter((entry) => entry.workingHours || entry.workingHoursSecondWindow).map((entry) => entry.weekday),
+    ])));
+  }, [business.branding]);
+  function setHours(locationId: string, weekday: number, field: "workingHours" | "workingHoursSecondWindow", value: string) {
+    setBranding((current) => ({ ...current, appointmentLocations: current.appointmentLocations?.map((location) => {
+      if (location.id !== locationId) return location;
+      const dailyHours = resolveApportionDailySchedule(location).map((entry) => entry.weekday === weekday ? { ...entry, [field]: value } : entry);
+      const active = dailyHours.filter((entry) => entry.workingHours || entry.workingHoursSecondWindow);
+      return { ...location, dailyHours, workingDays: active.map((entry) => SCHEDULE_WEEKDAYS[entry.weekday]).join(", "), workingHours: active[0]?.workingHours ?? "", workingHoursSecondWindow: active[0]?.workingHoursSecondWindow ?? "" };
+    }) }));
+  }
+  async function saveHours() {
+    const incomplete = (branding.appointmentLocations ?? []).some((location) => {
+      const hours = resolveApportionDailySchedule(location);
+      return (activeDays[location.id] ?? []).some((weekday) => !hours[weekday]?.workingHours && !hours[weekday]?.workingHoursSecondWindow);
+    });
+    if (incomplete) {
+      setError("Enter operating hours for each selected day, or mark that day closed.");
+      return;
+    }
+    setError(null);
+    await save({ operation: "business-branding", ownerIdentifier: business.business.ownerIdentifier, branding });
+  }
+  return <section className="workspace-card-stack">
+    <label>Business name<input readOnly value={branding.instituteName} /></label>
+    {(branding.appointmentLocations ?? []).map((location, index) => {
+      const dailyHours = resolveApportionDailySchedule(location);
+      return <fieldset className="workspace-card-stack" disabled={busy || business.role !== "admin"} key={location.id}>
+        <legend>Address #{index + 1}</legend>
+        <label>Address<input readOnly value={location.address} /></label>
+        <BusinessHoursGrid label={`Address ${index + 1}`} dailyHours={dailyHours} activeWeekdays={activeDays[location.id] ?? []}
+          onDayToggle={(weekday) => {
+            const enabled = activeDays[location.id]?.includes(weekday);
+            setActiveDays((current) => ({ ...current, [location.id]: enabled ? (current[location.id] ?? []).filter((day) => day !== weekday) : [...(current[location.id] ?? []), weekday] }));
+            if (enabled) {
+              setHours(location.id, weekday, "workingHours", "");
+              setHours(location.id, weekday, "workingHoursSecondWindow", "");
+            }
+          }}
+          onHoursChange={(weekday, field, value) => setHours(location.id, weekday, field, value)} />
+      </fieldset>;
+    })}
+    {error ? <p role="alert">{error}</p> : null}
+    {business.role === "admin" ? <button className="button-secondary" disabled={busy} type="button" onClick={() => void saveHours()}>Save operating hours</button> : null}
+  </section>;
+}
+
+function ServiceRow({ business, service, index, busy, save }: { business: Business; service: ApportionService; index: number; busy: boolean; save: SaveOperation }) {
   const consultation = service.id === "consultation";
   const enabled = business.role !== "staff" && getApportionServiceLimit(business.ownerCategory) > 0;
-  return <fieldset disabled={busy || !enabled} className="workspace-card-stack">
-    <label>Service<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
-    <label><input type="checkbox" checked={draft.active} onChange={(event) => setDraft({ ...draft, active: event.target.checked })} /> Active</label>
-    <label>Assigned staff</label>
-    <RegisteredPhone disabled={consultation || !enabled} value={draft.assignedIdentifier || ""} onChange={(value) => setDraft({ ...draft, assignedIdentifier: value.trim() || null })} />
-    <div className="button-row">
-      {(business.branding.appointmentLocations ?? []).map((location) => {
-        const providerIdentifier = service.assignedIdentifier || business.business.ownerIdentifier;
-        const membership = business.memberships.find((entry) => entry.locationId === location.id && participantIdentifiersMatch(entry.providerIdentifier, providerIdentifier));
-        const schedule = resolveApportionDailySchedule(membership ?? location);
-        return <div className="apportion-service-location" key={location.id}>
-          <label><input type="checkbox" checked={draft.locationIds.includes(location.id)} onChange={(event) => setDraft({ ...draft, locationIds: event.target.checked ? [...draft.locationIds, location.id] : draft.locationIds.filter((id) => id !== location.id) })} /> {location.address}</label>
-          {location.id === locationId && service.assignedIdentifier && !participantIdentifiersMatch(service.assignedIdentifier, business.business.ownerIdentifier) ? <span className="muted-text">{schedule.filter((entry) => entry.workingHours || entry.workingHoursSecondWindow).map((entry) => `${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][entry.weekday]} ${[entry.workingHours, entry.workingHoursSecondWindow].filter(Boolean).join(" / ")}`).join(" · ") || "No provider hours set"}</span> : null}
-        </div>;
-      })}
+  const [draft, setDraft] = useState(service);
+  const [phone, setPhone] = useState(service.assignedIdentifier || "");
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => { setDraft(service); setPhone(service.assignedIdentifier || ""); }, [service]);
+  async function persist(next: ApportionService) {
+    if (!next.name.trim()) { setError("Enter a service name before saving or linking an address."); return; }
+    if (next.locationIds.length && !consultation && (phone || next.assignedIdentifier)
+      && !participantIdentifiersMatch(phone, next.assignedIdentifier || "")) {
+      setError("Find the registered user before linking an address, or clear the phone field to leave the service unassigned.");
+      return;
+    }
+    setError(null);
+    if (await save({ operation: "set-service", ownerIdentifier: business.business.ownerIdentifier, service: { ...next, active: next.locationIds.length > 0 } })) setDraft(next);
+  }
+  const locked = !consultation && service.locationIds.length > 0;
+  return <fieldset disabled={busy || !enabled} className="apportion-matrix-row">
+    <div><strong>{consultation ? "Owner" : `Staff ${index}`}</strong>
+      <input aria-label={`${consultation ? "Owner" : `Staff ${index}`} service name`} readOnly={locked} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} onBlur={() => { if (draft.name !== service.name) void persist(draft); }} />
     </div>
-    <span className="status-chip">{getApportionBookableServices(business.business, business.ownerCategory, locationId).some((entry) => entry.id === service.id) ? "Bookable" : service.active ? "Paused" : "Inactive"}</span>
-    {enabled ? <button className="button-secondary" type="button" onClick={() => void save({ operation: "set-service", ownerIdentifier: business.business.ownerIdentifier, service: draft })}><Save size={16} /> Save service</button> : null}
+    <RegisteredPhone disabled={consultation || locked || !enabled} value={phone} onChange={setPhone} onResolved={(identifier) => void persist({ ...draft, assignedIdentifier: identifier })} />
+    <div className="button-row">{(business.branding.appointmentLocations ?? []).map((location, addressIndex) => <button aria-pressed={service.locationIds.includes(location.id)} className="business-choice-button" disabled={consultation} key={location.id} title={location.address} type="button" onClick={() => void persist({ ...draft, locationIds: service.locationIds.includes(location.id) ? service.locationIds.filter((id) => id !== location.id) : [...service.locationIds, location.id] })}>Address #{addressIndex + 1}</button>)}</div>
+    {locked ? <small className="muted-text">Unselect all addresses to edit.</small> : null}
+    {error ? <p role="alert">{error}</p> : null}
   </fieldset>;
 }
 
 function BusinessRoles({ business, save, busy }: { business: Business; save: SaveOperation; busy: boolean }) {
   const [delegate, setDelegate] = useState(business.business.adminDelegateIdentifier || "");
-  const [branding, setBranding] = useState(business.branding);
-  const [drafts, setDrafts] = useState(() => Object.fromEntries(business.business.services.map((service) => [service.id, service])));
-  useEffect(() => { setDrafts(Object.fromEntries(business.business.services.map((service) => [service.id, service]))); }, [business.business.services]);
-  useEffect(() => { setDelegate(business.business.adminDelegateIdentifier || ""); setBranding(business.branding); }, [business]);
+  useEffect(() => { setDelegate(business.business.adminDelegateIdentifier || ""); }, [business.business.adminDelegateIdentifier]);
   const canEdit = business.role !== "staff" && getApportionServiceLimit(business.ownerCategory) > 0;
   return <section className="workspace-card-stack">
-    <h3>{business.branding.instituteName || "Business"} <span className="status-chip">{business.role}</span></h3>
-    {business.role === "owner" ? <fieldset disabled={busy}>
-      <label>Admin phone</label>
-      <RegisteredPhone value={delegate} onChange={setDelegate} />
-      <button className="button-secondary" type="button" onClick={() => void save({ operation: "set-delegate", ownerIdentifier: business.business.ownerIdentifier, delegateIdentifier: delegate.trim() || null })}><Save size={16} /> Save Admin</button>
+    <h4>{business.branding.instituteName || "Business"} <span className="status-chip">{business.role}</span></h4>
+    {business.business.services.filter((service) => service.id === "consultation").map((service) => <ServiceRow key={service.id} business={business} service={service} index={0} busy={busy} save={save} />)}
+    {business.role !== "staff" ? <fieldset disabled={busy || business.role !== "owner"} className="apportion-matrix-row">
+      <div><strong>Delegate</strong><span>Admin</span></div>
+      <RegisteredPhone disabled={business.role !== "owner"} value={delegate} onChange={setDelegate} onResolved={(identifier) => void save({ operation: "set-delegate", ownerIdentifier: business.business.ownerIdentifier, delegateIdentifier: identifier })} />
+      <div className="button-row">{(business.branding.appointmentLocations ?? []).map((location, index) => <button aria-pressed className="business-choice-button" disabled key={location.id} type="button">Address #{index + 1}</button>)}</div>
     </fieldset> : null}
-    {(business.branding.appointmentLocations ?? []).map((location, index) => {
-      const activeCount = business.business.services.filter((service) => service.active && service.locationIds.includes(location.id)).length;
-      const services = business.business.services.filter((service) => service.locationIds.includes(location.id) || (!service.locationIds.length && index === 0));
-      return <section className="apportion-address-services" key={location.id}>
-        <header><h4>{location.address}</h4><span>{activeCount} / {getApportionServiceLimit(business.ownerCategory)} active services</span></header>
-        {services.map((service) => <ServiceRow key={service.id} business={business} service={service} draft={drafts[service.id] ?? service} setDraft={(value) => setDrafts((current) => ({ ...current, [service.id]: value }))} locationId={location.id} busy={busy} save={save} />)}
-        {canEdit ? <button className="button-secondary" type="button" disabled={busy || activeCount >= getApportionServiceLimit(business.ownerCategory)} onClick={() => void save({ operation: "set-service", ownerIdentifier: business.business.ownerIdentifier, service: { id: `service-${crypto.randomUUID()}`, name: "New service", active: false, assignedIdentifier: null, locationIds: [location.id] } })}><Plus size={16} /> Add service</button> : null}
-      </section>;
-    })}
-    {business.role === "admin" && canEdit ? <fieldset disabled={busy} className="workspace-card-stack">
-      <label>Business name<input value={branding.instituteName} onChange={(event) => setBranding({ ...branding, instituteName: event.target.value })} /></label>
-      {(branding.appointmentLocations ?? []).map((location) => <div key={location.id}>
-        <label>Address<input value={location.address} onChange={(event) => setBranding({ ...branding, appointmentLocations: branding.appointmentLocations?.map((entry) => entry.id === location.id ? { ...entry, address: event.target.value } : entry) })} /></label>
-      </div>)}
-      <button className="button-secondary" type="button" onClick={() => void save({ operation: "business-branding", ownerIdentifier: business.business.ownerIdentifier, branding })}><Save size={16} /> Save business</button>
-    </fieldset> : null}
+    {business.business.services.filter((service) => service.id !== "consultation").map((service, index) => <ServiceRow key={service.id} business={business} service={service} index={index + 1} busy={busy} save={save} />)}
+    {canEdit ? <button className="button-secondary" type="button" disabled={busy} onClick={() => void save({ operation: "set-service", ownerIdentifier: business.business.ownerIdentifier, service: { id: `service-${crypto.randomUUID()}`, name: "New service", active: false, assignedIdentifier: null, locationIds: [] } })}><Plus size={16} /> Add service</button> : null}
   </section>;
 }
 
@@ -269,23 +328,27 @@ function ProviderLeaveCalendar({
   );
 }
 
-export function ApportionRolePanel({ canCreateBusiness: fallbackCanCreateBusiness, actorIdentifier, personalBusinessForm, personalBusinessFooter, onUpgrade, onPersonalConsultationLocationsChange, onProviderSettingsSaved }: { canCreateBusiness: boolean; actorIdentifier: string | null; personalBusinessForm: ReactNode; personalBusinessFooter?: ReactNode; onUpgrade: () => void; onPersonalConsultationLocationsChange?: (locationIds: string[]) => void; onProviderSettingsSaved?: (settings: ApportionProviderSettings) => void }) {
+export function ApportionRolePanel({ canCreateBusiness: fallbackCanCreateBusiness, actorIdentifier, refreshVersion = 0, personalBusinessForm, personalBusinessConfiguration, personalBusinessBranding, personalBusinessFooter, onUpgrade, onPersonalAddressLimitChange, onPersonalConsultationLocationsChange, onProviderSettingsSaved }: { canCreateBusiness: boolean; actorIdentifier: string | null; refreshVersion?: number; personalBusinessForm: ReactNode; personalBusinessConfiguration?: ReactNode; personalBusinessBranding?: ReactNode; personalBusinessFooter?: ReactNode; onUpgrade: () => void; onPersonalAddressLimitChange?: (limit: number) => void; onPersonalConsultationLocationsChange?: (locationIds: string[]) => void; onProviderSettingsSaved?: (settings: ApportionProviderSettings) => void }) {
   const [panel, setPanel] = useState<Panel | null>(null);
   const [busy, setBusy] = useState(false);
   const submitting = useRef(false);
+  const panelRequestVersion = useRef(0);
   const upgradeCallback = useRef(onUpgrade);
   const personalConsultationCallback = useRef(onPersonalConsultationLocationsChange);
   const [feedback, setFeedback] = useState<string | null>(null);
   useEffect(() => { upgradeCallback.current = onUpgrade; }, [onUpgrade]);
   useEffect(() => { personalConsultationCallback.current = onPersonalConsultationLocationsChange; }, [onPersonalConsultationLocationsChange]);
+  useEffect(() => { if (panel) onPersonalAddressLimitChange?.(panel.personalAddressLimit); }, [panel, onPersonalAddressLimitChange]);
   useEffect(() => {
     const controller = new AbortController();
+    const version = ++panelRequestVersion.current;
     void fetch("/api/user/apportion/business", { signal: controller.signal }).then(readResponse<Panel>).then((payload) => {
+      if (controller.signal.aborted || version !== panelRequestVersion.current) return;
       setPanel(payload);
       if (!(payload.canCreateBusiness ?? fallbackCanCreateBusiness) && !payload.businesses.some((business) => business.role !== "owner")) upgradeCallback.current();
-    }).catch((error: unknown) => { if (!controller.signal.aborted) setFeedback(error instanceof Error ? error.message : "Unable to load Business Panel."); });
+    }).catch((error: unknown) => { if (!controller.signal.aborted && version === panelRequestVersion.current) setFeedback(error instanceof Error ? error.message : "Unable to load Business Panel."); });
     return () => controller.abort();
-  }, [fallbackCanCreateBusiness]);
+  }, [fallbackCanCreateBusiness, refreshVersion]);
   useEffect(() => {
     const locationIds = panel?.businesses.flatMap((business) => {
       if (business.role !== "owner" || !participantIdentifiersMatch(business.business.ownerIdentifier, actorIdentifier || "")) return [];
@@ -296,16 +359,18 @@ export function ApportionRolePanel({ canCreateBusiness: fallbackCanCreateBusines
     personalConsultationCallback.current?.(locationIds);
   }, [panel, actorIdentifier]);
   async function save(input: ApportionPanelInput) {
-    if (submitting.current) return;
+    if (submitting.current) { setFeedback("A save is already in progress. Please retry this change when it finishes."); return false; }
     submitting.current = true;
     setBusy(true);
     setFeedback(null);
     try {
       const savedPanel = await readResponse<Panel>(await fetch("/api/user/apportion/business", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }));
+      panelRequestVersion.current += 1;
       setPanel(savedPanel);
       if (input.operation === "set-settings") onProviderSettingsSaved?.(savedPanel.providerSettings);
       setFeedback("Saved.");
-    } catch (error) { setFeedback(error instanceof Error ? error.message : "Unable to save."); }
+      return true;
+    } catch (error) { setFeedback(error instanceof Error ? error.message : "Unable to save."); return false; }
     finally { submitting.current = false; setBusy(false); }
   }
   if (!panel) return <p role="status">{feedback || "Loading Business Panel..."}</p>;
@@ -314,16 +379,27 @@ export function ApportionRolePanel({ canCreateBusiness: fallbackCanCreateBusines
   const providerWorkingWeekdays = getProviderWorkingWeekdays(panel, actorIdentifier);
   return <><div className="workspace-card-stack apportion-drawer-body">
     {feedback ? <p role="status">{feedback}</p> : null}
-    <h3>Service &amp; Staff Matrix</h3>
-    {assignedBusinesses.map((business) => <BusinessRoles key={business.business.ownerIdentifier} business={business} busy={busy} save={save} />)}
+    <p className="muted-text">Changes apply to new bookings and reschedules. Existing appointments remain unchanged.</p>
+    <p className="muted-text">Personal address allowance: {panel.personalAddressLimit} of 2. Staff and delegated addresses consume the shared allowance.</p>
+    {canCreateBusiness ? personalBusinessForm : null}
+    {assignedBusinesses.filter((business) => business.role !== "owner").map((business) => <BusinessAddresses key={business.business.ownerIdentifier} business={business} busy={busy} save={save} />)}
+    {panel.memberships.filter((membership) => !participantIdentifiersMatch(membership.ownerIdentifier, actorIdentifier || "")).map((membership) => {
+      const business = panel.businesses.find((entry) => participantIdentifiersMatch(entry.business.ownerIdentifier, membership.ownerIdentifier));
+      const master = business?.branding.appointmentLocations?.find((location) => location.id === membership.locationId);
+      const blockedWeeklyIntervals = getOtherProviderWeeklyIntervals(panel, membership, actorIdentifier);
+      return <LinkedHours key={`${membership.ownerIdentifier}:${membership.locationId}`} membership={membership} master={master} blockedWeeklyIntervals={blockedWeeklyIntervals} address={master?.address || membership.locationId} busy={busy} save={save} />;
+    })}
     {providerWorkingWeekdays.size ? (
       <fieldset disabled={busy} className="workspace-card-stack">
         <legend>Mark Leaves</legend>
         <ProviderLeaveCalendar busy={busy} closedDateKeys={panel.providerClosedDateKeys ?? []} save={save} workingWeekdays={providerWorkingWeekdays} />
       </fieldset>
     ) : null}
+    <h3>Staff and Service Matrix</h3>
+    {assignedBusinesses.map((business) => <BusinessRoles key={business.business.ownerIdentifier} business={business} busy={busy} save={save} />)}
+    {canCreateBusiness ? personalBusinessConfiguration : null}
     {!canCreateBusiness && assignedBusinesses.length ? <fieldset disabled={busy} className="workspace-card-stack">
-      <legend>My booking settings</legend>
+      <legend>Bookings Configuration</legend>
       <span className="field-label">Appointments per slot</span>
       <div className="business-choice-row" role="group" aria-label="My appointments per slot">{[1, 2, 3, 4, 5, 6].map((capacity) => <button className="business-choice-button" aria-pressed={panel.providerSettings.appointmentsPerSlot === capacity} key={capacity} type="button" onClick={() => setPanel({ ...panel, providerSettings: { ...panel.providerSettings, appointmentsPerSlot: capacity } })}>{capacity}</button>)}</div>
       <span className="field-label">Slot duration</span>
@@ -332,12 +408,6 @@ export function ApportionRolePanel({ canCreateBusiness: fallbackCanCreateBusines
       <div className="business-choice-row business-mode-choices" role="group" aria-label="My booking mode">{[{ label: "Slot Based", queue: false }, { label: "Queue Based", queue: true }].map((mode) => <button className="business-choice-button" aria-pressed={panel.providerSettings.justAddToList === mode.queue} key={mode.label} type="button" onClick={() => setPanel({ ...panel, providerSettings: { ...panel.providerSettings, justAddToList: mode.queue } })}>{mode.label}</button>)}</div>
       <button className="button-secondary" type="button" onClick={() => void save({ operation: "set-settings", settings: panel.providerSettings })}><Save size={16} /> Save my settings</button>
     </fieldset> : null}
-    {panel.memberships.filter((membership) => !participantIdentifiersMatch(membership.ownerIdentifier, actorIdentifier || "")).map((membership) => {
-      const business = panel.businesses.find((entry) => participantIdentifiersMatch(entry.business.ownerIdentifier, membership.ownerIdentifier));
-      const master = business?.branding.appointmentLocations?.find((location) => location.id === membership.locationId);
-      const blockedWeeklyIntervals = getOtherProviderWeeklyIntervals(panel, membership, actorIdentifier);
-      return <LinkedHours key={`${membership.ownerIdentifier}:${membership.locationId}`} membership={membership} master={master} blockedWeeklyIntervals={blockedWeeklyIntervals} address={master?.address || membership.locationId} busy={busy} save={save} />;
-    })}
-    {canCreateBusiness ? personalBusinessForm : !assignedBusinesses.length ? <button className="button" type="button" onClick={onUpgrade}>Upgrade to Pro</button> : null}
+    {canCreateBusiness ? personalBusinessBranding : !assignedBusinesses.length ? <button className="button" type="button" onClick={onUpgrade}>Upgrade to Pro</button> : null}
   </div>{canCreateBusiness ? personalBusinessFooter : null}</>;
 }

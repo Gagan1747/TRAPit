@@ -2,7 +2,7 @@
 
 import { ChevronLeft, ChevronRight, LoaderCircle, Search, Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { findNextApportionRecurringDate, matchApportionIdentity, planApportionDateKeys, resolveApportionDailySchedule } from "@trapit/testing";
+import { findNextApportionRecurringDate, matchApportionIdentity, planApportionDates, resolveApportionDailySchedule } from "@trapit/testing";
 
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
@@ -989,20 +989,33 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
   });
   const effectiveRecurringWeekdays = recurringWeekdayKeys.filter((day) => recurringWorkingWeekdays.includes(day as typeof WEEKDAY_KEYS[number]));
   let plannedDateKeys: string[] = [];
+  let skippedDates: Array<{ dateKey: string; reason: string }> = [];
   let recurrenceError: string | null = null;
   if (recurringAllowed && recurrenceMode !== "none") {
     try {
       if (!recurrenceStart) throw new Error("No available upcoming date matches the selected recurring days and time.");
-      plannedDateKeys = planApportionDateKeys(selectedDateKey, {
+      const plan = planApportionDates(selectedDateKey, {
         mode: recurrenceMode,
         durationCount: recurringDuration,
         ...(recurrenceMode === "weekly" ? { weekdayKeys: effectiveRecurringWeekdays } : { monthDays: recurringMonthDays }),
       }, (dateKey) => {
+        if (!recurringWorkingWeekdays.includes(WEEKDAY_KEYS[createDateFromKey(dateKey).getDay()])) return "Weekly off day";
+        if (payload.business.providerClosedDateKeys.includes(dateKey)) return "Provider on leave";
         const effective = selectedLocation && resolveEffectiveLocation(payload.business, selectedLocation, dateKey);
-        if (!effective) return false;
-        if (payload.business.justAddToList || !selectedSlot) return true;
-        return buildSlotStartsForDate({ selectedDateKey: dateKey, slotDurationMinutes, workingHours: effective.workingHours, workingHoursSecondWindow: effective.workingHoursSecondWindow }).some((slot) => slot.dayOffset === selectedSlot.dayOffset && slot.minutes === selectedSlot.minutes);
+        if (!effective || !effective.workingHours && !effective.workingHoursSecondWindow) return "Address closed";
+        if (payload.business.justAddToList) {
+          const activeCount = queueCountsByDateKey[dateKey] ?? 0;
+          return estimateQueueStart({ activeCount, appointmentsPerSlot: payload.business.appointmentsPerSlot, selectedDateKey: dateKey, slotDurationMinutes, workingHours: effective.workingHours, workingHoursSecondWindow: effective.workingHoursSecondWindow }) ? true : "Queue full";
+        }
+        if (!selectedSlot) return "Choose an appointment time";
+        const slot = buildSlotStartsForDate({ selectedDateKey: dateKey, slotDurationMinutes, workingHours: effective.workingHours, workingHoursSecondWindow: effective.workingHoursSecondWindow }).find((slot) => slot.dayOffset === selectedSlot.dayOffset && slot.minutes === selectedSlot.minutes);
+        if (!slot) return "Selected time outside operating hours";
+        if (new Date(slot.startsAt).getTime() <= Date.now()) return "Selected time has passed";
+        return (slotCountsByIso[slot.startsAt] ?? 0) < payload.business.appointmentsPerSlot ? true : "Slot full";
       }, createDateKey(maxBookableDate));
+      plannedDateKeys = plan.dateKeys;
+      skippedDates = plan.skipped;
+      if (!plannedDateKeys.length) recurrenceError = "No available dates match this appointment selection.";
     } catch (error) {
       recurrenceError = error instanceof Error ? error.message : "Choose valid recurring dates.";
     }
@@ -1088,7 +1101,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
           <div className="form-stack apportion-booking-right-column">
             {canInvite ? (
               <div className="field apportion-invitation-target">
-                <label htmlFor="apportion-target-phone">Customer phone</label>
+                <label className="sr-only" htmlFor="apportion-target-phone">Customer phone</label>
                 <div className="apportion-target-lookup">
                   <input autoComplete="tel" id="apportion-target-phone" inputMode="tel" type="tel" value={targetPhone} onChange={(event) => {
                     lookupVersionRef.current += 1;
@@ -1098,7 +1111,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                     setRecurrenceMode("none");
                   }} />
                   <button className="button-secondary" disabled={isLookingUp || !normalizedTargetPhone || isBooking} type="button" onClick={() => void lookupTarget()}>
-                    <Search aria-hidden="true" size={18} />{isLookingUp ? "Checking..." : "Verify"}
+                    <Search aria-hidden="true" size={18} />{isLookingUp ? "Checking..." : "Invite"}
                   </button>
                 </div>
                 {targetIsVerified ? <strong role="status">{verifiedTarget?.name}</strong> : null}
@@ -1131,6 +1144,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                   </div>
                   <p className="muted-text" role="status">{recurrenceStart ? `Starts ${recurrenceStart} · ` : ""}{plannedDateKeys.length} appointments</p>
                   {plannedDateKeys.length ? <details><summary>Dates</summary><ol>{plannedDateKeys.map((dateKey) => <li key={dateKey}>{dateKey}</li>)}</ol></details> : null}
+                  {skippedDates.length ? <details open><summary>Skipped dates ({skippedDates.length})</summary><ol>{skippedDates.map(({ dateKey, reason }) => <li key={dateKey}>{dateKey}: {reason}</li>)}</ol></details> : null}
                   {recurrenceError ? <p className="apportion-queue-warning" role="alert">{recurrenceError}</p> : null}
                 </> : null}
               </div>
@@ -1343,7 +1357,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
             {feedback ? <p className="muted-text" role="status">{feedback}{ticketUrl ? <> <a href={ticketUrl}>My Dashboard</a></> : null}</p> : null}
             <div className="inline-actions">
               <button className="button" disabled={isBooking || isLookingUp || (isTargeted && !targetIsVerified) || !selectedLocation || !selectedDateKey || (!payload.business.justAddToList && !selectedSlot) || (payload.business.justAddToList && !queueEstimate) || (recurringAllowed && recurrenceMode !== "none" && (!!recurrenceError || !plannedDateKeys.length))} type="button" onClick={() => void handleBookAppointment()}>
-                {isBooking ? <LoaderCircle aria-hidden="true" className="apportion-spinner" size={18} /> : isTargeted ? <Send aria-hidden="true" size={18} /> : null}{isBooking ? isTargeted ? "Sending..." : "Booking..." : isTargeted ? "Send Invitation" : payload.business.justAddToList ? "Join appointment queue" : "Book appointment"}
+                {isBooking ? <LoaderCircle aria-hidden="true" className="apportion-spinner" size={18} /> : isTargeted ? <Send aria-hidden="true" size={18} /> : null}{isBooking ? isTargeted ? "Sending..." : "Booking..." : "Book"}
               </button>
               <a className="button-secondary" href="/user?tab=apportion">My Dashboard</a>
             </div>

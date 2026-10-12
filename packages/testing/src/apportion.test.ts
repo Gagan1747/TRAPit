@@ -77,7 +77,8 @@ describe("Apportion roles and migration", () => {
     const memberships = [{ ownerIdentifier: "owner", locationId: "location-1", providerIdentifier: "staff", workingDays: "Monday", workingHours: "9:00 AM - 5:00 PM", workingHoursSecondWindow: "", closedDateKeys: [] }];
     const input = { providerIdentifier: "staff", ownerIdentifier: "owner", locationIds: ["location-1", "location-2"], personalLocations: [], memberships };
     expect(() => assertApportionAddressCapacity(input)).not.toThrow();
-    expect(() => assertApportionAddressCapacity({ ...input, locationIds: ["location-1", "location-2", "location-3"] })).toThrow("Staff address unavailable");
+    expect(() => assertApportionAddressCapacity({ ...input, locationIds: ["location-1", "location-2", "location-3"] })).toThrow("Address capacity exceeded");
+    expect(() => assertApportionAddressCapacity({ ...input, delegatedLocations: [{ ownerIdentifier: "another", locationId: "a" }] })).toThrow("Address capacity exceeded");
   });
 
   it("resolves legacy working days and hours without changing the shared weekly schedule", () => {

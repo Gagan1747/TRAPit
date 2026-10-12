@@ -24,7 +24,7 @@ vi.mock("next/server", () => ({ NextResponse: { json: (body: unknown, init?: Res
 vi.mock("../../../apps/web/lib/workspace-actor", () => ({ getWorkspaceActor: async () => fixtures.actor }));
 vi.mock("../../../apps/web/lib/auth-config", () => ({ isWebAuthConfigured: () => fixtures.authConfigured }));
 vi.mock("../../../apps/web/lib/cognito", () => ({ listRegisteredDirectoryUsers: async () => fixtures.registeredUsers }));
-vi.mock("../../../apps/web/lib/apportion-directory", () => ({ getApportionPanel: async () => fixtures.panel, getApportionBusinessContext: vi.fn(async (ownerIdentifier: string) => ownerIdentifier === OWNER ? fixtures.context : ownerIdentifier === STAFF ? fixtures.personalContext : null), listApportionDirectLinkServices: async () => fixtures.directServices, assertApportionHoursWithinMaster: vi.fn(), listApportionScheduleNotificationsForActor: async () => fixtures.scheduleNotifications }));
+vi.mock("../../../apps/web/lib/apportion-directory", () => ({ getApportionPanel: async () => fixtures.panel, getApportionBusinessContext: vi.fn(async (ownerIdentifier: string) => ownerIdentifier === OWNER ? fixtures.context : ownerIdentifier === STAFF ? fixtures.personalContext : null), getApportionBusinessContexts: async (owners: string[]) => new Map(owners.map((owner) => [owner, owner === OWNER ? fixtures.context : owner === STAFF ? fixtures.personalContext : null])), listApportionDirectLinkServices: async () => fixtures.directServices, assertApportionHoursWithinMaster: vi.fn(), listApportionScheduleNotificationsForActor: async () => fixtures.scheduleNotifications }));
 vi.mock("../../../apps/web/lib/realtime-events", () => ({ publishWorkspaceEvent: vi.fn() }));
 vi.mock("../../../apps/web/lib/session", () => ({ getWebSession: async () => ({ phoneNumber: fixtures.actor.identifier, displayName: "Requester" }) }));
 vi.mock("../../../apps/web/lib/testing-store", () => ({ getOrCreateWorkspaceAppointmentShareCode: fixtures.share, listWorkspaceAppointmentBusinesses: async () => [], listParticipants: async () => fixtures.registeredUsers, getWorkspaceBranding: async () => fixtures.context?.branding, getWorkspaceBrandingByAppointmentShareCode: async () => ({ ownerIdentifier: fixtures.linkedBusinessOwnerIdentifier, branding: fixtures.linkedBusinessBranding ?? fixtures.context?.branding }) }));
@@ -93,7 +93,7 @@ describe("Apportion API role and service contracts", () => {
       justAddToList: false,
     }));
     const payload = await (await dashboard.GET(new Request("https://trapit.in/api/user/apportion"))).json();
-    expect(directoryApi.getApportionBusinessContext).toHaveBeenCalledTimes(2);
+    expect(directoryApi.getApportionBusinessContext).not.toHaveBeenCalled();
     expect(Object.keys(payload.appointmentOperatingHoursById)).toHaveLength(297);
     expect(payload.appointmentOperatingHoursById["appointment-0"].workingHours).toBe("10:00 AM - 12:00 PM");
     expect(payload.appointmentOperatingHoursById["appointment-296"].workingHours).toBe("");
@@ -506,12 +506,11 @@ describe("Apportion targeted invitation API", () => {
     expect(response.status).toBe(200);
     expect(fixtures.invite.mock.calls[0][0].occurrences).toEqual(["2026-10-30", "2026-10-31", "2026-11-29", "2026-11-30", "2026-12-29", "2026-12-30"].map((serviceDateKey) => ({ serviceDateKey, startsAt: `${serviceDateKey}T04:30:00.000Z` })));
   });
-  it("does not skip a valid working date with a capacity conflict or partially create invitations", async () => {
+  it("skips full recurring dates and creates an invitation for the remaining dates", async () => {
     fixtures.appointments = ["pending", "present-in-person", "pushed-back"].map((currentStatus) => ({ serviceId: "therapy", locationId: "location-1", serviceDateKey: "2026-10-12", startsAt: "2026-10-12T04:30:00Z", currentStatus }));
     const response = await post({ recurrence: { mode: "weekly", endDateKey: "2026-10-19", weekdayKeys: ["Mon"] } });
-    expect(response.status).toBe(400);
-    expect((await response.json()).error).toContain("already full");
-    expect(fixtures.invite).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(fixtures.invite.mock.calls[0][0].occurrences.map((entry: { serviceDateKey: string }) => entry.serviceDateKey)).toEqual(["2026-10-05", "2026-10-19"]);
     expect(fixtures.create).not.toHaveBeenCalled();
   });
   it("estimates queue invitations with all active statuses and ignores unrelated services", async () => {

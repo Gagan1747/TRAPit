@@ -31,7 +31,7 @@ export function findNextApportionRecurringDate(todayDateKey: string, horizonDate
   return null;
 }
 
-export function planApportionDateKeys(startDateKey: string, recurrence: ApportionRecurrence | null, isWorkingDate: (dateKey: string) => boolean, absoluteHorizonDateKey?: string) {
+export function planApportionDates(startDateKey: string, recurrence: ApportionRecurrence | null, availability: (dateKey: string) => true | false | string, absoluteHorizonDateKey?: string) {
   const start = validDate(startDateKey);
   const duration = recurrence?.durationCount;
   const isDuration = duration !== undefined;
@@ -55,11 +55,21 @@ export function planApportionDateKeys(startDateKey: string, recurrence: Apportio
   if (recurrence?.mode === "weekly" && (!weekdays.length || weekdays.some((day) => !WEEKDAYS.includes(day)))) throw new Error("Choose valid recurring weekdays.");
   if (recurrence?.mode === "monthly" && (!monthDays.length || monthDays.some((day) => !Number.isInteger(day) || day < 1 || day > 31))) throw new Error("Choose valid monthly dates.");
   const result: string[] = [];
+  const skipped: Array<{ dateKey: string; reason: string }> = [];
   for (const cursor = new Date(start); (isDuration ? cursor < end : cursor <= end) && (isDuration || result.length < 6); cursor.setUTCDate(cursor.getUTCDate() + 1)) {
     const dateKey = cursor.toISOString().slice(0, 10);
     const matches = !recurrence || matchesRecurringDate(cursor, recurrence);
-    if (matches && isWorkingDate(dateKey)) result.push(dateKey);
+    if (matches) {
+      const available = availability(dateKey);
+      if (available === true) result.push(dateKey);
+      else skipped.push({ dateKey, reason: typeof available === "string" ? available : "Unavailable" });
+    }
   }
+  return { dateKeys: result, skipped };
+}
+
+export function planApportionDateKeys(startDateKey: string, recurrence: ApportionRecurrence | null, isWorkingDate: (dateKey: string) => boolean, absoluteHorizonDateKey?: string) {
+  const { dateKeys: result } = planApportionDates(startDateKey, recurrence, isWorkingDate, absoluteHorizonDateKey);
   if (!result.length) throw new Error("No working dates match this appointment selection.");
   return result;
 }

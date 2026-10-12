@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getApportionServiceLimit, participantIdentifiersMatch, type AppointmentDailyHours } from "@trapit/testing";
-import { assertApportionHoursWithinMaster, getApportionBusinessContext, getApportionPanel, listApportionScheduleNotificationsForActor } from "../../../../lib/apportion-directory";
+import { assertApportionHoursWithinMaster, getApportionBusinessContext, getApportionBusinessContexts, getApportionPanel, listApportionScheduleNotificationsForActor } from "../../../../lib/apportion-directory";
 import { isWebAuthConfigured } from "../../../../lib/auth-config";
 import { listRegisteredDirectoryUsers } from "../../../../lib/cognito";
 
@@ -43,10 +43,7 @@ async function buildApportionDashboardPayload(actor: WorkspaceActor & { identifi
   const uniqueOwnerIdentifiers = Array.from(
     new Set(appointments.map((appointment) => appointment.ownerIdentifier.trim()).filter(Boolean)),
   );
-  const ownerContexts = new Map<string, Awaited<ReturnType<typeof getApportionBusinessContext>>>();
-  for (const ownerIdentifier of uniqueOwnerIdentifiers) {
-    ownerContexts.set(ownerIdentifier, await getApportionBusinessContext(ownerIdentifier));
-  }
+  const ownerContexts = await getApportionBusinessContexts(uniqueOwnerIdentifiers);
   const ownerOperatingHoursEntries = await Promise.all(uniqueOwnerIdentifiers.map(async (ownerIdentifier) => {
     const ownerContext = ownerContexts.get(ownerIdentifier);
     const ownerBranding = ownerContext?.branding ?? await getWorkspaceBranding(ownerIdentifier);
@@ -134,6 +131,9 @@ export async function GET(request: Request) {
     const normalizedPhone = phone.trim().replace(/[\s()-]/g, "");
     if (!/^(?:\+[1-9]\d{7,14}|\d{10})$/.test(normalizedPhone)) {
       return NextResponse.json({ error: "Enter a full registered phone number." }, { status: 400 });
+    }
+    if (participantIdentifiersMatch(actor.identifier, normalizedPhone)) {
+      return NextResponse.json({ user: { identifier: actor.identifier, name: actor.displayName || actor.identifier } });
     }
     const panel = await getApportionPanel(actor);
     if (!panel.businesses.some((entry) => entry.role !== "staff" && getApportionServiceLimit(entry.ownerCategory) > 0)) {
