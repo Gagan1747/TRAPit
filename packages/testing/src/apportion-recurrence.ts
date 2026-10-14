@@ -1,3 +1,5 @@
+import { resolveApportionDailySchedule, type ApportionScheduleInput } from "./apportion";
+
 export type ApportionRecurrence = {
   mode: "weekly" | "monthly";
   endDateKey?: string;
@@ -7,6 +9,16 @@ export type ApportionRecurrence = {
 };
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+export function assertApportionRecurringWeekdays(recurrence: ApportionRecurrence | null | undefined, schedules: ApportionScheduleInput[]) {
+  if (recurrence?.mode !== "weekly") return;
+  if (!recurrence.weekdayKeys?.length) throw new Error("Choose valid recurring weekdays.");
+  const allowed = schedules.map(resolveApportionDailySchedule);
+  if (recurrence.weekdayKeys.some((key) => {
+    const weekday = WEEKDAYS.indexOf(key);
+    return weekday < 0 || allowed.some((hours) => !hours[weekday].workingHours && !hours[weekday].workingHoursSecondWindow);
+  })) throw new Error("Weekly off days cannot be selected for recurring bookings.");
+}
 
 function validDate(value: string) {
   const date = new Date(`${value}T00:00:00Z`);

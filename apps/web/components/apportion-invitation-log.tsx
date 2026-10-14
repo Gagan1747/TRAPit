@@ -5,8 +5,13 @@ import { matchApportionIdentity } from "@trapit/testing";
 import { ArrowLeft, ArrowRight, Check, X } from "lucide-react";
 
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
+import { ApportionCancellationDialog } from "./apportion-cancellation-dialog";
 
 export type ApportionInvitation = {
+  assignedStaffIdentifier?: string | null;
+  assignedStaffName?: string | null;
+  assignedStaffPhone?: string | null;
+  messages?: Array<{ id: string; authorIdentifier: string; createdAt: string; body: string }>;
   id: string;
   status: "pending" | "accepted" | "declined" | "expired" | "cancelled";
   creatorIdentifier: string;
@@ -42,6 +47,7 @@ export function ApportionInvitationLog({ invitations, currentIdentifier, formatD
   const [completedPage, setCompletedPage] = useState(0);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [cancellationTarget, setCancellationTarget] = useState<ApportionInvitation | null>(null);
   const [localStatuses, setLocalStatuses] = useState<Record<string, ApportionInvitation["status"]>>({});
   const [now, setNow] = useState(Date.now());
   const pendingRef = useRef(false);
@@ -78,16 +84,18 @@ export function ApportionInvitationLog({ invitations, currentIdentifier, formatD
     if (row) { focusedRef.current = invitationId; row.scrollIntoView({ block: "center" }); row.focus({ preventScroll: true }); }
   }, [pending, completed, pendingPage, completedPage]);
 
-  async function act(entry: ApportionInvitation, action: "accept" | "decline" | "cancel") {
-    if (pendingRef.current || entry.status !== "pending" || !currentIdentifier || new Date(entry.expiresAt).getTime() <= Date.now()) return;
+  async function act(entry: ApportionInvitation, action: "accept" | "decline" | "cancel", reason?: string) {
+    if (action === "cancel" && !reason) { setCancellationTarget(entry); return; }
+    if (pendingRef.current) return "Another update is in progress. Please retry.";
+    if (entry.status !== "pending" || !currentIdentifier || new Date(entry.expiresAt).getTime() <= Date.now()) return "This invitation is no longer pending. Refresh the log.";
     const allowed = action === "cancel" ? matchApportionIdentity(entry.ownerIdentifier, currentIdentifier) : matchApportionIdentity(entry.requesterIdentifier, currentIdentifier);
-    if (!allowed) return;
+    if (!allowed) return "You cannot update this invitation.";
     pendingRef.current = true;
     setUpdatingId(entry.id);
     setFeedback(null);
     try {
       const response = await fetch("/api/user/apportion/invitations", {
-        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ invitationId: entry.id, action }),
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ invitationId: entry.id, action, reason }),
       });
       const result = await response.json() as { error?: string };
       if (!response.ok) throw new Error(result.error || "Unable to update invitation.");
@@ -95,7 +103,9 @@ export function ApportionInvitationLog({ invitations, currentIdentifier, formatD
       setFeedback(action === "accept" ? "Invitation accepted." : action === "decline" ? "Invitation declined." : "Invitation cancelled.");
       await onRefresh();
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Unable to update invitation.");
+      const message = error instanceof Error ? error.message : "Unable to update invitation.";
+      setFeedback(message);
+      return message;
     } finally {
       pendingRef.current = false;
       setUpdatingId(null);
@@ -117,14 +127,14 @@ export function ApportionInvitationLog({ invitations, currentIdentifier, formatD
         <tbody>{list.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((entry) => {
           const outgoing = Boolean(currentIdentifier && matchApportionIdentity(entry.ownerIdentifier, currentIdentifier));
           const incoming = Boolean(currentIdentifier && matchApportionIdentity(entry.requesterIdentifier, currentIdentifier));
-          const phone = formatPhoneNumberForDisplay(outgoing ? entry.requesterPhone || entry.requesterIdentifier : entry.ownerIdentifier, { showFullPhoneNumber: true });
+          const phone = formatPhoneNumberForDisplay(outgoing ? entry.requesterPhone || entry.requesterIdentifier : entry.assignedStaffPhone || entry.assignedStaffIdentifier || "", { showFullPhoneNumber: true });
           return <tr id={`apportion-invitation-${entry.id}`} key={entry.id} tabIndex={-1}>
-            <td data-label="Appointment"><strong>{entry.serviceName}</strong><span>{entry.locationName}</span><span>{entry.locationAddress}</span>
+            <td data-label="Appointment"><strong>{entry.ownerName || "Business"}</strong><span>{entry.serviceName}</span><span>{entry.locationAddress}</span>
               {entry.occurrences[0] ? <time dateTime={entry.occurrences[0].startsAt}>{formatDateTime(entry.occurrences[0].startsAt)}</time> : null}
               <details><summary>{entry.occurrences.length} appointment{entry.occurrences.length === 1 ? "" : "s"}</summary><ul>{entry.occurrences.map((occurrence) => <li key={`${occurrence.serviceDateKey}::${occurrence.startsAt}`}><time dateTime={occurrence.startsAt}>{formatDateTime(occurrence.startsAt)}</time></li>)}</ul></details>
             </td>
-            <td data-label="Contact"><strong>{outgoing ? entry.requesterName : entry.ownerName}</strong><span>{phone}</span></td>
-            <td data-label="Notes">{entry.notes || "-"}</td>
+            <td data-label="Contact"><strong>{outgoing ? entry.requesterName : entry.assignedStaffName || "Assigned provider"}</strong><span>{phone}</span></td>
+            <td data-label="Notes">{entry.notes || "-"}{entry.messages?.map((message) => <p key={message.id}>{message.authorIdentifier} · {formatDateTime(message.createdAt)}: {message.body}</p>)}</td>
             <td data-label="Status"><strong>{entry.status === "pending" ? outgoing ? "Pending Acceptance" : "Pending invitation" : entry.status.charAt(0).toUpperCase() + entry.status.slice(1)}</strong>
               {entry.status === "pending" ? <><span>Expires <time dateTime={entry.expiresAt}>{formatDateTime(entry.expiresAt)}</time></span>
                 <div className="inline-actions apportion-invitation-actions">
@@ -141,6 +151,7 @@ export function ApportionInvitationLog({ invitations, currentIdentifier, formatD
   }
 
   return <section aria-labelledby="apportion-invitation-heading" className="apportion-invitation-log">
+    {cancellationTarget ? <ApportionCancellationDialog onClose={() => setCancellationTarget(null)} onConfirm={(reason) => act(cancellationTarget, "cancel", reason)} /> : null}
     <h2 id="apportion-invitation-heading">Invitations</h2>
     {feedback ? <p className="muted-text" role="status">{feedback}</p> : null}
     {renderList(pending, pendingPage, pendingPages, setPendingPage, "Pending invitations")}

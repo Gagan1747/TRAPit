@@ -84,7 +84,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   vi.unstubAllEnvs();
-  await rm(temporaryDirectory, { recursive: true, force: true });
+  await rm(temporaryDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 beforeEach(async () => {
@@ -98,6 +98,67 @@ beforeEach(async () => {
 });
 
 describe("persistent Apportion directory", () => {
+  it("reads one workspace snapshot for a stable panel with no retry intents", async () => {
+    const files = await import("node:fs/promises");
+    const reads = vi.spyOn(files, "readFile");
+    try {
+      await directory.getApportionPanel(actor(OWNER));
+      expect(reads.mock.calls.filter(([file]) => file === storePath)).toHaveLength(1);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+  it("reserves two slots for a one-address delegation and rejects Admin service assignments globally", async () => {
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: ADMIN });
+    expect((await directory.getApportionPanel(actor(ADMIN))).personalAddressLimit).toBe(0);
+    await seed({ [OWNER]: branding(), [OTHER]: branding("1:00 PM", "3:00 PM") });
+    fixtures.assignments.push(assignment(OTHER));
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: ADMIN });
+    await expect(directory.updateApportionPanel(actor(OTHER), { operation: "set-service", service: service("staff", ADMIN) })).rejects.toThrow("Admin cannot");
+  });
+
+  it("unlinks only a removed address and deactivates on removing the final address", async () => {
+    const first = branding().appointmentLocations![0];
+    await seed({ [OWNER]: { ...branding(), appointmentLocations: [first, { ...first, id: "location-2", workingDays: "Tuesday" }] } });
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", STAFF, true, ["location-1", "location-2"]) });
+    await expect(directory.updateApportionPanel(actor(STAFF), { operation: "remove-address", ownerIdentifier: OWNER, locationId: "location-1" })).rejects.toMatchObject({ status: 403 });
+    await directory.updateApportionPanel(actor(OWNER), { operation: "remove-address", locationId: "location-1" });
+    expect((await directory.getApportionBusinessContext(OWNER))?.business.services.find((entry) => entry.id === "staff")).toMatchObject({ active: true, locationIds: ["location-2"] });
+    await directory.updateApportionPanel(actor(OWNER), { operation: "remove-address", locationId: "location-2" });
+    const saved = await persisted();
+    expect(saved.apportionDirectory!.businesses[OWNER]).toMatchObject({ active: false, adminDelegateIdentifier: null });
+    expect(saved.apportionDirectory!.memberships).toEqual([]);
+    expect(saved.workspaceBrandingByActor[OWNER]).toBeUndefined();
+    await directory.reconcileApportionDelegationCapacity();
+    expect((await persisted()).apportionDirectory!.businesses[OWNER].active).toBe(false);
+  });
+
+  it("preserves owner personal hours while Admin controls business-wide hours", async () => {
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: ADMIN });
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-hours", ownerIdentifier: OWNER, locationId: "location-1",
+      hours: { workingDays: "Monday", workingHours: "10:00 AM - 11:00 AM", workingHoursSecondWindow: "", closedDateKeys: [] } });
+    const context = await directory.getApportionBusinessContext(OWNER);
+    expect(context?.branding.appointmentLocations![0].workingHours).toBe("9:00 AM - 12:00 PM");
+    expect(context?.memberships[0].dailyHours?.[1].workingHours).toBe("10:00 AM - 11:00 AM");
+    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "business-branding", branding: branding("8:00 AM", "12:00 PM") })).rejects.toMatchObject({ status: 403 });
+    await directory.updateApportionPanel(actor(OWNER), { operation: "business-branding", branding: { ...branding(), instituteName: "Renamed" } });
+    await expect(directory.updateApportionPanel(actor(ADMIN), { operation: "business-branding", ownerIdentifier: OWNER, branding: null })).rejects.toMatchObject({ status: 403 });
+  });
+
+  it("repairs obsolete date and weekly hours once without removing full-day leave", async () => {
+    const original = branding();
+    await seed({ [OWNER]: { ...original, appointmentDateOverrides: { openedDateKeys: [], closedDateKeys: ["2099-10-05"] },
+      appointmentDateHoursOverrides: [{ dateKey: "2099-10-06", locations: [{ locationId: "location-1", workingHours: "4:00 PM - 8:00 PM", workingHoursSecondWindow: "" }] }],
+      appointmentWeeklyHoursOverrides: [{ weekday: 3, locations: [{ locationId: "location-1", workingHours: "4:00 PM - 8:00 PM", workingHoursSecondWindow: "" }] }] } });
+    await directory.reconcileApportionDelegationCapacity();
+    const saved = await persisted();
+    expect(saved.workspaceBrandingByActor[OWNER]).toMatchObject({
+      appointmentDateHoursOverrides: [], appointmentWeeklyHoursOverrides: [],
+      appointmentDateOverrides: { closedDateKeys: ["2099-10-05"] },
+    });
+    await directory.reconcileApportionDelegationCapacity();
+    expect(await persisted()).toEqual(saved);
+  });
   it("reserves both delegated addresses, blocks personal creation and releases capacity on removal", async () => {
     const first = branding().appointmentLocations![0];
     await seed({ [OWNER]: { ...branding(), appointmentLocations: [first, { ...first, id: "location-2", address: "Second street", workingDays: "Tuesday" }] } });
@@ -127,7 +188,7 @@ describe("persistent Apportion directory", () => {
     expect(after.workspaceBrandingByActor).toEqual(before.workspaceBrandingByActor);
     expect(after.apportionDirectory!.businesses[OWNER].adminDelegateIdentifier).toBeNull();
     expect(after.apportionDirectory!.scheduleNotifications.map((notice) => notice.recipientIdentifier).sort()).toEqual([OWNER, ADMIN].sort());
-    expect(JSON.parse(await readFile(`${storePath}.delegation-capacity-v1.backup`, "utf8"))).toHaveProperty("workspaceBrandingByActor");
+    expect(JSON.parse(await readFile(`${storePath}.delegation-capacity-v2.backup`, "utf8"))).toHaveProperty("workspaceBrandingByActor");
     await directory.reconcileApportionDelegationCapacity();
     expect(await persisted()).toEqual(after);
   });
@@ -261,7 +322,7 @@ describe("persistent Apportion directory", () => {
 
   it("rejects delegate and unassigned-provider personal leave without creating cancellation intents", async () => {
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: ADMIN });
-    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("unassigned") });
+    await directory.updateApportionPanel(actor(ADMIN), { operation: "set-service", ownerIdentifier: OWNER, service: service("unassigned") });
     const before = await persisted();
     for (const identifier of [ADMIN, STAFF]) {
       await expect(directory.updateApportionPanel(actor(identifier), { operation: "set-leaves", closedDateKeys: ["2099-10-05"] })).rejects.toMatchObject({ status: 403 });
@@ -395,7 +456,8 @@ describe("persistent Apportion directory", () => {
     await expect(directory.updateApportionPanel(actor(ADMIN), { operation: "business-branding", ownerIdentifier: OWNER, branding: { ...branding(), instituteName: "Delegate edit" } })).rejects.toMatchObject({ status: 403 });
     await expect(directory.updateApportionPanel(actor(ADMIN), { operation: "business-branding", ownerIdentifier: OWNER, branding: { ...branding(), appointmentLocations: [{ ...branding().appointmentLocations![0], address: "Changed" }] } })).rejects.toMatchObject({ status: 403 });
     await directory.updateApportionPanel(actor(ADMIN), { operation: "business-branding", ownerIdentifier: OWNER, branding: branding("10:00 AM", "12:00 PM") });
-    expect((await persisted()).workspaceBrandingByActor[OWNER]).toMatchObject({ instituteName: "Clinic", appointmentsPerSlot: 5, justAddToList: false, slotDurationMinutes: 30 });
+    expect((await persisted()).workspaceBrandingByActor[OWNER]).toMatchObject({ instituteName: "Clinic", appointmentsPerSlot: 1, justAddToList: true, slotDurationMinutes: 10 });
+    expect((await directory.getApportionPanel(actor(OWNER))).providerSettings).toMatchObject({ appointmentsPerSlot: 5, justAddToList: false, slotDurationMinutes: 30 });
     await expect(directory.updateApportionPanel(actor(STAFF), { operation: "business-branding", ownerIdentifier: OWNER, branding: branding() })).rejects.toMatchObject({ status: 403 });
   });
 
@@ -457,12 +519,12 @@ describe("persistent Apportion directory", () => {
 
   it("enforces ACTIVE quotas, includes Consultation, excludes disabled rows and delegate, and pauses on downgrade", async () => {
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: ADMIN });
-    for (const id of ["one", "two", "three"]) await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service(id) });
-    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("disabled", null, false, []) });
-    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("fifth") })).rejects.toThrow("Upgrade");
+    for (const id of ["one", "two", "three"]) await directory.updateApportionPanel(actor(ADMIN), { operation: "set-service", ownerIdentifier: OWNER, service: service(id) });
+    await directory.updateApportionPanel(actor(ADMIN), { operation: "set-service", ownerIdentifier: OWNER, service: service("disabled", null, false, []) });
+    await expect(directory.updateApportionPanel(actor(ADMIN), { operation: "set-service", ownerIdentifier: OWNER, service: service("fifth") })).rejects.toThrow("Upgrade");
     fixtures.assignments = [assignment(OWNER, "trapit-pro-max")];
-    for (let index = 5; index <= 10; index += 1) await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service(`service-${index}`) });
-    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("eleventh") })).rejects.toThrow("Upgrade");
+    for (let index = 5; index <= 10; index += 1) await directory.updateApportionPanel(actor(ADMIN), { operation: "set-service", ownerIdentifier: OWNER, service: service(`service-${index}`) });
+    await expect(directory.updateApportionPanel(actor(ADMIN), { operation: "set-service", ownerIdentifier: OWNER, service: service("eleventh") })).rejects.toThrow("Upgrade");
     fixtures.assignments = [assignment(OWNER)];
     const panel = await directory.getApportionPanel(actor(OWNER));
     expect(panel.businesses[0].bookableServiceIds).toEqual(["consultation", "one", "two", "three"]);
@@ -477,7 +539,8 @@ describe("persistent Apportion directory", () => {
     await directory.updateApportionPanel(actor(STAFF), { operation: "set-settings", settings: { appointmentsPerSlot: 3, justAddToList: false, slotDurationMinutes: 30 } });
     expect((await directory.getApportionBusinessContext(OWNER))?.providerSettings[STAFF].appointmentsPerSlot).toBe(3);
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-settings", settings: { appointmentsPerSlot: 2, justAddToList: false, slotDurationMinutes: 15 } });
-    expect((await persisted()).workspaceBrandingByActor[OWNER]).toMatchObject({ appointmentsPerSlot: 2, justAddToList: false, slotDurationMinutes: 15 });
+    expect((await directory.getApportionPanel(actor(OWNER))).providerSettings).toMatchObject({ appointmentsPerSlot: 2, justAddToList: false, slotDurationMinutes: 15 });
+    expect((await persisted()).workspaceBrandingByActor[OWNER]).toMatchObject({ appointmentsPerSlot: 1, justAddToList: true, slotDurationMinutes: 10 });
   });
 
   it("returns caller-scoped services, memberships and settings and no unrelated businesses", async () => {
@@ -502,10 +565,10 @@ describe("persistent Apportion directory", () => {
     expect((await persisted()).apportionDirectory?.businesses[OWNER].services.find((entry) => entry.id === "empty")?.active).toBe(false);
   });
 
-  it("counts personal and distinct linked addresses together and delegation costs no address", async () => {
+  it("counts personal and linked addresses and rejects service-assigned Admin candidates", async () => {
     await seed({ [OWNER]: branding(), [STAFF]: branding("1:00 PM", "2:00 PM"), [OTHER]: branding("3:00 PM", "4:00 PM") });
     fixtures.assignments.push(assignment(OTHER));
-    await directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: STAFF });
+    await expect(directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: STAFF })).rejects.toThrow("Admin address unavailable");
     expect((await persisted()).apportionDirectory?.memberships).toHaveLength(0);
     await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", STAFF) });
     await expect(directory.updateApportionPanel(actor(OTHER), { operation: "set-service", service: service("staff", "9222222222") })).rejects.toThrow("Address capacity exceeded");
@@ -657,7 +720,8 @@ describe("persistent Apportion directory", () => {
     await directory.updateApportionPanel(actor(STAFF), { operation: "unlink-address", ownerIdentifier: OWNER, locationId: "location-1" });
     expect((await directory.getApportionBusinessContext(OWNER))?.memberships).toEqual([]);
     expect((await directory.getApportionBusinessContext(OWNER))?.business.services.find((entry) => entry.id === "staff")).toMatchObject({ active: false, locationIds: [] });
-    await expect(store.updateWorkspaceBranding(null, OWNER)).rejects.toThrow("Address deletion");
+    await expect(store.updateWorkspaceBranding(null, OWNER)).resolves.toBeNull();
+    expect((await persisted()).apportionDirectory!.businesses[OWNER].active).toBe(false);
   });
 
   it("fails closed for unknown and Free owners without deleting migrated history", async () => {
@@ -670,14 +734,15 @@ describe("persistent Apportion directory", () => {
   });
 
   it("serializes concurrent branding, assignment and settings mutations without deadlocks or lost updates", async () => {
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", STAFF) });
     await Promise.all([
       store.updateWorkspaceBranding({ ...branding(), instituteName: "Updated" }, OWNER),
-      directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", STAFF) }),
       directory.updateApportionPanel(actor(OWNER), { operation: "set-delegate", delegateIdentifier: ADMIN }),
       directory.updateApportionPanel(actor(OWNER), { operation: "set-settings", settings: { appointmentsPerSlot: 6, justAddToList: false, slotDurationMinutes: 60 } }),
     ]);
     const state = await persisted();
-    expect(state.workspaceBrandingByActor[OWNER]).toMatchObject({ instituteName: "Updated", appointmentsPerSlot: 6 });
+    expect(state.workspaceBrandingByActor[OWNER]).toMatchObject({ instituteName: "Updated" });
+    expect(state.apportionDirectory?.providerSettings[OWNER].appointmentsPerSlot).toBe(6);
     expect(state.apportionDirectory?.businesses[OWNER]).toMatchObject({ adminDelegateIdentifier: ADMIN });
     expect(state.apportionDirectory?.businesses[OWNER].services).toHaveLength(2);
   });

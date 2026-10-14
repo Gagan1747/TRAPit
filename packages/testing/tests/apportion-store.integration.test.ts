@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { normalizeWorkspaceBranding } from "../src/quiz";
 import type { ApportionBusinessContext } from "../../../apps/web/lib/apportion-directory";
@@ -9,6 +8,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("../../../apps/web/lib/apportion-directory", () => ({
   getApportionBusinessContext: vi.fn(async () => fixtures.context),
   getApportionBusinessContexts: vi.fn(async (owners: string[]) => new Map([...new Set(owners)].map((owner) => [owner, fixtures.context]))),
+  resolveApportionProviderContact: vi.fn(async (identifier: string) => ({ name: identifier === STAFF ? "Therapist" : "Owner", phone: identifier })),
 }));
 const directoryApi = await import("../../../apps/web/lib/apportion-directory");
 const fixtures = vi.hoisted(() => ({ context: null as import("../../../apps/web/lib/apportion-directory").ApportionBusinessContext | null }));
@@ -50,7 +50,7 @@ async function persisted() {
 }
 
 beforeAll(async () => {
-  temporaryDirectory = await mkdtemp(path.join(tmpdir(), "trapit-apportion-store-"));
+  temporaryDirectory = await mkdtemp(path.join(process.cwd(), ".trapit-apportion-store-"));
   storePath = path.join(temporaryDirectory, "apportion-appointments.json");
   vi.stubEnv("TRAPIT_DATA_DIR", temporaryDirectory);
   store = await import("../../../apps/web/lib/apportion-store");
@@ -66,6 +66,31 @@ beforeEach(async () => {
 });
 
 describe("canonical appointment store", () => {
+  it("requires a reason, preserves notes, atomically appends an authored cancellation, and retries once", async () => {
+    const appointment = await store.createApportionAppointment({ ...booking(), notes: "Original customer note" });
+    const before = await persisted();
+    for (const reason of [undefined, "", "  ", "\u0000"]) {
+      await expect(store.cancelApportionAppointment({ actorIdentifier: STAFF, appointmentId: appointment.id, reason })).rejects.toThrow("cancellation reason");
+    }
+    expect(await persisted()).toEqual(before);
+    await expect(store.cancelApportionAppointment({ actorIdentifier: OWNER, appointmentId: appointment.id, reason: "No authority" })).rejects.toThrow("own appointments");
+    const input = { actorIdentifier: STAFF, appointmentId: appointment.id, reason: "  On leave  " };
+    await Promise.all([store.cancelApportionAppointment(input), store.cancelApportionAppointment(input)]);
+    const cancelled = (await persisted()).appointments.find((entry) => entry.id === appointment.id)!;
+    expect(cancelled).toMatchObject({ currentStatus: "cancelled", canceledByIdentifier: STAFF, notes: "Original customer note" });
+    expect(cancelled.messages.map((entry) => entry.body)).toEqual(["Original customer note", "Cancellation reason: On leave"]);
+    expect(cancelled.messages.at(-1)).toMatchObject({ authorIdentifier: STAFF });
+    expect(cancelled.history.filter((entry) => entry.action === "cancelled")).toHaveLength(1);
+  });
+  it("keeps booked business, service, address and staff contacts after configuration changes", async () => {
+    const appointment = await store.createApportionAppointment(booking());
+    fixtures.context!.branding.instituteName = "Renamed";
+    fixtures.context!.branding.appointmentLocations![0].address = "Changed address";
+    fixtures.context!.business.services[1].name = "Changed service";
+    fixtures.context!.business.services[1].assignedIdentifier = ADMIN;
+    const projected = (await store.listApportionAppointmentsForActor(REQUESTER)).find((entry) => entry.id === appointment.id)!;
+    expect(projected).toMatchObject({ ownerName: "Clinic", serviceName: "Therapy", locationAddress: "Main Street", assignedStaffName: "Therapist", assignedStaffPhone: STAFF });
+  });
   it("honors pending handovers immediately and does not transfer new bookings after relinking", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
@@ -188,7 +213,7 @@ describe("canonical appointment store", () => {
       const completed = await store.createApportionAppointment({ ...booking(), startsAt: "2026-10-07T04:00:00.000Z", serviceDateKey: "2026-10-07" });
       await store.updateApportionAppointment({ appointmentId: completed.id, actorIdentifier: STAFF, action: "done" });
       const cancelled = await store.createApportionAppointment({ ...booking(), startsAt: "2026-10-08T04:00:00.000Z", serviceDateKey: "2026-10-08" });
-      await store.cancelApportionAppointment({ appointmentId: cancelled.id, actorIdentifier: REQUESTER });
+      await store.cancelApportionAppointment({ appointmentId: cancelled.id, actorIdentifier: REQUESTER, reason: "Unavailable" });
       const optedOutAt = new Date().toISOString();
       fixtures.context!.memberships = [];
       vi.setSystemTime(new Date("2026-10-05T18:29:00.000Z"));
@@ -218,7 +243,7 @@ describe("canonical appointment store", () => {
   it("uses phone aliases for legacy views and actions without replacing IDs/history", async () => {
     expect(await store.listApportionAppointmentsForOwner("9111111111")).toHaveLength(1);
     expect(await store.listApportionAppointmentsForRequester("9444444444")).toHaveLength(1);
-    await store.cancelApportionAppointment({ actorIdentifier: "9444444444", appointmentId: "old-id" });
+    await store.cancelApportionAppointment({ actorIdentifier: "9444444444", appointmentId: "old-id", reason: "Unavailable" });
     const persisted = JSON.parse(await readFile(storePath, "utf8"));
     expect(persisted.appointments[0]).toMatchObject({ id: "old-id", bookedQueuePosition: 7, currentStatus: "cancelled" });
     expect(persisted.appointments[0].history[0]).toEqual(legacy().history[0]);
@@ -334,7 +359,7 @@ describe("canonical appointment store", () => {
     expect(await store.resolveApportionAppointmentAccess(appointment, ADMIN)).toMatchObject({ canView: true, canManage: true });
     expect((await store.listApportionAppointmentsForActor(ADMIN)).find((entry) => entry.id === appointment.id)).toMatchObject({ assignedStaffIdentifier: STAFF, canManage: true });
     await expect(store.cancelApportionAppointment({ actorIdentifier: STAFF, appointmentId: appointment.id })).rejects.toThrow();
-    await expect(store.cancelApportionAppointment({ actorIdentifier: ADMIN, appointmentId: appointment.id })).rejects.toThrow("Only the requester");
+    await store.cancelApportionAppointment({ actorIdentifier: ADMIN, appointmentId: appointment.id, reason: "Provider unavailable" });
   });
 
   it("migrates original notes once and retains the first booked time across reschedules", async () => {
@@ -429,14 +454,14 @@ describe("canonical appointment store", () => {
     expect(await store.resolveApportionAppointmentAccess(current, STAFF)).toMatchObject({ canManage: false, canView: true });
     expect(await store.resolveApportionAppointmentAccess(otherAddress, STAFF)).toMatchObject({ canManage: true });
     await expect(store.createApportionAppointment(booking("therapy", "2099-10-06T04:00:00.000Z"))).rejects.toThrow("Staff address unavailable");
-    const pending = (await store.listApportionPendingNotifications()).filter((entry) => entry.title !== "New appointment");
+    const pending = (await store.listApportionPendingNotifications()).filter((entry) => !entry.webPushEligible && entry.title !== "New appointment");
     expect(pending).toHaveLength(6);
     expect(await store.listApportionNotificationsForActor("9444444444")).toHaveLength(2);
     expect(await store.applyApportionAddressOptOut(OWNER, "location-1", STAFF)).toEqual([]);
     expect(await persisted()).toEqual(saved);
     await store.markApportionNotificationDelivered(pending[0].id);
     await store.markApportionNotificationDelivered(pending[0].id);
-    expect((await store.listApportionPendingNotifications()).filter((entry) => entry.title !== "New appointment")).toHaveLength(5);
+    expect((await store.listApportionPendingNotifications()).filter((entry) => !entry.webPushEligible && entry.title !== "New appointment")).toHaveLength(5);
     await store.updateApportionAppointment({ appointmentId: current.id, actorIdentifier: ADMIN, action: "done" });
     fixtures.context!.business.adminDelegateIdentifier = null;
     expect(await store.resolveApportionAppointmentAccess(current, OWNER)).toMatchObject({ canManage: true });

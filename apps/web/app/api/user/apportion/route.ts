@@ -156,13 +156,15 @@ export async function DELETE(request: Request) {
   }
 
   try {
-    const body = await request.json() as { appointmentId?: string };
+    const body = await request.json() as { appointmentId?: string; reason?: string };
     if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.appointmentId !== "string" || !body.appointmentId.trim()) {
       throw new Error("A valid appointment ID is required.");
     }
+    if (typeof body.reason !== "string" || !body.reason.trim()) throw new Error("A cancellation reason is required.");
     await cancelApportionAppointment({
       actorIdentifier: actor.identifier,
       appointmentId: body.appointmentId ?? "",
+      reason: body.reason,
     });
     publishWorkspaceEvent("apportion");
     return NextResponse.json(await buildApportionDashboardPayload({ ...actor, identifier: actor.identifier }));
@@ -180,13 +182,14 @@ export async function PATCH(request: Request) {
 
   try {
   const body = (await request.json()) as {
-    action?: "done" | "present-in-person" | "push-back" | "reject" | "reschedule" | "send-message" | "mark-read";
+    action?: "cancel" | "done" | "present-in-person" | "push-back" | "reject" | "reschedule" | "send-message" | "mark-read";
     appointmentId?: string;
     message?: string;
     lastMessageId?: string;
     nextServiceDateKey?: string;
     nextStartsAt?: string;
     notes?: string | null;
+    reason?: string;
   };
 
   if (!body || typeof body !== "object" || Array.isArray(body)
@@ -194,13 +197,15 @@ export async function PATCH(request: Request) {
     || (body.nextServiceDateKey !== undefined && typeof body.nextServiceDateKey !== "string")
     || (body.nextStartsAt !== undefined && typeof body.nextStartsAt !== "string")
     || (body.message !== undefined && typeof body.message !== "string")
+    || (body.reason !== undefined && typeof body.reason !== "string")
     || (body.lastMessageId !== undefined && typeof body.lastMessageId !== "string")
     || (body.notes !== undefined && body.notes !== null && typeof body.notes !== "string")) {
     throw new Error("A valid appointment ID and appointment fields are required.");
   }
-  if (typeof body.action !== "string" || !["done", "present-in-person", "push-back", "reject", "reschedule", "send-message", "mark-read"].includes(body.action)) {
+  if (typeof body.action !== "string" || !["cancel", "done", "present-in-person", "push-back", "reject", "reschedule", "send-message", "mark-read"].includes(body.action)) {
     return NextResponse.json({ error: "Choose a valid appointment action." }, { status: 400 });
   }
+  if (body.action === "cancel" && !body.reason?.trim()) return NextResponse.json({ error: "A cancellation reason is required." }, { status: 400 });
   if (body.action === "send-message" && typeof body.message !== "string") {
     return NextResponse.json({ error: "A message is required." }, { status: 400 });
   }
@@ -262,6 +267,7 @@ export async function PATCH(request: Request) {
       message: body.message,
       lastMessageId: body.lastMessageId,
       notes: body.notes,
+      reason: body.reason,
     });
     publishWorkspaceEvent("apportion");
     const payload = await buildApportionDashboardPayload({ ...actor, identifier: actor.identifier });

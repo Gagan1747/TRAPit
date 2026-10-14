@@ -30,6 +30,7 @@ export type ApportionService = {
 };
 
 export type ApportionBusiness = {
+  active?: boolean;
   ownerIdentifier: string;
   adminDelegateIdentifier: string | null;
   services: ApportionService[];
@@ -48,6 +49,7 @@ export type ApportionAddressMembership = {
 
 export type ApportionDirectory = {
   delegationCapacityVersion?: number;
+  scheduleRepairVersion?: number;
   businesses: Record<string, ApportionBusiness>;
   providerSettings: Record<string, ApportionProviderSettings>;
   memberships: ApportionAddressMembership[];
@@ -76,6 +78,7 @@ export function getApportionServiceLimit(category: string) {
 }
 
 export function getApportionBookableServices(business: ApportionBusiness, category: string, locationId?: string) {
+  if (business.active === false) return [];
   const counts = new Map<string, number>();
   const limit = getApportionServiceLimit(category);
   return business.services.filter((service) => service.active).flatMap((service) => {
@@ -134,6 +137,7 @@ export function migrateApportionDirectory(
   }
   return { businesses, providerSettings, memberships: structuredClone(existing?.memberships ?? []),
     ...(existing?.delegationCapacityVersion !== undefined ? { delegationCapacityVersion: existing.delegationCapacityVersion } : {}),
+    ...(existing?.scheduleRepairVersion !== undefined ? { scheduleRepairVersion: existing.scheduleRepairVersion } : {}),
     ...(existing?.providerClosedDateKeys ? { providerClosedDateKeys: structuredClone(existing.providerClosedDateKeys) } : {}),
     scheduleNotifications: structuredClone(existing?.scheduleNotifications ?? []),
     ...(existing?.pendingProviderLeaves ? { pendingProviderLeaves: structuredClone(existing.pendingProviderLeaves) } : {}),
@@ -245,7 +249,23 @@ export function getApportionWeeklyIntervals(schedule: ApportionScheduleInput): A
     addWeeklyInterval(intervals, dailyHours.weekday, dailyHours.workingHours);
     addWeeklyInterval(intervals, dailyHours.weekday, dailyHours.workingHoursSecondWindow);
   }
+
   return mergeIntervals(intervals);
+}
+
+export function resolveApportionLocationForDate(
+  location: AppointmentLocation,
+  dateKey: string,
+  closedDateKeys: string[] = [],
+): AppointmentLocation | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey) || closedDateKeys.includes(dateKey)) return null;
+  const date = new Date(`${dateKey}T00:00:00Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== dateKey) return null;
+  const weekday = date.getUTCDay();
+  const hours = resolveApportionDailySchedule(location)[weekday];
+  if (!hours.workingHours && !hours.workingHoursSecondWindow) return null;
+  return { ...location, ...hours, dailyHours: undefined,
+    workingDays: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][weekday] };
 }
 
 export function intersectApportionWeeklyIntervals(

@@ -46,4 +46,38 @@ describe("Apportion UI contracts", () => {
   it("preserves queue Absent", () => {
     expect(render(true)).toContain(">Absent</button>");
   });
+  function renderEntries(entries: ApportionLogAppointment[]) {
+    return renderToStaticMarkup(createElement(ApportionAppointmentLog, {
+      currentIdentifier: "+919222222222", appointments: entries,
+      isActive: (status) => status === "pending" || status === "delayed", isRequester: () => true,
+      formatDateTime: (value) => value, getStatusLabel: (entry) => entry.currentStatus,
+      onAction: async () => {}, onCancel: async () => {}, onRefresh: () => {}, isUpdating: false,
+    }));
+  }
+  it("uses service buttons through four business/service IDs and a dropdown beyond four", () => {
+    const entries = Array.from({ length: 5 }, (_, index) => ({ ...appointment(false), id: `entry-${index}`, serviceId: `service-${index}`, serviceName: `Service ${index}` }));
+    const four = renderEntries(entries.slice(0, 4));
+    expect(four).toContain('aria-pressed="true"');
+    expect(four).not.toContain("<select");
+    const five = renderEntries(entries);
+    expect(five).toContain('aria-label="Filter service"');
+    expect(five).toContain("<select");
+    expect(five).toContain(">All services</option>");
+  });
+  it("renders snapshot hierarchy and assigned staff customer contact rather than business contact", () => {
+    const html = renderEntries([{ ...appointment(false), scope: "requester", serviceName: "Therapy", assignedStaffName: "Booked Therapist", assignedStaffPhone: "+919555555555" }]);
+    expect(html).toContain("<strong>Booked Therapist</strong>");
+    expect(html).toContain("+919555555555");
+    expect(html.indexOf(">Clinic</span>")).toBeLessThan(html.indexOf(">Therapy</span>"));
+    expect(html.indexOf(">Therapy</span>")).toBeLessThan(html.indexOf(">Main Street</span>"));
+    expect(html).toContain(">Cancel</button>");
+  });
+  it("does not allow a business viewer without controller authority to cancel", () => {
+    const html = renderToStaticMarkup(createElement(ApportionAppointmentLog, {
+      currentIdentifier: "+919111111111", appointments: [{ ...appointment(false), canManage: false }],
+      isActive: () => true, isRequester: () => false, formatDateTime: (value) => value,
+      getStatusLabel: () => "Pending", onAction: async () => {}, onCancel: async () => {}, onRefresh: () => {}, isUpdating: false,
+    }));
+    expect(html).not.toContain(">Cancel</button>");
+  });
 });

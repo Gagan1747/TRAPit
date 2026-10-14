@@ -37,12 +37,17 @@ describe("invitation acceptance API", () => {
   });
   it.each(["accept", "decline", "cancel"])("responds to %s using authenticated identity and publishes apportion", async (action) => {
     fixtures.list.mockResolvedValue([{ id: "invite-1", status: action === "accept" ? "accepted" : action === "decline" ? "declined" : "cancelled" }]);
-    const response = await route.PATCH(request({ invitationId: " invite-1 ", action, actorIdentifier: "spoofed-owner" }));
+    const reason = action === "cancel" ? "On leave" : undefined;
+    const response = await route.PATCH(request({ invitationId: " invite-1 ", action, reason, actorIdentifier: "spoofed-owner" }));
     expect(response.status).toBe(200);
-    expect(fixtures.respond).toHaveBeenCalledWith({ invitationId: "invite-1", action, actorIdentifier: fixtures.actor!.identifier });
+    expect(fixtures.respond).toHaveBeenCalledWith({ invitationId: "invite-1", action, reason, actorIdentifier: fixtures.actor!.identifier });
     expect(fixtures.publish).toHaveBeenCalledOnce();
     expect(fixtures.publish).toHaveBeenCalledWith("apportion");
     expect(await response.json()).toEqual({ invitations: await fixtures.list(), appointmentIds: ["appointment-1"] });
+  });
+  it.each([undefined, "", " ", 7])("requires nonempty cancellation reason %j before mutation", async (reason) => {
+    expect((await route.PATCH(request({ invitationId: "invite-1", action: "cancel", reason }))).status).toBe(400);
+    expect(fixtures.respond).not.toHaveBeenCalled();
   });
   it.each([null, [], {}, { invitationId: 7, action: "accept" }, { invitationId: " ", action: "accept" }, { invitationId: "invite-1", action: "done" }])("rejects invalid request %j before mutation", async (body) => {
     expect((await route.PATCH(request(body))).status).toBe(400);

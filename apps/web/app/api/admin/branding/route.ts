@@ -66,10 +66,8 @@ function validateAppointmentDateOverrides(branding: WorkspaceBranding) {
   const values = [
     ...(branding.appointmentDateOverrides?.closedDateKeys ?? []),
     ...(branding.appointmentDateOverrides?.openedDateKeys ?? []),
-    ...(branding.appointmentDateHoursOverrides ?? []).map((entry) => entry.dateKey),
   ];
   const today = new Date();
-  const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
   const maxDate = new Date(today.getFullYear(), today.getMonth() + 6, today.getDate());
   const maxDateKey = `${maxDate.getFullYear()}-${String(maxDate.getMonth() + 1).padStart(2, "0")}-${String(maxDate.getDate()).padStart(2, "0")}`;
 
@@ -81,8 +79,8 @@ function validateAppointmentDateOverrides(branding: WorkspaceBranding) {
       && date.getMonth() === Number(match[2]) - 1
       && date.getDate() === Number(match[3]));
 
-    if (!isValid || value < todayKey || value > maxDateKey) {
-      throw new Error("Appointment calendar dates must be valid dates within the next 6 months.");
+    if (!isValid || value > maxDateKey) {
+      throw new Error("Appointment calendar dates must be valid and no later than the next 6 months.");
     }
   }
 }

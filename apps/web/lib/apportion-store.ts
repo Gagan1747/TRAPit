@@ -1,9 +1,10 @@
 import "server-only";
 
-import { createEntityId, getApportionBookableServices, getApportionWeeklyIntervals, intersectApportionWeeklyIntervals, matchApportionIdentity, normalizeApportionProviderSettings, participantIdentifiersMatch, planApportionDateKeys, resolveApportionDailySchedule, resolveApportionController, type ApportionRecurrence, type ApportionProviderSettings } from "@trapit/testing";
+import { createHash } from "node:crypto";
+import { assertApportionRecurringWeekdays, createEntityId, getApportionBookableServices, getApportionWeeklyIntervals, intersectApportionWeeklyIntervals, matchApportionIdentity, normalizeApportionProviderSettings, participantIdentifiersMatch, planApportionDateKeys, resolveApportionDailySchedule, resolveApportionController, type ApportionRecurrence, type ApportionProviderSettings } from "@trapit/testing";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { getApportionBusinessContext, getApportionBusinessContexts, type ApportionBusinessContext } from "./apportion-directory";
+import { getApportionBusinessContext, getApportionBusinessContexts, resolveApportionProviderContact, type ApportionBusinessContext } from "./apportion-directory";
 import { getApportionLifecycleBoundaries, getApportionSlotExpiry, resolveAppointmentLocationSchedule, validateAppointmentLocationSlot } from "./appointment-locations";
 
 const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
@@ -18,6 +19,8 @@ export type ApportionAppointment = {
   serviceId?: string;
   serviceName?: string;
   assignedStaffIdentifier?: string | null;
+  assignedStaffName?: string | null;
+  assignedStaffPhone?: string | null;
   bookedSettings?: ApportionProviderSettings;
   notifications?: ApportionNotification[];
   canceledAt: string | null;
@@ -94,9 +97,17 @@ export type ApportionAppointmentHistoryEntry = {
 type ApportionState = {
   appointments: ApportionAppointment[];
   invitations: ApportionInvitation[];
+  browserNotificationVersion?: number;
+  browserObservedInstances?: string[];
+  browserNotificationIntents?: ApportionBrowserNotificationIntent[];
 };
 
 export type ApportionInvitation = {
+  assignedStaffIdentifier?: string | null;
+  assignedStaffName?: string | null;
+  assignedStaffPhone?: string | null;
+  messages?: ApportionAppointmentMessage[];
+  canceledByIdentifier?: string | null;
   recurrence?: ApportionRecurrence | null;
   recurrenceStartDateKey?: string;
   id: string;
@@ -128,6 +139,14 @@ export class ApportionInvitationError extends Error {
   }
 }
 
+function cancellationReason(reason: unknown) {
+  if (typeof reason !== "string" || !reason.trim() || reason.trim().length > 2000
+    || /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(reason)) {
+    throw new Error("Enter a cancellation reason of 1 to 2000 characters without control characters.");
+  }
+  return reason.trim();
+}
+
 export type ApportionNotification = {
   mobilePushEligible?: boolean;
   webPushEligible?: boolean;
@@ -139,6 +158,85 @@ export type ApportionNotification = {
   createdAt: string;
   deliveredAt?: string | null;
 };
+
+type ApportionBrowserNotificationIntent = ApportionNotification & {
+  sourceKind: "appointment" | "invitation";
+  entityId: string;
+  startsAt: string;
+  phase: "confirmed" | "30min" | "1min";
+  dueAt: string;
+};
+
+function browserAppointmentSchedules(state: ApportionState) {
+  return [
+    ...state.appointments.filter((appointment) => isActiveStatus(appointment.currentStatus)).map((appointment) => ({
+      sourceKind: "appointment" as const, entityId: appointment.id, startsAt: appointment.startsAt,
+      endsAt: appointment.justAddToList ? appointment.queueExpiresAt : appointment.slotExpiresAt || appointment.slotEndsAt,
+      recipientIdentifier: appointment.requesterIdentifier,
+      createdAt: appointment.history.filter((entry) => entry.action === "rescheduled").at(-1)?.at || appointment.createdAt,
+    })),
+    ...state.invitations.filter((invitation) => invitation.status === "pending").flatMap((invitation) =>
+      invitation.occurrences.map((occurrence) => ({
+        sourceKind: "invitation" as const, entityId: invitation.id, startsAt: occurrence.startsAt,
+        endsAt: invitation.expiresAt, recipientIdentifier: invitation.requesterIdentifier, createdAt: invitation.createdAt,
+      }))),
+  ];
+}
+
+function browserAppointmentInstanceKey(schedule: { sourceKind: string; entityId: string; startsAt: string; recipientIdentifier: string }) {
+  return `${schedule.sourceKind}:${schedule.entityId}:${schedule.startsAt}:${schedule.recipientIdentifier.trim().toLowerCase()}`;
+}
+
+function reconcileBrowserAppointmentIntents(state: ApportionState) {
+  const now = Date.now();
+  const baseline = state.browserNotificationVersion !== 1;
+  const observed = new Set(baseline ? [] : state.browserObservedInstances ?? []);
+  const intents = baseline ? [] : state.browserNotificationIntents ?? [];
+  // The separate browser outbox never changes native or in-app event delivery.
+  // In particular, legacy invitation/provider alerts cannot replay after upgrade.
+  for (const notification of apportionNotifications(state)) {
+    if (notification.webPushEligible === true) notification.webPushEligible = false;
+  }
+  for (const schedule of browserAppointmentSchedules(state)) {
+    const start = Date.parse(schedule.startsAt);
+    if (!Number.isFinite(start) || !schedule.recipientIdentifier || (schedule.endsAt && Date.parse(schedule.endsAt) <= now)) continue;
+    const instanceKey = browserAppointmentInstanceKey(schedule);
+    if (observed.has(instanceKey)) continue;
+    observed.add(instanceKey);
+    const cutoff = baseline ? now : Date.parse(schedule.createdAt);
+    const phases: Array<[ApportionBrowserNotificationIntent["phase"], number]> = [
+      ["30min", start - 30 * 60_000], ["1min", start - 60_000],
+    ];
+    if (!baseline) phases.unshift(["confirmed", Number.isFinite(cutoff) ? cutoff : now]);
+    for (const [phase, due] of phases) {
+      if (phase !== "confirmed" && due < (Number.isFinite(cutoff) ? cutoff : now)) continue;
+      const id = `apportion-browser:${createHash("sha256").update(`${instanceKey}:${phase}`).digest("hex")}`;
+      if (intents.some((intent) => intent.id === id)) continue;
+      intents.push({
+        id, sourceKind: schedule.sourceKind, entityId: schedule.entityId, startsAt: schedule.startsAt,
+        phase, dueAt: new Date(due).toISOString(), createdAt: new Date(now).toISOString(), deliveredAt: null,
+        recipientIdentifier: schedule.recipientIdentifier, mobilePushEligible: false, webPushEligible: true,
+        title: "TRAPit.in appointment update", body: "Sign in to view your scheduled appointment.",
+        url: `/user?section=apportion&${schedule.sourceKind === "appointment" ? "appointmentId" : "invitationId"}=${encodeURIComponent(schedule.entityId)}`,
+      });
+    }
+  }
+  state.browserNotificationVersion = 1;
+  state.browserObservedInstances = [...observed];
+  state.browserNotificationIntents = intents;
+}
+
+function pendingBrowserAppointmentIntents(state: ApportionState) {
+  const now = Date.now();
+  const eligible = new Set(browserAppointmentSchedules(state)
+    .filter((schedule) => !schedule.endsAt || Date.parse(schedule.endsAt) > now)
+    .map(browserAppointmentInstanceKey));
+  return (state.browserNotificationIntents ?? []).filter((intent) =>
+    !intent.deliveredAt && intent.webPushEligible === true && intent.mobilePushEligible === false
+    && ["confirmed", "30min", "1min"].includes(intent.phase)
+    && eligible.has(browserAppointmentInstanceKey(intent))
+    && Date.parse(intent.dueAt) <= now && (intent.phase === "confirmed" || now < Date.parse(intent.startsAt)));
+}
 
 function resolveStorePath() {
   const configuredDataDir = process.env.TRAPIT_DATA_DIR?.trim();
@@ -279,7 +377,7 @@ export async function resolveApportionAppointmentAccess(appointment: ApportionAp
 function appointmentAccessFromContext(appointment: ApportionAppointment, actorIdentifier: string, context: ApportionBusinessContext | null) {
   const serviceId = appointment.serviceId || "consultation";
   const service = context?.business.services.find((entry) => entry.id === serviceId);
-  let controllerIdentifier: string | null = null;
+  let controllerIdentifier: string | null = appointment.ownerIdentifier;
   if (serviceId === "consultation") {
     controllerIdentifier = appointment.ownerIdentifier;
   } else if (context) {
@@ -700,6 +798,9 @@ async function readState(applyLifecycle = true): Promise<ApportionState> {
       state.appointments = normalizeAppointments(state.appointments);
       changed = true;
     }
+    const beforeBrowser = JSON.stringify(state);
+    reconcileBrowserAppointmentIntents(state);
+    if (JSON.stringify(state) !== beforeBrowser) changed = true;
     if (changed) await writeState(state);
 
     return state;
@@ -715,6 +816,7 @@ async function readState(applyLifecycle = true): Promise<ApportionState> {
 }
 
 async function writeState(state: ApportionState) {
+  reconcileBrowserAppointmentIntents(state);
   await ensureStoreDirectory();
   const temporaryPath = `${STORE_PATH}.${createEntityId("write")}.tmp`;
   try {
@@ -751,6 +853,25 @@ export async function listApportionAppointmentsForActor(identifier: string) {
   return withAppointmentLock(async () => {
     const state = await readState();
     const contexts = await getApportionBusinessContexts(state.appointments.map((appointment) => appointment.ownerIdentifier));
+    let snapshotsChanged = false;
+    const contacts = new Map<string, Awaited<ReturnType<typeof resolveApportionProviderContact>>>();
+    for (const appointment of state.appointments) {
+      const context = contexts.get(appointment.ownerIdentifier) ?? null;
+      if (!appointmentAccessFromContext(appointment, identifier, context).canView) continue;
+      if (!Object.prototype.hasOwnProperty.call(appointment, "assignedStaffName") && appointment.assignedStaffIdentifier) {
+        const provider = appointment.assignedStaffIdentifier;
+        if (!contacts.has(provider)) contacts.set(provider, await resolveApportionProviderContact(provider));
+        const contact = contacts.get(provider)!;
+        appointment.assignedStaffName = contact.name;
+        appointment.assignedStaffPhone = contact.phone;
+        snapshotsChanged = true;
+      }
+      if (!appointment.ownerName && context?.branding.instituteName) {
+        appointment.ownerName = context.branding.instituteName;
+        snapshotsChanged = true;
+      }
+    }
+    if (snapshotsChanged) await writeState(state);
     const projections = state.appointments.map((appointment) => {
       const access = appointmentAccessFromContext(appointment, identifier, contexts.get(appointment.ownerIdentifier) ?? null);
       return access.canView ? { ...appointmentProjection(appointment, identifier), canManage: access.canManage, canMessage: isActiveStatus(appointment.currentStatus) && (access.isRequester || access.canManage) } : null;
@@ -849,12 +970,15 @@ async function buildApportionAppointment(state: ApportionState, input: Apportion
   const bookedQueuePosition = Number.isFinite(input.bookedQueuePosition) && (input.bookedQueuePosition ?? 0) > 0
     ? Math.floor(input.bookedQueuePosition ?? 0)
     : ownerDayAppointments.length + 1;
+  const providerContact = booking.providerIdentifier ? await resolveApportionProviderContact(booking.providerIdentifier) : null;
 
   const appointment: ApportionAppointment = {
     messageReadCursors: {}, messageReadBaselineId: null,
     serviceId,
     serviceName: booking.service.name,
     assignedStaffIdentifier: booking.service.assignedIdentifier,
+    assignedStaffName: providerContact?.name ?? null,
+    assignedStaffPhone: providerContact?.phone ?? null,
     bookedSettings: { ...booking.settings },
     notifications: [],
     canceledAt: null,
@@ -878,7 +1002,7 @@ async function buildApportionAppointment(state: ApportionState, input: Apportion
     originalStartsAt: startsAt.toISOString(),
     ...bookingBoundaries({ assignedStaffIdentifier: booking.service.assignedIdentifier, locationId, serviceDateKey, startsAt: startsAt.toISOString() }, booking.context, booking.settings.slotDurationMinutes),
     ownerIdentifier: booking.context.business.ownerIdentifier,
-    ownerName: input.ownerName?.trim() || null,
+    ownerName: booking.context.branding.instituteName?.trim() || input.ownerName?.trim() || null,
     presentInPersonAt: null,
     queueOrder: activeOwnerDayAppointments.length + 1,
     requesterIdentifier,
@@ -1017,6 +1141,9 @@ export async function createApportionInvitation(input: {
     occurrences.sort((first, second) => first.startsAt.localeCompare(second.startsAt));
     if (new Date(occurrences[0].slotEndsAt).getTime() <= Date.now()) throw new ApportionInvitationError("The first appointment slot has already ended.");
     const booking = snapshot!;
+    const recurringMembership = booking.context.memberships.find((entry) => entry.locationId === input.locationId
+      && booking.providerIdentifier && matchApportionIdentity(entry.providerIdentifier, booking.providerIdentifier));
+    assertApportionRecurringWeekdays(input.recurrence, [booking.location, ...(recurringMembership ? [recurringMembership] : [])]);
     if (input.recurrence?.durationCount !== undefined) {
       const horizon = new Date(`${getAppointmentDayKey(new Date().toISOString())}T00:00:00Z`);
       horizon.setUTCMonth(horizon.getUTCMonth() + 6);
@@ -1056,7 +1183,10 @@ export async function createApportionInvitation(input: {
       if (planned.join() !== occurrences.map((entry) => entry.serviceDateKey).sort().join()) throw new ApportionInvitationError("Occurrences must match the selected duration and working dates.");
     }
     const timestamp = new Date().toISOString();
+    const providerContact = booking.providerIdentifier ? await resolveApportionProviderContact(booking.providerIdentifier) : null;
     const invitation: ApportionInvitation = {
+      assignedStaffIdentifier: booking.providerIdentifier,
+      assignedStaffName: providerContact?.name ?? null, assignedStaffPhone: providerContact?.phone ?? null,
       recurrence: input.recurrence ? structuredClone(input.recurrence) : null, recurrenceStartDateKey: input.recurrenceStartDateKey,
       id: createEntityId("apportion-invitation"), status: "pending", ownerIdentifier: booking.context.business.ownerIdentifier,
       creatorIdentifier: input.actorIdentifier.trim(), requesterIdentifier: input.requesterIdentifier.trim(), requesterName: input.requesterName.trim() || "Registered user",
@@ -1066,16 +1196,13 @@ export async function createApportionInvitation(input: {
       expiresAt: occurrences[0].slotEndsAt, occurrences, appointmentIds: [], notifications: [], bookedSettings: { ...booking.settings },
     };
     addInvitationNotifications(invitation, "Appointment invitation", `${invitation.serviceName} at ${invitation.locationName}: ${occurrences.length} appointment(s) awaiting acceptance.`, timestamp);
-    for (const notification of invitation.notifications) {
-      notification.webPushEligible = matchApportionIdentity(notification.recipientIdentifier, invitation.requesterIdentifier);
-    }
     state.invitations.push(invitation);
     await writeState(state);
     return invitationProjection(invitation, input.actorIdentifier);
   });
 }
 
-export async function respondToApportionInvitation(input: { actorIdentifier: string; invitationId: string; action: "accept" | "decline" | "cancel" }) {
+export async function respondToApportionInvitation(input: { actorIdentifier: string; invitationId: string; action: "accept" | "decline" | "cancel"; reason?: string }) {
   return withAppointmentLock(async () => {
     if (!["accept", "decline", "cancel"].includes(input.action)) throw new ApportionInvitationError("Choose a valid invitation action.");
     const state = await readState();
@@ -1083,6 +1210,7 @@ export async function respondToApportionInvitation(input: { actorIdentifier: str
     if (!invitation) throw new ApportionInvitationError("Invitation not found.");
     const authorized = matchApportionIdentity(input.actorIdentifier, input.action === "cancel" ? invitation.ownerIdentifier : invitation.requesterIdentifier);
     if (!authorized) throw new ApportionInvitationError(input.action === "cancel" ? "Only the owner can cancel this invitation." : "Only the target requester can respond to this invitation.", 403);
+    const reason = input.action === "cancel" ? cancellationReason(input.reason) : null;
     const nextStatus = input.action === "accept" ? "accepted" : input.action === "decline" ? "declined" : "cancelled";
     if (invitation.status === nextStatus) return { invitation: invitationProjection(invitation, input.actorIdentifier), appointmentIds: [...invitation.appointmentIds] };
     if (invitation.status !== "pending") throw new ApportionInvitationError("This invitation is no longer pending.");
@@ -1114,6 +1242,11 @@ export async function respondToApportionInvitation(input: { actorIdentifier: str
     invitation.appointmentIds = appointments.map((appointment) => appointment.id);
     invitation.status = nextStatus;
     invitation.statusUpdatedAt = timestamp;
+    if (reason) {
+      invitation.canceledByIdentifier = input.actorIdentifier.trim();
+      invitation.messages ??= [];
+      invitation.messages.push({ id: createEntityId("message"), authorIdentifier: input.actorIdentifier.trim(), createdAt: timestamp, body: `Cancellation reason: ${reason}` });
+    }
     addInvitationNotifications(invitation, `Appointment invitation ${nextStatus}`, `${invitation.serviceName} at ${invitation.locationName}: invitation ${nextStatus}.`, timestamp);
     await writeState(state);
     return { invitation: invitationProjection(invitation, input.actorIdentifier), appointmentIds: [...invitation.appointmentIds] };
@@ -1153,6 +1286,7 @@ export async function updateApportionAppointment(input: {
   message?: string;
   lastMessageId?: string;
   requesterOnly?: boolean;
+  reason?: string;
 }) {
   return withAppointmentLock(async () => {
   const actorIdentifier = input.actorIdentifier.trim();
@@ -1203,7 +1337,13 @@ export async function updateApportionAppointment(input: {
     await writeState(state);
     return { appointment: appointmentProjection(appointment, actorIdentifier), nextInPersonAppointment: null };
   } else if (input.action === "cancel") {
-    if (!isRequester) throw new Error("Only the requester can cancel this appointment.");
+    if (!isRequester && !canManage) throw new Error("Only the requester or current controller can cancel this appointment.");
+    const reason = cancellationReason(input.reason);
+
+    if (appointment.currentStatus === "cancelled" && appointment.canceledByIdentifier
+      && participantIdentifiersMatch(appointment.canceledByIdentifier, actorIdentifier)) {
+      return { appointment: appointmentProjection(appointment, actorIdentifier), nextInPersonAppointment: null };
+    }
 
     if (!isActiveStatus(appointment.currentStatus)) {
       throw new Error("This appointment is no longer active.");
@@ -1219,8 +1359,9 @@ export async function updateApportionAppointment(input: {
       actorIdentifier,
       at: timestamp,
       toStartsAt: appointment.startsAt,
-      note: input.notes,
+      note: reason,
     }));
+    appointment.messages.push({ id: createEntityId("message"), authorIdentifier: actorIdentifier, createdAt: timestamp, body: `Cancellation reason: ${reason}` });
   } else if (input.action === "present-in-person") {
     if (!canManage) {
       throw new Error("Only the current controller can mark a user present in person.");
@@ -1383,11 +1524,13 @@ export async function updateApportionAppointment(input: {
 export async function cancelApportionAppointment(input: {
   actorIdentifier: string;
   appointmentId: string;
+  reason?: string;
 }) {
   const result = await updateApportionAppointment({
     action: "cancel",
     actorIdentifier: input.actorIdentifier,
     appointmentId: input.appointmentId,
+    reason: input.reason,
   });
 
   return result.appointment;
@@ -1441,14 +1584,17 @@ export async function listApportionNotificationsForActor(identifier: string) {
 }
 
 export async function listApportionPendingNotifications() {
-  return withAppointmentLock(async () => apportionNotifications(await readState())
-    .filter((notification) => !notification.deliveredAt));
+  return withAppointmentLock(async () => {
+    const state = await readState();
+    return [...apportionNotifications(state).filter((notification) => !notification.deliveredAt),
+      ...pendingBrowserAppointmentIntents(state)];
+  });
 }
 
 export async function markApportionNotificationDelivered(notificationId: string) {
   return withAppointmentLock(async () => {
     const state = await readState();
-    const notification = apportionNotifications(state).find((entry) => entry.id === notificationId);
+    const notification = [...apportionNotifications(state), ...(state.browserNotificationIntents ?? [])].find((entry) => entry.id === notificationId);
     if (notification && !notification.deliveredAt) {
       notification.deliveredAt = new Date().toISOString();
       await writeState(state);

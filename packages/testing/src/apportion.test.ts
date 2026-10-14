@@ -4,10 +4,12 @@ import {
   intersectApportionWeeklyIntervals, resolveApportionDailySchedule,
   assertApportionAddressCapacity, assertApportionServiceAssignment,
   getApportionBookableServices, migrateApportionDirectory,
-  normalizeApportionProviderSettings, resolveApportionController,
+  normalizeApportionProviderSettings, resolveApportionController, resolveApportionLocationForDate,
   type ApportionBusiness,
 } from "./apportion";
 import { normalizeWorkspaceBranding } from "./quiz";
+import { assertApportionRecurringWeekdays } from "./apportion-recurrence";
+import { resolveAppointmentLocationSchedule } from "../../../apps/web/lib/appointment-locations";
 
 const business: ApportionBusiness = {
   ownerIdentifier: "+919582372662",
@@ -16,6 +18,31 @@ const business: ApportionBusiness = {
 };
 
 describe("Apportion roles and migration", () => {
+  it.each([0, 1, 2, 3, 4, 5, 6])("never reopens weekly off day %s through obsolete overrides", (weekday) => {
+    const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    const keys = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const date = new Date("2026-10-04T00:00:00Z");
+    date.setUTCDate(date.getUTCDate() + weekday);
+    const dateKey = date.toISOString().slice(0, 10);
+    const branding = normalizeWorkspaceBranding({ instituteName: "Clinic", appointmentLocations: [{
+      id: "location-1", name: "Main", address: "Street", workingDays: names.filter((_, day) => day !== weekday).join(", "),
+      workingHours: "9:00 AM - 5:00 PM", workingHoursSecondWindow: "",
+    }], appointmentDateOverrides: { openedDateKeys: [dateKey], closedDateKeys: [] },
+    appointmentWeeklyHoursOverrides: [{ weekday, locations: [{ locationId: "location-1", workingHours: "4:00 PM - 8:00 PM", workingHoursSecondWindow: "" }] }],
+    appointmentDateHoursOverrides: [{ dateKey, locations: [{ locationId: "location-1", workingHours: "4:00 PM - 8:00 PM", workingHoursSecondWindow: "" }] }] } as never)!;
+    const location = branding.appointmentLocations![0];
+    expect(resolveApportionLocationForDate(location, dateKey)).toBeNull();
+    expect(resolveAppointmentLocationSchedule(branding, location.id, dateKey)).toBeNull();
+    expect(() => assertApportionRecurringWeekdays({ mode: "weekly", weekdayKeys: [keys[weekday]] }, [location])).toThrow("Weekly off");
+    const dailyLocation = { ...location, dailyHours: resolveApportionDailySchedule(location) };
+    expect(resolveApportionLocationForDate(dailyLocation, dateKey)).toBeNull();
+  });
+
+  it("keeps deactivated businesses unbookable after repeated directory migration", () => {
+    const inactive = { ...business, active: false };
+    expect(getApportionBookableServices(inactive, "trapit-pro-max")).toEqual([]);
+    expect(migrateApportionDirectory({}, { businesses: { owner: inactive } }).businesses.owner.active).toBe(false);
+  });
   it("migrates without changing branding or replacing saved settings", () => {
     const branding = normalizeWorkspaceBranding({ instituteName: "Clinic", address: "Address", workingDays: "Monday", workingHours: "9:00 AM - 5:00 PM", appointmentShareCode: "OLD-QR", justAddToList: false, appointmentsPerSlot: 3, slotDurationMinutes: 30 } as never)!;
     const original = structuredClone(branding);

@@ -38,6 +38,7 @@ type NotificationDelivery = {
 };
 
 type NotificationState = {
+  browserVersion?: number;
   browserBaseline?: boolean;
   browserObserved?: string[];
   browserIntents?: BrowserNotificationIntent[];
@@ -60,7 +61,8 @@ export type BrowserNotificationIntent = {
   recipientIdentifier: string;
   kind: "test" | "poll";
   entityId: string;
-  phase: "confirmed" | "15min" | "start";
+  phase: "confirmed" | "30min" | "1min";
+  dueAt: string;
 };
 
 const queueGlobal = globalThis as typeof globalThis & { trapitNotificationQueues?: Map<string, Promise<unknown>> };
@@ -105,6 +107,7 @@ async function ensureStoreDirectory() {
 
 function normalizeState(parsed: Partial<NotificationState>): NotificationState {
   return {
+    browserVersion: parsed.browserVersion,
     browserBaseline: parsed.browserBaseline === true,
     browserObserved: parsed.browserObserved ?? [],
     browserIntents: parsed.browserIntents ?? [],
@@ -333,8 +336,12 @@ export async function removeOwnedWebPushSubscription(endpoint: string, userSub: 
 export async function reconcileBrowserNotificationIntents(schedules: BrowserSchedule[], now = Date.now()) {
   return serialized(async () => {
     const state = await readState();
-    const observed = new Set(state.browserObserved);
-    const intents = new Map((state.browserIntents ?? []).map((entry) => [entry.key, entry]));
+    // Upgrades baseline current schedules and discard obsolete 15-minute/at-start alerts.
+    const baseline = state.browserVersion !== 2;
+    const observed = new Set(baseline ? [] : state.browserObserved);
+    const intents = new Map((baseline ? [] : state.browserIntents ?? [])
+      .filter((entry) => ["confirmed", "30min", "1min"].includes(entry.phase))
+      .map((entry) => [entry.key, entry]));
     const eligible = new Set<string>();
     for (const schedule of schedules) {
       if (!Number.isFinite(Date.parse(schedule.startsAt)) || !Number.isFinite(Date.parse(schedule.endsAt)) || Date.parse(schedule.endsAt) <= now) continue;
@@ -342,24 +349,32 @@ export async function reconcileBrowserNotificationIntents(schedules: BrowserSche
       for (const recipientIdentifier of new Set(schedule.recipients.map((value) => value.trim().toLowerCase()).filter(Boolean))) {
         const recipientKey = `${instanceKey}:${recipientIdentifier}`;
         eligible.add(recipientKey);
-        const phases: BrowserNotificationIntent["phase"][] = ["15min", "start"];
-        // Bootstrap marks existing schedules as observed, never replaying old confirmations.
-        if (state.browserBaseline && !observed.has(recipientKey)) phases.push("confirmed");
-        for (const phase of phases) {
-          const key = `browser:${recipientKey}:${phase}`;
-          if (!intents.has(key)) intents.set(key, { key, instanceKey, recipientIdentifier, kind: schedule.kind, entityId: schedule.id, phase });
+        if (!observed.has(recipientKey)) {
+          const start = Date.parse(schedule.startsAt);
+          const phases: Array<[BrowserNotificationIntent["phase"], number]> = [
+            ["30min", start - 30 * 60_000],
+            ["1min", start - 60_000],
+          ];
+          if (!baseline) phases.unshift(["confirmed", now]);
+          for (const [phase, due] of phases) {
+            // A late creation/share must not backfill already elapsed reminder phases.
+            if (phase !== "confirmed" && due < now) continue;
+            const key = `browser:${recipientKey}:${phase}`;
+            intents.set(key, { key, instanceKey, recipientIdentifier, kind: schedule.kind, entityId: schedule.id, phase, dueAt: new Date(due).toISOString() });
+          }
         }
         observed.add(recipientKey);
       }
     }
     state.browserBaseline = true;
+    state.browserVersion = 2;
     state.browserObserved = [...observed];
     state.browserIntents = [...intents.values()].filter((entry) => eligible.has(`${entry.instanceKey}:${entry.recipientIdentifier}`));
     await writeState(state);
     return state.browserIntents.filter((entry) => {
       const schedule = schedules.find((item) => browserScheduleInstanceKey(item) === entry.instanceKey)!;
       const start = Date.parse(schedule.startsAt);
-      return entry.phase === "confirmed" || (entry.phase === "15min" ? now >= start - 15 * 60 * 1000 && now < start : now >= start);
+      return now >= Date.parse(entry.dueAt) && (entry.phase === "confirmed" || now < start);
     });
   });
 }

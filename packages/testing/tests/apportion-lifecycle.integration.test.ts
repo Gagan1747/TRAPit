@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 vi.mock("server-only", () => ({}));
-vi.mock("../../../apps/web/lib/apportion-directory", () => ({ getApportionBusinessContext: async () => null, getApportionBusinessContexts: async (owners: string[]) => new Map(owners.map((owner) => [owner, null])) }));
+vi.mock("../../../apps/web/lib/apportion-directory", () => ({ resolveApportionProviderContact: async (identifier: string) => ({ name: null, phone: identifier }), getApportionBusinessContext: async () => null, getApportionBusinessContexts: async (owners: string[]) => new Map(owners.map((owner) => [owner, null])) }));
 let directory: string;
 let storePath: string;
 let store: typeof import("../../../apps/web/lib/apportion-store");

@@ -43,7 +43,8 @@ import {
 } from "@trapit/testing";
 import { Fragment, type DragEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, ArrowRight, Check, Copy, ExternalLink, QrCode, X } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { ArrowLeft, ArrowRight, Check, Copy, ExternalLink, LoaderCircle, QrCode, X } from "lucide-react";
 import QRCode from "qrcode";
 import { readJsonResponse } from "../lib/read-json-response";
 import { createBusinessBookingQrCode } from "../lib/business-booking-qr";
@@ -59,7 +60,6 @@ import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-
 import { BusinessHoursGrid } from "./business-hours-grid";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 import { FloatingWindowCloseButton } from "./floating-window-close-button";
-import { NotificationBell } from "./notification-bell";
 import { SignOutButton } from "./sign-out-button";
 
 const AI_OCR_EXAMPLE = `Question: 5+3?
@@ -1751,6 +1751,7 @@ export function AdminQuestionWorkspace({
   isSuperAdmin,
   previousSignInAt,
 }: AdminQuestionWorkspaceProps) {
+  const pathname = usePathname();
   const [categoryAssignmentCategory, setCategoryAssignmentCategory] = useState<NormalUserCategory>(currentUserCategory ?? "trapit-normal");
   const [categoryAssignmentDurationMonths, setCategoryAssignmentDurationMonths] = useState<3 | 12>(3);
   const [categoryAssignmentIdentifier, setCategoryAssignmentIdentifier] = useState("");
@@ -1931,6 +1932,10 @@ export function AdminQuestionWorkspace({
   const [visibleReviewTestIds, setVisibleReviewTestIds] = useState<string[]>([]);
   const [workspaceBranding, setWorkspaceBranding] = useState<WorkspaceBranding | null>(null);
   const [businessPanelRevision, setBusinessPanelRevision] = useState(0);
+  const [ownerDelegated, setOwnerDelegated] = useState(false);
+  const [isSavingBusiness, setIsSavingBusiness] = useState(false);
+  const [isBrandingDraftDirty, setIsBrandingDraftDirty] = useState(false);
+  const businessSavePendingRef = useRef(false);
   const apportionUpdatePendingRef = useRef(false);
   const participantAnswersRef = useRef<Record<string, number | undefined>>({});
   const participantIsSubmittingRef = useRef(false);
@@ -1983,6 +1988,7 @@ export function AdminQuestionWorkspace({
 
   function markBrandingDraftDirty() {
     isBrandingDraftDirtyRef.current = true;
+    setIsBrandingDraftDirty(true);
   }
 
   async function loadWorkspace(options?: { silent?: boolean }) {
@@ -2370,11 +2376,9 @@ export function AdminQuestionWorkspace({
     }
   }
 
-  async function handleCancelApportionAppointment(appointmentId: string) {
-    if (apportionUpdatePendingRef.current) return;
-    if (!window.confirm("Cancel this appointment? It will stay visible in the appointment log.")) {
-      return;
-    }
+  async function handleCancelApportionAppointment(appointmentId: string, reason?: string) {
+    if (apportionUpdatePendingRef.current) return "Another appointment update is in progress. Please retry.";
+    if (!reason?.trim()) return "A cancellation reason is required.";
 
     apportionUpdatePendingRef.current = true;
     setIsApportionUpdating(true);
@@ -2383,7 +2387,7 @@ export function AdminQuestionWorkspace({
     try {
       const payload = await readJson<ApportionDashboardResponse>(
         await fetch("/api/user/apportion", {
-          body: JSON.stringify({ appointmentId }),
+          body: JSON.stringify({ appointmentId, reason }),
           headers: { "Content-Type": "application/json" },
           method: "DELETE",
         }),
@@ -4088,6 +4092,36 @@ export function AdminQuestionWorkspace({
   }
 
   async function handleSaveBranding() {
+    if (businessSavePendingRef.current) return;
+    if (ownerDelegated) {
+      if (!workspaceBranding) {
+        setBrandingFeedback("Load the saved business details before saving changes.");
+        return;
+      }
+      if (!brandingInstituteName.trim() || !brandingAddress.trim()
+        || (businessSecondLocation.enabled && !businessSecondLocation.address.trim())) {
+        setBrandingFeedback("Complete the business name and addresses.");
+        return;
+      }
+      await persistDelegatedBusinessDetails({
+        ...workspaceBranding,
+        instituteName: brandingInstituteName,
+        address: brandingAddress,
+        appointmentLocations: [
+          ...(workspaceBranding.appointmentLocations ?? []).map((location, index) => ({
+            ...location,
+            address: index === 0 ? brandingAddress : businessSecondLocation.address,
+          })),
+          ...(businessSecondLocation.enabled && workspaceBranding.appointmentLocations?.length === 1 ? [{
+            ...workspaceBranding.appointmentLocations[0],
+            id: workspaceBranding.appointmentLocations[0].id === "location-2" ? "location-1" : "location-2",
+            name: businessSecondLocation.name,
+            address: businessSecondLocation.address,
+          }] : []),
+        ],
+      });
+      return;
+    }
     const appointmentsPerSlot = businessAppointmentsPerSlot.trim() ? Number(businessAppointmentsPerSlot) : null;
     const advanceBookingWeeks = 4;
     const slotDurationMinutes = businessSlotDurationMinutes.trim() ? Number(businessSlotDurationMinutes) : null;
@@ -4129,7 +4163,7 @@ export function AdminQuestionWorkspace({
         {
           address: brandingAddress,
           dailyHours: businessDailyHours,
-          id: "location-1",
+          id: workspaceBranding?.appointmentLocations?.[0]?.id ?? "location-1",
           name: businessLocationName,
           workingDays: businessWorkingDays,
           workingHours: businessWorkingHours,
@@ -4138,7 +4172,7 @@ export function AdminQuestionWorkspace({
         ...(businessSecondLocation.enabled ? [{
           address: businessSecondLocation.address,
           dailyHours: businessSecondLocation.dailyHours,
-          id: "location-2",
+          id: workspaceBranding?.appointmentLocations?.[1]?.id ?? (workspaceBranding?.appointmentLocations?.[0]?.id === "location-2" ? "location-1" : "location-2"),
           name: businessSecondLocation.name,
           workingDays: businessSecondLocation.workingDays,
           workingHours: businessSecondLocation.workingHours,
@@ -4164,12 +4198,14 @@ export function AdminQuestionWorkspace({
       workingHours: businessWorkingHours,
     });
 
+    businessSavePendingRef.current = true;
+    setIsSavingBusiness(true);
     try {
       const payload = await readJson<BrandingResponse>(
         await fetch("/api/admin/branding", {
           body: JSON.stringify({
             branding: nextBranding,
-            updateProviderSettings: Boolean(workspaceBranding && (
+            updateProviderSettings: Boolean(!ownerDelegated && workspaceBranding && (
               appointmentsPerSlot !== workspaceBranding.appointmentsPerSlot
               || slotDurationMinutes !== workspaceBranding.slotDurationMinutes
               || businessBookingBehaviorMode !== getBookingBehaviorMode(workspaceBranding)
@@ -4186,10 +4222,64 @@ export function AdminQuestionWorkspace({
       setBusinessAppointmentShareCode(payload.branding?.appointmentShareCode ?? businessAppointmentShareCode);
       setBusinessPanelRevision((current) => current + 1);
       isBrandingDraftDirtyRef.current = false;
+      setIsBrandingDraftDirty(false);
       syncBrandingDraft(payload.branding);
       setBrandingFeedback(payload.branding ? "Business details saved." : "Business details cleared.");
     } catch (error) {
       setBrandingFeedback(error instanceof Error ? error.message : "Unable to save business details.");
+    } finally {
+      businessSavePendingRef.current = false;
+      setIsSavingBusiness(false);
+    }
+  }
+
+  async function persistDelegatedBusinessDetails(branding: WorkspaceBranding) {
+    if (businessSavePendingRef.current) return;
+    businessSavePendingRef.current = true;
+    setIsSavingBusiness(true);
+    try {
+      await readJson(await fetch("/api/user/apportion/business", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operation: "business-branding", branding }),
+      }));
+      await refreshBusinessForm();
+      setBrandingFeedback("Business details saved.");
+    } catch (error) {
+      setBrandingFeedback(error instanceof Error ? error.message : "Unable to save business details.");
+    } finally {
+      businessSavePendingRef.current = false;
+      setIsSavingBusiness(false);
+    }
+  }
+
+  async function refreshBusinessForm() {
+    const payload = await readJson<BrandingResponse>(await fetch("/api/admin/branding"));
+    setWorkspaceBranding(payload.branding);
+    setBusinessAppointmentShareCode(payload.branding?.appointmentShareCode ?? null);
+    syncBrandingDraft(payload.branding);
+    isBrandingDraftDirtyRef.current = false;
+    setIsBrandingDraftDirty(false);
+    setBusinessPanelRevision((current) => current + 1);
+  }
+
+  async function handleRemoveBusinessAddress(locationId: string) {
+    if (businessSavePendingRef.current || !window.confirm("Remove this address? Existing appointments and their history will be preserved. Future bookings at this address will be blocked. Removing the final address deactivates the business.")) return;
+    businessSavePendingRef.current = true;
+    setIsSavingBusiness(true);
+    try {
+      await readJson(await fetch("/api/user/apportion/business", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operation: "remove-address", locationId }),
+      }));
+      await refreshBusinessForm();
+      setBrandingFeedback("Address removed.");
+    } catch (error) {
+      setBrandingFeedback(error instanceof Error ? error.message : "Unable to remove address.");
+    } finally {
+      businessSavePendingRef.current = false;
+      setIsSavingBusiness(false);
     }
   }
 
@@ -4284,37 +4374,9 @@ export function AdminQuestionWorkspace({
   }
 
   async function handleClearBranding() {
-    isBrandingDraftDirtyRef.current = false;
-    setBrandingAddress("");
-    setBrandingInstituteName("");
-    setBrandingImageDataUrl(null);
-    setBrandingProfileImageDataUrl(null);
-    setBrandingPromotionalImageDataUrls([]);
-    setBusinessAdvanceBookingWeeks("4");
-    setBusinessAppointmentsPerSlot("1");
-    setBusinessAppointmentNotesPrompt(DEFAULT_APPOINTMENT_NOTES_PROMPT);
-    setBusinessBookingBehaviorMode("queue");
-    setBusinessRecurringBookingLimit("6");
-    setBusinessSlotDurationMinutes("10");
-    setBusinessWorkingDays("");
-    setBusinessWorkingHours("");
-    setBusinessWorkingHoursSecondWindow("");
-    setBusinessDailyHours(resolveApportionDailySchedule({}));
-    setBusinessCustomizedWeekdays([]);
-    setBusinessSecondLocation({
-      address: "",
-      dailyHours: resolveApportionDailySchedule({}),
-      customizedWeekdays: [],
-      enabled: false,
-      name: "Location 2",
-      workingDays: "",
-      workingHours: "",
-      workingHoursSecondWindow: "",
-    });
-    setBusinessDateOverrides({ closedDateKeys: [], openedDateKeys: [] });
-    setBusinessDateHoursOverrides([]);
-    setBusinessWeeklyHoursOverrides([]);
-
+    if (businessSavePendingRef.current || !window.confirm("Deactivate this business and clear the form? Existing appointments and their history will be preserved. Future bookings and reschedules will be blocked until the business is configured again.")) return;
+    businessSavePendingRef.current = true;
+    setIsSavingBusiness(true);
     try {
       const payload = await readJson<BrandingResponse>(
         await fetch("/api/admin/branding", {
@@ -4327,11 +4389,17 @@ export function AdminQuestionWorkspace({
       );
 
       setWorkspaceBranding(payload.branding);
+      setBusinessAppointmentShareCode(payload.branding?.appointmentShareCode ?? null);
+      isBrandingDraftDirtyRef.current = false;
+      setIsBrandingDraftDirty(false);
       syncBrandingDraft(payload.branding);
       setBrandingFeedback("Business details cleared.");
       setBusinessPanelRevision((current) => current + 1);
     } catch (error) {
       setBrandingFeedback(error instanceof Error ? error.message : "Unable to clear business details.");
+    } finally {
+      businessSavePendingRef.current = false;
+      setIsSavingBusiness(false);
     }
   }
 
@@ -5197,7 +5265,7 @@ export function AdminQuestionWorkspace({
     <div className="business-details-panel">
       <div className="business-details-form">
       <section className="business-form-section">
-        <h3>Address &amp; Operating Hours</h3>
+        <h3>{ownerDelegated ? "Name & Address" : "Address & Operating Hours"}</h3>
       <div className="field business-field-card">
         <label htmlFor="branding-institute-name">Business name</label>
         <input
@@ -5211,7 +5279,10 @@ export function AdminQuestionWorkspace({
         />
       </div>
       <div className="field business-field-card">
-        <span className="field-label">Address 1</span>
+        <div className="business-location-card-head">
+          <span className="field-label">Address 1</span>
+          {workspaceBranding?.appointmentLocations?.[0] ? <button aria-label="Remove Address 1" className="button-secondary icon-button business-location-remove" disabled={isSavingBusiness} title="Remove Address 1" type="button" onClick={() => void handleRemoveBusinessAddress(workspaceBranding.appointmentLocations![0].id)}><X aria-hidden="true" size={18} /></button> : null}
+        </div>
         <label htmlFor="branding-address">Address</label>
         <textarea
           id="branding-address"
@@ -5223,7 +5294,7 @@ export function AdminQuestionWorkspace({
             setBrandingAddress(event.target.value);
           }}
         />
-        <span className="field-label">Operating hours by day</span>
+        {!ownerDelegated ? <><span className="field-label">Operating hours by day</span>
         <BusinessWeeklyHoursEditor
           blockedWeeklyIntervals={personalConsultationLocationIds.includes("location-1") && personalConsultationLocationIds.includes("location-2") && businessSecondLocation.enabled
             ? getApportionWeeklyIntervals({ dailyHours: businessSecondLocation.dailyHours })
@@ -5233,7 +5304,7 @@ export function AdminQuestionWorkspace({
           onDayToggle={(weekday) => handleToggleBusinessDay(BUSINESS_WEEKDAY_KEYS_BY_JS_DAY[weekday])}
           onHoursChange={handlePrimaryDailyHoursChange}
           workingDays={businessWorkingDays}
-        />
+        /></> : null}
       </div>
       {businessSecondLocation.enabled ? (
         <div className="field business-field-card">
@@ -5244,19 +5315,8 @@ export function AdminQuestionWorkspace({
               className="button-secondary icon-button business-location-remove"
               title="Remove Address 2"
               type="button"
-              onClick={() => {
-                markBrandingDraftDirty();
-                setBusinessSecondLocation({
-                  address: "",
-                  enabled: false,
-                  dailyHours: resolveApportionDailySchedule({}),
-                  customizedWeekdays: [],
-                  name: "Location 2",
-                  workingDays: "",
-                  workingHours: "",
-                  workingHoursSecondWindow: "",
-                });
-              }}
+              disabled={isSavingBusiness}
+              onClick={() => void handleRemoveBusinessAddress(workspaceBranding?.appointmentLocations?.[1]?.id ?? "location-2")}
             >
               <X aria-hidden="true" size={18} />
             </button>
@@ -5272,7 +5332,7 @@ export function AdminQuestionWorkspace({
               setBusinessSecondLocation((current) => ({ ...current, address: event.target.value }));
             }}
           />
-          <span className="field-label">Operating hours by day</span>
+          {!ownerDelegated ? <><span className="field-label">Operating hours by day</span>
           <BusinessWeeklyHoursEditor
             blockedWeeklyIntervals={personalConsultationLocationIds.includes("location-1") && personalConsultationLocationIds.includes("location-2")
               ? getApportionWeeklyIntervals({ dailyHours: businessDailyHours })
@@ -5282,7 +5342,7 @@ export function AdminQuestionWorkspace({
             onDayToggle={(weekday) => handleToggleSecondLocationDay(BUSINESS_WEEKDAY_KEYS_BY_JS_DAY[weekday])}
             onHoursChange={handleSecondLocationDailyHoursChange}
             workingDays={businessSecondLocation.workingDays}
-          />
+          /></> : null}
         </div>
       ) : (
         <div className="field business-field-card">
@@ -5500,12 +5560,13 @@ export function AdminQuestionWorkspace({
   const businessPanelFooter = (
       <footer className="business-form-footer">
         {brandingFeedback ? <p className="muted-text">{brandingFeedback}</p> : null}
-        <button className="button" disabled={isMutating} type="button" onClick={() => void handleSaveBranding()}>
-          Save business
+        {isBrandingDraftDirty ? <p className="muted-text">Changes apply to new bookings and reschedules. Existing appointments remain unchanged</p> : null}
+        <button aria-busy={isSavingBusiness} className="button" disabled={isMutating || isSavingBusiness} type="button" onClick={() => void handleSaveBranding()}>
+          {isSavingBusiness ? <><LoaderCircle aria-hidden="true" className="apportion-spinner" size={18} /> Processing...</> : "Save Business"}
         </button>
         <button
           className="button-secondary"
-          disabled={isMutating || (!brandingInstituteName.trim() && !brandingAddress.trim() && !brandingImageDataUrl && !brandingProfileImageDataUrl && !brandingPromotionalImageDataUrls.length && !businessWorkingDays.trim() && !businessWorkingHours.trim() && businessAppointmentsPerSlot === "1" && !businessSlotDurationMinutes.trim() && businessAppointmentNotesPrompt.trim() === DEFAULT_APPOINTMENT_NOTES_PROMPT && businessBookingBehaviorMode === "none")}
+          disabled={isMutating || isSavingBusiness}
           type="button"
           onClick={() => void handleClearBranding()}
         >
@@ -5797,8 +5858,8 @@ export function AdminQuestionWorkspace({
 
   return (
     <div className="workspace-stack">
-      {currentActorRole === "user" || isSuperAdmin ? (
-        <BrowserPushPrompt publicKey={process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY ?? null} />
+      {pathname === "/user" ? (
+        <BrowserPushPrompt mode="automatic" publicKey={process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY ?? null} />
       ) : null}
 
       <div className="workspace-toolbar">
@@ -5824,7 +5885,6 @@ export function AdminQuestionWorkspace({
           </div>
         </div>
 
-        <NotificationBell items={[]} title="Appointments" subtitle="" />
         <div className="workspace-overflow" ref={toolbarMenuRef}>
           <button
             aria-expanded={isOverflowMenuOpen}
@@ -5966,11 +6026,12 @@ export function AdminQuestionWorkspace({
                       canCreateBusiness={getApportionServiceLimit(currentUserCategory ?? "trapit-normal") > 0}
                       onPersonalConsultationLocationsChange={setPersonalConsultationLocationIds}
                       onPersonalAddressLimitChange={setPersonalAddressLimit}
+                      onOwnerDelegationChange={setOwnerDelegated}
                       onProviderSettingsSaved={(settings) => {
                         setBusinessAppointmentsPerSlot(String(settings.appointmentsPerSlot));
                         setBusinessSlotDurationMinutes(String(settings.slotDurationMinutes));
                         setBusinessBookingBehaviorMode(settings.justAddToList ? "queue" : "standard");
-                        setWorkspaceBranding((branding) => branding ? {
+                        if (!ownerDelegated) setWorkspaceBranding((branding) => branding ? {
                           ...branding,
                           ...settings,
                           showRemainingBookings: !settings.justAddToList,

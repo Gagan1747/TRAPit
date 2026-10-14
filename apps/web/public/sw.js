@@ -1,3 +1,11 @@
+self.addEventListener("install", (event) => {
+  event.waitUntil(self.skipWaiting());
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(clients.claim());
+});
+
 function safeNotificationUrl(value) {
   try {
     if (typeof value !== "string" || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) return `${self.location.origin}/user`;

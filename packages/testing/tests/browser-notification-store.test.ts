@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 vi.mock("server-only", () => ({}));
 const directory = path.resolve(".browser-notification-test-data");
 let store: typeof import("../../../apps/web/lib/notification-store");
 const now = Date.parse("2026-10-08T10:00:00Z");
-const schedule = (id = "instance-1", minutes = 30) => ({
+const schedule = (id = "instance-1", minutes = 60) => ({
   kind: "poll" as const, id,
   startsAt: new Date(now + minutes * 60_000).toISOString(),
   endsAt: new Date(now + (minutes + 60) * 60_000).toISOString(),
@@ -34,14 +34,37 @@ describe("durable browser scheduling intents", () => {
     expect(await store.reconcileBrowserNotificationIntents([schedule(), next], now)).toEqual(pending);
     const persisted = JSON.parse(await readFile(path.join(directory, "notification-state.json"), "utf8"));
     expect(persisted.browserBaseline).toBe(true);
+    expect(persisted.browserVersion).toBe(2);
     expect(persisted.browserIntents).toHaveLength(5);
   });
-  it("starts at first worker tick at/after start, not in the 15-minute window, and never alerts after end", async () => {
+  it("dispatches 30-minute and 1-minute phases, with no at-start or after-end reminder", async () => {
     const item = schedule();
     await store.reconcileBrowserNotificationIntents([item], now);
-    expect((await store.reconcileBrowserNotificationIntents([item], now + 20 * 60_000)).map((entry) => entry.phase)).toEqual(["15min"]);
-    expect((await store.reconcileBrowserNotificationIntents([item], now + 31 * 60_000)).map((entry) => entry.phase)).toEqual(["start"]);
+    expect(await store.reconcileBrowserNotificationIntents([item], now + 29 * 60_000)).toEqual([]);
+    expect((await store.reconcileBrowserNotificationIntents([item], now + 30 * 60_000)).map((entry) => entry.phase)).toEqual(["30min"]);
+    expect((await store.reconcileBrowserNotificationIntents([item], now + 59 * 60_000)).map((entry) => entry.phase)).toEqual(["30min", "1min"]);
+    expect(await store.reconcileBrowserNotificationIntents([item], Date.parse(item.startsAt))).toEqual([]);
     expect(await store.reconcileBrowserNotificationIntents([item], Date.parse(item.endsAt))).toEqual([]);
+  });
+  it.each([20, 0.5])("skips reminder phases preceding new creation/share %s minutes before start", async (minutes) => {
+    await store.reconcileBrowserNotificationIntents([], now);
+    const item = schedule("late", minutes);
+    expect((await store.reconcileBrowserNotificationIntents([item], now)).map((entry) => entry.phase)).toEqual(["confirmed"]);
+    const persisted = JSON.parse(await readFile(path.join(directory, "notification-state.json"), "utf8"));
+    expect(persisted.browserIntents.map((entry: { phase: string }) => entry.phase)).toEqual(minutes === 20 ? ["confirmed", "1min"] : ["confirmed"]);
+  });
+  it("migrates legacy pending phases without confirmations or past-due replacement replays", async () => {
+    const item = schedule("legacy", 20);
+    await writeFile(path.join(directory, "notification-state.json"), JSON.stringify({
+      browserBaseline: true, browserObserved: [],
+      browserIntents: ["confirmed", "15min", "start"].map((phase) => ({
+        phase, key: `old:${phase}`, instanceKey: store.browserScheduleInstanceKey(item), recipientIdentifier: "user@example.com", kind: "poll", entityId: item.id,
+      })),
+    }));
+    expect(await store.reconcileBrowserNotificationIntents([item], now)).toEqual([]);
+    const persisted = JSON.parse(await readFile(path.join(directory, "notification-state.json"), "utf8"));
+    expect(persisted.browserIntents.map((entry: { phase: string }) => entry.phase)).toEqual(["1min"]);
+    expect((await store.reconcileBrowserNotificationIntents([item], now + 19 * 60_000)).map((entry) => entry.phase)).toEqual(["1min"]);
   });
   it("uses separate instance/start keys and discards obsolete reschedule and removed recipient intents", async () => {
     await store.reconcileBrowserNotificationIntents([], now);

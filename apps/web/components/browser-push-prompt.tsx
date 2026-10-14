@@ -7,6 +7,7 @@ const PROMPT_TRIGGER_COUNT_KEY = "trapit.browserPushPrompt.triggerCount";
 const PROMPT_TRIGGER_EVENT = "trapit:notification-prompt-opportunity";
 const DISMISS_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 let registrationQueue: Promise<void> = Promise.resolve();
+const BLOCKED_MESSAGE = "Notifications are blocked. Allow notifications in your browser's site settings, then return here and retry.";
 
 type BrowserPushPromptProps = {
   mode?: "automatic" | "triggered";
@@ -43,9 +44,12 @@ function isBrowserPushSupported() {
 }
 
 function isPromptDismissed() {
-  const dismissedUntil = Number(window.localStorage.getItem(DISMISS_UNTIL_KEY) ?? "0");
-
-  return Number.isFinite(dismissedUntil) && dismissedUntil > Date.now();
+  try {
+    const dismissedUntil = Number(window.localStorage.getItem(DISMISS_UNTIL_KEY) ?? "0");
+    return Number.isFinite(dismissedUntil) && dismissedUntil > Date.now();
+  } catch {
+    return false;
+  }
 }
 
 export function registerBrowserPush(publicKey: string) {
@@ -58,7 +62,27 @@ export function registerBrowserPush(publicKey: string) {
 }
 
 async function registerBrowserPushUnqueued(publicKey: string) {
-  const registration = await navigator.serviceWorker.register("/sw.js");
+  if (Notification.permission === "denied") throw new Error(BLOCKED_MESSAGE);
+  if (Notification.permission !== "granted") throw new Error("Accept browser notifications before enabling alerts.");
+  let registration: ServiceWorkerRegistration;
+  try {
+    registration = await navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" });
+    if (!registration.active) {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        registration = await Promise.race([
+          navigator.serviceWorker.ready,
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(() => reject(new Error("The notification service worker did not become ready. Reload this dashboard and retry.")), 15_000);
+          }),
+        ]);
+      } finally {
+        if (timeout) clearTimeout(timeout);
+      }
+    }
+  } catch (error) {
+    throw new Error(`Unable to start browser notifications. ${error instanceof Error ? error.message : "Reload this dashboard and retry."}`);
+  }
   const existingSubscription = await registration.pushManager.getSubscription();
   const subscription = existingSubscription ?? await registration.pushManager.subscribe({
     applicationServerKey: urlBase64ToUint8Array(publicKey),
@@ -89,6 +113,11 @@ export function BrowserPushPrompt({ mode = "triggered", publicKey }: BrowserPush
 
   useEffect(() => {
     if (!publicKey || !isBrowserPushSupported()) {
+      return;
+    }
+
+    if (Notification.permission === "denied") {
+      setFeedback(BLOCKED_MESSAGE);
       return;
     }
 
@@ -132,9 +161,14 @@ export function BrowserPushPrompt({ mode = "triggered", publicKey }: BrowserPush
         return;
       }
 
-      const currentCount = Number(window.localStorage.getItem(PROMPT_TRIGGER_COUNT_KEY) ?? "0");
+      let currentCount = 0;
+      try {
+        currentCount = Number(window.localStorage.getItem(PROMPT_TRIGGER_COUNT_KEY) ?? "0");
+      } catch { /* Storage may be disabled in private browsing. */ }
       const nextCount = Number.isFinite(currentCount) ? currentCount + 1 : 1;
-      window.localStorage.setItem(PROMPT_TRIGGER_COUNT_KEY, String(nextCount));
+      try {
+        window.localStorage.setItem(PROMPT_TRIGGER_COUNT_KEY, String(nextCount));
+      } catch { /* Notification consent must not depend on local storage. */ }
 
       if (nextCount % 3 === 1) {
         setIsVisible(true);
@@ -160,7 +194,7 @@ export function BrowserPushPrompt({ mode = "triggered", publicKey }: BrowserPush
       setIsVisible(false);
 
       if (permission !== "granted") {
-        if (permission === "denied") setFeedback("Notifications are blocked. Allow notifications in your browser's site settings, then use Enable browser alerts in the notification menu.");
+        if (permission === "denied") setFeedback(BLOCKED_MESSAGE);
         return;
       }
 
@@ -168,14 +202,16 @@ export function BrowserPushPrompt({ mode = "triggered", publicKey }: BrowserPush
       setIsVisible(false);
     } catch (error) {
       setIsVisible(false);
-      setFeedback(error instanceof Error ? error.message : "Unable to enable browser reminders. Retry from the notification menu.");
+      setFeedback(error instanceof Error ? error.message : "Unable to enable browser reminders. Retry here on this dashboard.");
     } finally {
       setIsRegistering(false);
     }
   }
 
   function handleDismiss() {
-    window.localStorage.setItem(DISMISS_UNTIL_KEY, String(Date.now() + DISMISS_DURATION_MS));
+    try {
+      window.localStorage.setItem(DISMISS_UNTIL_KEY, String(Date.now() + DISMISS_DURATION_MS));
+    } catch { /* Dismiss for this visit when storage is unavailable. */ }
     setIsVisible(false);
     setFeedback(null);
   }
@@ -188,7 +224,7 @@ export function BrowserPushPrompt({ mode = "triggered", publicKey }: BrowserPush
     <div className="browser-push-prompt panel">
       <div>
         <p className="browser-push-prompt-title">Enable Notifications</p>
-        <p className="browser-push-prompt-copy">Receive alerts for new tests, polls, appointments, group requests, and reminders</p>
+        <p className="browser-push-prompt-copy">Receive alerts for invited tests and polls, your customer appointments, and reminders 30 minutes and 1 minute before they start.</p>
         {feedback ? <p className="form-feedback">{feedback}</p> : null}
       </div>
       {isVisible ? (
@@ -200,7 +236,14 @@ export function BrowserPushPrompt({ mode = "triggered", publicKey }: BrowserPush
             Decline
           </button>
         </div>
-      ) : <button className="browser-push-later-button" type="button" onClick={() => setFeedback(null)}>Dismiss message</button>}
+      ) : (
+        <div className="browser-push-prompt-actions">
+          <button className="browser-push-allow-button" disabled={isRegistering} type="button" onClick={() => void handleEnable()}>
+            {isRegistering ? "Enabling..." : "Retry"}
+          </button>
+          <button className="browser-push-later-button" type="button" onClick={() => setFeedback(null)}>Dismiss message</button>
+        </div>
+      )}
     </div>
   );
 }

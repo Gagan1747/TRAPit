@@ -1,4 +1,4 @@
-import { resolveApportionDailySchedule, type AppointmentLocation, type WorkspaceBranding } from "@trapit/testing";
+import { resolveApportionDailySchedule, resolveApportionLocationForDate, type AppointmentLocation, type WorkspaceBranding } from "@trapit/testing";
 
 const MINUTES_PER_DAY = 24 * 60;
 const MINUTES_PER_WEEK = 7 * MINUTES_PER_DAY;
@@ -49,50 +49,13 @@ function selectedWeekdays(value: string) {
   return WEEKDAYS.flatMap((day, index) => normalized.includes(day.toLowerCase()) || normalized.includes(day.slice(0, 3).toLowerCase()) ? [index] : []);
 }
 
-function weekdayForDateKey(serviceDateKey: string) {
-  const match = serviceDateKey.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-
-  if (!match) {
-    return null;
-  }
-
-  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
-  return Number.isNaN(date.getTime()) ? null : date.getUTCDay();
-}
-
 export function resolveAppointmentLocationSchedule(
   branding: WorkspaceBranding,
   locationId: string,
   serviceDateKey: string,
 ) {
   const location = branding.appointmentLocations?.find((entry) => entry.id === locationId);
-  const weekday = weekdayForDateKey(serviceDateKey);
-
-  if (!location || weekday === null || branding.appointmentDateOverrides?.closedDateKeys.includes(serviceDateKey)) {
-    return null;
-  }
-
-  const dateOverride = branding.appointmentDateHoursOverrides?.find((entry) => entry.dateKey === serviceDateKey);
-  if (dateOverride) {
-    const hours = dateOverride.locations.find((entry) => entry.locationId === locationId);
-    return hours ? { ...location, ...hours, dailyHours: undefined, workingDays: WEEKDAYS[weekday] } : null;
-  }
-
-  const weeklyOverride = branding.appointmentWeeklyHoursOverrides?.find((entry) => entry.weekday === weekday);
-  if (weeklyOverride) {
-    const hours = weeklyOverride.locations.find((entry) => entry.locationId === locationId);
-    return hours ? { ...location, ...hours, dailyHours: undefined, workingDays: WEEKDAYS[weekday] } : null;
-  }
-
-  if (location.dailyHours) {
-    const hours = resolveApportionDailySchedule({ dailyHours: location.dailyHours })[weekday];
-    return hours.workingHours || hours.workingHoursSecondWindow
-      ? { ...location, ...hours, dailyHours: undefined, workingDays: WEEKDAYS[weekday] }
-      : null;
-  }
-
-  const isLegacyOpenedDate = branding.appointmentDateOverrides?.openedDateKeys.includes(serviceDateKey) ?? false;
-  return isLegacyOpenedDate || selectedWeekdays(location.workingDays).includes(weekday) ? location : null;
+  return location ? resolveApportionLocationForDate(location, serviceDateKey, branding.appointmentDateOverrides?.closedDateKeys) : null;
 }
 
 function splitAcrossWeek(start: number, end: number): WeeklyInterval[] {

@@ -12,11 +12,12 @@ beforeEach(() => {
   getSubscription.mockResolvedValue(subscription);
   subscribe.mockResolvedValue(subscription);
   post.mockResolvedValue(new Response("{}", { status: 200 }));
-  vi.stubGlobal("navigator", { serviceWorker: { register: vi.fn(async () => ({ pushManager: { getSubscription, subscribe } })) } });
+  vi.stubGlobal("navigator", { serviceWorker: { register: vi.fn(async () => ({ active: {}, pushManager: { getSubscription, subscribe } })) } });
+  vi.stubGlobal("Notification", { permission: "granted" });
   vi.stubGlobal("window", { atob });
   vi.stubGlobal("fetch", post);
 });
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("browser notification subscription binding", () => {
   it("reuses the device subscription but posts each requested session binding", async () => {
@@ -30,6 +31,46 @@ describe("browser notification subscription binding", () => {
     getSubscription.mockResolvedValueOnce(null);
     await registerBrowserPush("dGVzdA");
     expect(subscribe).toHaveBeenCalledWith(expect.objectContaining({ userVisibleOnly: true, applicationServerKey: new Uint8Array([116, 101, 115, 116]) }));
+  });
+  it("gives denied permission instructions without invoking the browser subscription prompt", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("Notification", { permission: "denied" });
+    await expect(registerBrowserPush("dGVzdA")).rejects.toThrow("browser's site settings");
+    expect(navigator.serviceWorker.register).not.toHaveBeenCalled();
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+  it("waits for an active service worker before subscribing", async () => {
+    let ready!: (value: unknown) => void;
+    const pendingRegistration = { active: null, pushManager: { getSubscription, subscribe } };
+    vi.stubGlobal("navigator", { serviceWorker: {
+      register: vi.fn(async () => pendingRegistration),
+      ready: new Promise((resolve) => { ready = resolve; }),
+    } });
+    const operation = registerBrowserPush("dGVzdA");
+    await vi.waitFor(() => expect(navigator.serviceWorker.register).toHaveBeenCalledWith("/sw.js", { scope: "/", updateViaCache: "none" }));
+    expect(getSubscription).not.toHaveBeenCalled();
+    ready({ ...pendingRegistration, active: {} });
+    await operation;
+    expect(post).toHaveBeenCalledOnce();
+  });
+  it("surfaces registration failures with actionable feedback", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(navigator.serviceWorker.register).mockRejectedValueOnce(new Error("Worker script unavailable"));
+    await expect(registerBrowserPush("dGVzdA")).rejects.toThrow("Unable to start browser notifications. Worker script unavailable");
+    expect(post).not.toHaveBeenCalled();
+  });
+  it("times out an inactive worker with dashboard retry instructions", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("navigator", { serviceWorker: {
+      register: vi.fn(async () => ({ active: null })),
+      ready: new Promise(() => {}),
+    } });
+    const rejection = expect(registerBrowserPush("dGVzdA")).rejects.toThrow("Reload this dashboard and retry");
+    await vi.advanceTimersByTimeAsync(15_000);
+    await rejection;
+    expect(post).not.toHaveBeenCalled();
   });
   it("detaches failed account bindings and surfaces the server error", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});

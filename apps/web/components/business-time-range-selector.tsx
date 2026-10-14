@@ -182,7 +182,7 @@ export function BusinessTimeRangeSelector({ timelineOnly = false, disabled = fal
                 <button
                   aria-label={formatTimelineTime(minutes)}
                   aria-pressed={isSelected}
-                  className={`business-time-point${isHour ? " is-hour" : " is-half-hour"}${isBlocked ? " is-blocked" : ""}${isSelected ? " is-selected" : ""}${isNextDay ? " is-next-day" : ""}`}
+                  className={`business-time-point${isHour ? " is-hour" : " is-half-hour"}${isBlocked || isOutsideAllowed ? " is-blocked" : ""}${isSelected ? " is-selected" : ""}${isNextDay ? " is-next-day" : ""}`}
                   disabled={disabled || isBlocked || isOutOfSelection || isOutsideAllowed || (firstPoint === null && isNextDay)}
                   key={minutes}
                   type="button"

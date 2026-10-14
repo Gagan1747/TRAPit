@@ -15,11 +15,12 @@ export async function PATCH(request: Request) {
   try {
     const body: unknown = await request.json();
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new ApportionInvitationError("A valid invitation action is required.");
-    const { invitationId, action } = body as { invitationId?: unknown; action?: unknown };
+    const { invitationId, action, reason } = body as { invitationId?: unknown; action?: unknown; reason?: unknown };
     if (typeof invitationId !== "string" || !invitationId.trim() || (action !== "accept" && action !== "decline" && action !== "cancel")) {
       throw new ApportionInvitationError("A valid invitation ID and action are required.");
     }
-    const result = await respondToApportionInvitation({ actorIdentifier: actor.identifier, invitationId: invitationId.trim(), action });
+    if (action === "cancel" && (typeof reason !== "string" || !reason.trim())) throw new ApportionInvitationError("A cancellation reason is required.");
+    const result = await respondToApportionInvitation({ actorIdentifier: actor.identifier, invitationId: invitationId.trim(), action, reason: typeof reason === "string" ? reason : undefined });
     publishWorkspaceEvent("apportion");
     return NextResponse.json({ invitations: await listApportionInvitationsForActor(actor.identifier), appointmentIds: result.appointmentIds });
   } catch (error) {

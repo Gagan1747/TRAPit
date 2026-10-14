@@ -73,6 +73,15 @@ beforeEach(() => {
 });
 
 describe("Apportion API role and service contracts", () => {
+  it("rejects cancellation without a reason and forwards authored reasons using signed-in identity", async () => {
+    const request = (body: unknown) => new Request("https://trapit.in/api/user/apportion", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    expect((await dashboard.DELETE(request({ appointmentId: "appointment" }))).status).toBe(400);
+    expect((await dashboard.DELETE(request({ appointmentId: "appointment", reason: " " }))).status).toBe(400);
+    expect((await dashboard.DELETE(request({ appointmentId: "appointment", reason: "On leave", actorIdentifier: OWNER }))).status).toBe(200);
+    const storeApi = await import("../../../apps/web/lib/apportion-store");
+    expect(storeApi.cancelApportionAppointment).toHaveBeenCalledOnce();
+    expect(storeApi.cancelApportionAppointment).toHaveBeenCalledWith({ appointmentId: "appointment", actorIdentifier: STAFF, reason: "On leave" });
+  });
   it("resolves a Super Admin's own existing business QR share code without granting business creation", async () => {
     fixtures.actor = { identifier: OWNER, userCategory: "trapit-normal", isSuperAdmin: true };
     const payload = await (await dashboard.GET(new Request("https://trapit.in/api/user/apportion"))).json();
@@ -485,18 +494,18 @@ describe("Apportion targeted invitation API", () => {
   it("filters provider leave and closed dates before applying the six working-date cap", async () => {
     fixtures.context!.providerClosedDateKeys = { [STAFF]: ["2026-10-05"] };
     fixtures.context!.memberships[0].closedDateKeys = ["2026-10-12"];
-    const response = await post({ recurrence: { mode: "weekly", endDateKey: "2026-12-28", weekdayKeys: ["Mon", "Tue"] } });
+    const response = await post({ recurrence: { mode: "weekly", endDateKey: "2026-12-28", weekdayKeys: ["Mon"] } });
     expect(response.status).toBe(200);
     expect((await response.json()).appointmentCount).toBe(6);
     expect(fixtures.invite.mock.calls[0][0].occurrences).toEqual(["2026-10-19", "2026-10-26", "2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23"].map((serviceDateKey) => ({ serviceDateKey, startsAt: `${serviceDateKey}T04:30:00.000Z` })));
   });
-  it("omits working dates where the selected time does not fit effective master hours", async () => {
+  it("ignores obsolete custom hours when planning recurring appointments", async () => {
     fixtures.context!.business.services[1].assignedIdentifier = OWNER;
     fixtures.context!.providerSettings[OWNER].justAddToList = false;
     fixtures.context!.branding.appointmentDateHoursOverrides = [{ dateKey: "2026-10-12", locations: [{ locationId: "location-1", workingHours: "1:00 PM - 5:00 PM", workingHoursSecondWindow: "" }] }];
     const response = await post({ recurrence: { mode: "weekly", endDateKey: "2026-10-19", weekdayKeys: ["Mon"] } });
     expect(response.status).toBe(200);
-    expect(fixtures.invite.mock.calls[0][0].occurrences).toEqual(["2026-10-05", "2026-10-19"].map((serviceDateKey) => ({ serviceDateKey, startsAt: `${serviceDateKey}T04:30:00.000Z` })));
+    expect(fixtures.invite.mock.calls[0][0].occurrences).toEqual(["2026-10-05", "2026-10-12", "2026-10-19"].map((serviceDateKey) => ({ serviceDateKey, startsAt: `${serviceDateKey}T04:30:00.000Z` })));
   });
   it("supports monthly last-day deduplication and working-day filtering with at most six occurrences", async () => {
     fixtures.context!.branding.appointmentLocations![0].workingDays = "Sunday Monday Tuesday Wednesday Thursday Friday Saturday";

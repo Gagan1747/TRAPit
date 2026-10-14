@@ -56,6 +56,7 @@ export type ApportionPanelInput =
   | { operation: "set-hours"; ownerIdentifier: string; locationId: string; hours: Pick<ApportionAddressMembership, "closedDateKeys"> & Partial<Pick<ApportionAddressMembership, "workingDays" | "workingHours" | "workingHoursSecondWindow">> & { dailyHours?: AppointmentDailyHours[] } }
   | { operation: "set-leaves"; closedDateKeys: string[] }
   | { operation: "unlink-address"; ownerIdentifier: string; locationId: string }
+  | { operation: "remove-address"; ownerIdentifier?: string; locationId: string }
   | { operation: "business-branding"; ownerIdentifier?: string; branding: WorkspaceBranding | null; updateProviderSettings?: boolean };
 
 const matches = participantIdentifiersMatch;
@@ -72,9 +73,7 @@ function directory(state: TestingWorkspaceState) {
 function delegatedLocations(state: TestingWorkspaceState, provider: string) {
   return Object.values(directory(state).businesses).flatMap((business) => {
     if (!business.adminDelegateIdentifier || !matches(business.adminDelegateIdentifier, provider)) return [];
-    const key = identifierKey(state.workspaceBrandingByActor, business.ownerIdentifier);
-    return (key ? state.workspaceBrandingByActor[key].appointmentLocations ?? [] : [])
-      .map((location) => ({ ownerIdentifier: business.ownerIdentifier, locationId: location.id }));
+    return [1, 2].map((slot) => ({ ownerIdentifier: business.ownerIdentifier, locationId: `admin-reservation-${slot}` }));
   });
 }
 
@@ -88,13 +87,24 @@ function assertAddressCapacity(state: TestingWorkspaceState, provider: string, o
 }
 
 export async function reconcileApportionDelegationCapacity() {
-  if ((await readApportionWorkspaceState()).apportionDirectory?.delegationCapacityVersion === 1) return;
+  const snapshot = await readApportionWorkspaceState();
+  const current = snapshot.apportionDirectory;
+  if (current?.delegationCapacityVersion === 2 && current.scheduleRepairVersion === 1) return snapshot;
   await withSerializedTestingMutation(async (state) => {
     const values = directory(state);
-    if (values.delegationCapacityVersion === 1) return;
-    await backupApportionDelegationStore(state);
+    if (values.delegationCapacityVersion === 2 && values.scheduleRepairVersion === 1) return;
+    await backupApportionDelegationStore(state, 2);
+    if (values.scheduleRepairVersion !== 1) {
+      for (const branding of Object.values(state.workspaceBrandingByActor)) {
+        branding.appointmentDateHoursOverrides = [];
+        branding.appointmentWeeklyHoursOverrides = [];
+      }
+      values.scheduleRepairVersion = 1;
+    }
     const invalid = Object.values(values.businesses).filter((business) => {
       if (!business.adminDelegateIdentifier) return false;
+      if (Object.values(values.businesses).some((entry) => entry.services.some((service) =>
+        service.assignedIdentifier && matches(service.assignedIdentifier, business.adminDelegateIdentifier!)))) return true;
       try {
         assertAddressCapacity(state, business.adminDelegateIdentifier, business.ownerIdentifier, []);
         return false;
@@ -106,15 +116,35 @@ export async function reconcileApportionDelegationCapacity() {
     for (const business of invalid) {
       const delegate = business.adminDelegateIdentifier!;
       business.adminDelegateIdentifier = null;
+      values.memberships = values.memberships.filter((entry) => !(matches(entry.ownerIdentifier, business.ownerIdentifier)
+        && matches(entry.providerIdentifier, business.ownerIdentifier)));
       for (const recipientIdentifier of [business.ownerIdentifier, delegate]) {
         values.scheduleNotifications.push({
           id: createEntityId("apportion-schedule-notification"), recipientIdentifier, createdAt: new Date().toISOString(),
-          message: "Admin delegation was removed because personal, staff and delegated addresses exceed the two-address limit. The owner must appoint an Admin with available capacity. Existing appointments are unchanged.",
+          message: "Admin delegation was removed because it requires two free address slots and cannot coexist with a service assignment. Existing appointments are unchanged.",
         });
       }
     }
-    values.delegationCapacityVersion = 1;
+    for (const business of Object.values(values.businesses)) {
+      if (business.adminDelegateIdentifier) ensureOwnerMemberships(state, business);
+    }
+    values.delegationCapacityVersion = 2;
   });
+  return readApportionWorkspaceState();
+}
+
+function ensureOwnerMemberships(state: TestingWorkspaceState, business: ApportionBusiness, closedLocationIds: string[] = []) {
+  const key = identifierKey(state.workspaceBrandingByActor, business.ownerIdentifier);
+  for (const location of key ? state.workspaceBrandingByActor[key].appointmentLocations ?? [] : []) {
+    if (directory(state).memberships.some((entry) => matches(entry.ownerIdentifier, business.ownerIdentifier)
+      && matches(entry.providerIdentifier, business.ownerIdentifier) && entry.locationId === location.id)) continue;
+    const closed = closedLocationIds.includes(location.id);
+    directory(state).memberships.push({
+      ownerIdentifier: business.ownerIdentifier, providerIdentifier: business.ownerIdentifier, locationId: location.id,
+      dailyHours: resolveApportionDailySchedule(closed ? {} : location), workingDays: closed ? "" : location.workingDays,
+      workingHours: closed ? "" : location.workingHours, workingHoursSecondWindow: closed ? "" : location.workingHoursSecondWindow, closedDateKeys: [],
+    });
+  }
 }
 
 function actorIdentifier(actor: WorkspaceActor) {
@@ -127,6 +157,12 @@ async function registeredUsers(state: TestingWorkspaceState) {
   return isWebAuthConfigured()
     ? listRegisteredDirectoryUsers()
     : state.participants.map((participant) => ({ ...participant, sub: null }));
+}
+
+export async function resolveApportionProviderContact(identifier: string) {
+  const user = (await registeredUsers(await readApportionWorkspaceState()))
+    .find((entry) => matches(entry.identifier, identifier));
+  return { name: user?.label?.trim() || null, phone: user?.identifier?.trim() || identifier.trim() || null };
 }
 
 async function resolveRegisteredPhone(state: TestingWorkspaceState, input: string) {
@@ -185,16 +221,14 @@ function contextFromState(state: TestingWorkspaceState, identifier: string, owne
 }
 
 export async function getApportionBusinessContext(ownerIdentifier: string): Promise<ApportionBusinessContext | null> {
-  await reconcileApportionDelegationCapacity();
-  const state = await readApportionWorkspaceState();
+  const state = await reconcileApportionDelegationCapacity();
   const category = await resolveOwnerCategory(state, ownerIdentifier);
   return contextFromState(state, ownerIdentifier, category);
 }
 
 export async function getApportionBusinessContexts(ownerIdentifiers: string[]) {
   if (!ownerIdentifiers.length) return new Map<string, ApportionBusinessContext | null>();
-  await reconcileApportionDelegationCapacity();
-  const [state, categories] = await Promise.all([readApportionWorkspaceState(), listUserCategoryManagementState()]);
+  const [state, categories] = await Promise.all([reconcileApportionDelegationCapacity(), listUserCategoryManagementState()]);
   const entries = await Promise.all([...new Set(ownerIdentifiers)].map(async (owner) => [
     owner, contextFromState(state, owner, await resolveOwnerCategory(state, owner, undefined, categories)),
   ] as const));
@@ -202,7 +236,7 @@ export async function getApportionBusinessContexts(ownerIdentifiers: string[]) {
 }
 
 export async function listApportionDirectLinkServices(providerIdentifier: string) {
-  const state = await readApportionWorkspaceState();
+  const state = await reconcileApportionDelegationCapacity();
   const values = directory(state);
   const categories = await listUserCategoryManagementState();
   const directServices = await Promise.all(Object.values(values.businesses).map(async (business) => {
@@ -283,10 +317,13 @@ async function panelFromState(state: TestingWorkspaceState, actor: WorkspaceActo
 }
 
 export async function getApportionPanel(actor: WorkspaceActor) {
-  await reconcileApportionDelegationCapacity();
-  await reconcileApportionAddressOptOuts();
-  await reconcileApportionProviderLeaves();
-  return panelFromState(await readApportionWorkspaceState(), actor);
+  const state = await reconcileApportionDelegationCapacity();
+  if (state.apportionDirectory?.pendingAddressOptOuts?.length || state.apportionDirectory?.pendingProviderLeaves?.length) {
+    await reconcileApportionAddressOptOuts();
+    await reconcileApportionProviderLeaves();
+    return panelFromState(await readApportionWorkspaceState(), actor);
+  }
+  return panelFromState(state, actor);
 }
 
 export async function reconcileApportionAddressOptOuts() {
@@ -404,7 +441,7 @@ function overlaps(first: Interval, second: Interval) {
 }
 
 export function assertApportionHoursWithinMaster(hours: ApportionHours, master: AppointmentLocation) {
-  const allowed = weeklyIntervals(master).sort((first, second) => first.start - second.start);
+  const allowed = weeklyIntervals(master, true).sort((first, second) => first.start - second.start);
   const merged: Interval[] = [];
   for (const interval of allowed) {
     const previous = merged[merged.length - 1];
@@ -450,7 +487,8 @@ function assertProviderHours(state: TestingWorkspaceState, providerIdentifier: s
   const personal = personalKey ? (state.workspaceBrandingByActor[personalKey].appointmentLocations ?? [])
     .filter((location) => !consultation || consultation.active && consultation.locationIds.includes(location.id)) : [];
   const schedules = [
-    ...personal.map((location) => weeklyIntervals(location)),
+    ...personal.map((location) => weeklyIntervals(directory(state).memberships.find((entry) =>
+      matches(entry.ownerIdentifier, providerIdentifier) && matches(entry.providerIdentifier, providerIdentifier) && entry.locationId === location.id) ?? location, true)),
     ...directory(state).memberships.filter((membership) => matches(membership.providerIdentifier, providerIdentifier) && !matches(membership.ownerIdentifier, providerIdentifier)).map((membership) => weeklyIntervals(membership, true)),
   ];
   if (schedules.some((first, firstIndex) => schedules.some((second, secondIndex) => firstIndex < secondIndex && first.some((interval) => second.some((other) => overlaps(interval, other)))))) {
@@ -471,7 +509,8 @@ function saveSettings(state: TestingWorkspaceState, provider: string, settings: 
   const key = identifierKey(values.providerSettings, provider) ?? provider;
   values.providerSettings[key] = assertSettings(settings);
   const brandingKey = identifierKey(state.workspaceBrandingByActor, provider);
-  if (brandingKey) {
+  const businessKey = identifierKey(values.businesses, provider);
+  if (brandingKey && !values.businesses[businessKey ?? ""]?.adminDelegateIdentifier) {
     state.workspaceBrandingByActor[brandingKey] = { ...state.workspaceBrandingByActor[brandingKey], ...settings };
     if (updateBookingMode) {
       state.workspaceBrandingByActor[brandingKey].showRemainingBookings = !settings.justAddToList;
@@ -480,8 +519,22 @@ function saveSettings(state: TestingWorkspaceState, provider: string, settings: 
   }
 }
 
-function conflict(): never {
-  throw new ApportionDirectoryError("Address deletion is not supported while linked services exist. Edit the address or operating hours instead; existing appointments remain unchanged.");
+function removeBusinessLocations(state: TestingWorkspaceState, business: ApportionBusiness, locationIds: string[]) {
+  const values = directory(state);
+  for (const membership of values.memberships.filter((entry) => matches(entry.ownerIdentifier, business.ownerIdentifier)
+    && locationIds.includes(entry.locationId) && !matches(entry.providerIdentifier, business.ownerIdentifier))) {
+    values.pendingAddressOptOuts ??= [];
+    values.pendingAddressOptOuts.push({
+      id: createEntityId("apportion-opt-out"), ownerIdentifier: business.ownerIdentifier,
+      locationId: membership.locationId, providerIdentifier: membership.providerIdentifier, optedOutAt: new Date().toISOString(),
+    });
+  }
+  values.memberships = values.memberships.filter((entry) =>
+    !matches(entry.ownerIdentifier, business.ownerIdentifier) || !locationIds.includes(entry.locationId));
+  for (const service of business.services) {
+    service.locationIds = service.locationIds.filter((id) => !locationIds.includes(id));
+    if (!service.locationIds.length) service.active = false;
+  }
 }
 
 export async function prepareApportionBrandingMutation(state: TestingWorkspaceState, input: WorkspaceBranding | null, actorKey?: string | null, updateProviderSettings = false, verifiedActor?: WorkspaceActor) {
@@ -492,8 +545,28 @@ export async function prepareApportionBrandingMutation(state: TestingWorkspaceSt
   const businessKey = identifierKey(values.businesses, key);
   const business = businessKey ? values.businesses[businessKey] : undefined;
   if (!input) {
-    if (values.memberships.some((entry) => matches(entry.ownerIdentifier, key) || matches(entry.providerIdentifier, key)) || business?.services.some((service) => service.locationIds.length)) conflict();
+    if (business) {
+      removeBusinessLocations(state, business, existing?.appointmentLocations?.map((location) => location.id) ?? []);
+      business.active = false;
+      business.adminDelegateIdentifier = null;
+      business.services.forEach((service) => { service.active = false; service.assignedIdentifier = null; service.locationIds = []; });
+    }
+    delete values.providerSettings[key];
+    const closedKey = identifierKey(values.providerClosedDateKeys ?? {}, key);
+    if (closedKey) delete values.providerClosedDateKeys![closedKey];
     return null;
+  }
+  if (business?.adminDelegateIdentifier && (!verifiedActor?.identifier || matches(verifiedActor.identifier, key)) && existing) {
+    const businessFields = ["imageDataUrl", "profileImageDataUrl", "promotionalImageDataUrls", "appointmentDateOverrides",
+      "appointmentNotesPrompt", "appointmentsPerSlot", "justAddToList", "slotDurationMinutes", "showRemainingBookings",
+      "recurringBookingsEnabled", "recurringBookingLimit", "advanceBookingWeeks", "breakHours"] as const;
+    const scheduleChanged = input.appointmentLocations?.some((location) => {
+      const saved = existing.appointmentLocations?.find((entry) => entry.id === location.id) ?? existing.appointmentLocations?.[0];
+      return !saved || JSON.stringify(resolveApportionDailySchedule(location)) !== JSON.stringify(resolveApportionDailySchedule(saved));
+    });
+    if (scheduleChanged || businessFields.some((field) => JSON.stringify(input[field]) !== JSON.stringify(existing[field]))) {
+      throw new ApportionDirectoryError("Only the assigned Admin may edit business-wide settings during delegation. Use personal settings for your own service.", 403);
+    }
   }
   if (input.appointmentLocations && (!Array.isArray(input.appointmentLocations) || input.appointmentLocations.length > 2)) throw new ApportionDirectoryError("Configure no more than two business addresses.");
   if (input.promotionalImageDataUrls && (!Array.isArray(input.promotionalImageDataUrls) || input.promotionalImageDataUrls.length > 4 || input.promotionalImageDataUrls.some((image) => typeof image !== "string" || !image.startsWith("data:image/") || image.length > 2_800_000))) throw new ApportionDirectoryError("Upload no more than four valid promotional images up to 2 MB each.");
@@ -501,10 +574,16 @@ export async function prepareApportionBrandingMutation(state: TestingWorkspaceSt
     throw new ApportionDirectoryError("Logo and profile images must be valid images up to 2 MB each.");
   }
   const incomingSettings = assertSettings({ appointmentsPerSlot: input.appointmentsPerSlot!, justAddToList: input.justAddToList, slotDurationMinutes: input.slotDurationMinutes! });
-  const settings = existing && !updateProviderSettings ? ownSettings(state, key) : incomingSettings;
+  const adminEdit = Boolean(business?.adminDelegateIdentifier && verifiedActor?.identifier
+    && matches(verifiedActor.identifier, business.adminDelegateIdentifier));
+  const settings = adminEdit ? incomingSettings : existing && !updateProviderSettings
+    ? { appointmentsPerSlot: existing.appointmentsPerSlot ?? 1, justAddToList: existing.justAddToList, slotDurationMinutes: existing.slotDurationMinutes ?? 10 }
+    : incomingSettings;
   const branding = normalizeWorkspaceBranding(input);
   if (!branding?.instituteName.trim() || !branding.appointmentLocations?.length || branding.appointmentLocations.length > 2) throw new ApportionDirectoryError("A business name and one or two addresses are required.");
   Object.assign(branding, settings);
+  branding.appointmentDateHoursOverrides = [];
+  branding.appointmentWeeklyHoursOverrides = [];
   if (existing && !updateProviderSettings) {
     branding.showRemainingBookings = existing.showRemainingBookings;
     branding.recurringBookingsEnabled = existing.recurringBookingsEnabled;
@@ -513,14 +592,13 @@ export async function prepareApportionBrandingMutation(state: TestingWorkspaceSt
   if (!getApportionServiceLimit(category)) throw new ApportionDirectoryError("Pro or Pro Max is required to create or edit a business.", 403);
   const locations = branding.appointmentLocations;
   if (new Set(locations.map((location) => location.id.toLowerCase())).size !== locations.length || locations.some((location) => !location.id.trim() || !location.address.trim() || !location.name.trim())) throw new ApportionDirectoryError("Each address needs a unique ID, name, and address.");
-  locations.forEach((location) => weeklyIntervals(location));
+  locations.forEach((location) => weeklyIntervals(location, true));
   const retainedIds = new Set(locations.map((location) => location.id));
-  if (existing?.appointmentLocations?.some((location) => !retainedIds.has(location.id))) conflict();
+  if (business) removeBusinessLocations(state, business, existing?.appointmentLocations?.filter((location) => !retainedIds.has(location.id)).map((location) => location.id) ?? []);
   assertAddressCapacity(state, key, key, locations.map((location) => location.id), []);
-  if (business?.adminDelegateIdentifier) assertAddressCapacity(state, business.adminDelegateIdentifier, business.ownerIdentifier, locations.map((location) => location.id));
   for (const membership of values.memberships.filter((entry) => matches(entry.ownerIdentifier, key))) {
     const master = locations.find((location) => location.id === membership.locationId);
-    if (!master) conflict();
+    if (!master) throw new ApportionDirectoryError("Unknown linked business address.");
     const clippedDailyHours = preserveClippedOvernightWindows(clipApportionDailySchedule(membership, master!));
     const previousDailyHours = resolveApportionDailySchedule(membership);
     if (JSON.stringify(previousDailyHours) !== JSON.stringify(clippedDailyHours)) {
@@ -543,9 +621,14 @@ export async function prepareApportionBrandingMutation(state: TestingWorkspaceSt
   if (existing?.appointmentShareCode) branding.appointmentShareCode = existing.appointmentShareCode;
   state.workspaceBrandingByActor[key] = branding;
   const consultation = business?.services.find((service) => service.id === "consultation");
-  if (consultation) { consultation.locationIds = locations.map((location) => location.id); consultation.active = true; }
+  if (consultation) { consultation.locationIds = locations.map((location) => location.id); consultation.active = true; consultation.assignedIdentifier = key; }
+  if (business) {
+    business.active = true;
+    if (business.adminDelegateIdentifier) ensureOwnerMemberships(state, business,
+      locations.filter((location) => !existing?.appointmentLocations?.some((entry) => entry.id === location.id)).map((location) => location.id));
+  }
   assertProviderHours(state, key);
-  saveSettings(state, key, settings);
+  if (!business?.adminDelegateIdentifier) saveSettings(state, key, settings);
   for (const membership of values.memberships.filter((entry) => matches(entry.ownerIdentifier, key))) assertProviderHours(state, membership.providerIdentifier);
   state.apportionDirectory = migrateApportionDirectory(state.workspaceBrandingByActor, values);
   return { ...branding, ...settings };
@@ -579,10 +662,22 @@ export async function updateApportionPanel(actor: WorkspaceActor, input: Apporti
             !== JSON.stringify((saved.appointmentLocations ?? []).map(({ id, name, address }) => ({ id, name, address })))) {
           throw new ApportionDirectoryError("Only the business owner may change the business name or addresses.", 403);
         }
-        branding = { ...branding, ...ownSettings(state, owner) };
       }
       const prepared = await prepareApportionBrandingMutation(state, branding, key ?? owner, isOwner && input.updateProviderSettings === true, actor);
       mutateWorkspaceBrandingState(state, prepared, key ?? owner);
+    } else if (input.operation === "remove-address") {
+      if (!isOwner) throw new ApportionDirectoryError("Only the owner may remove a business address.", 403);
+      const brandingKey = identifierKey(state.workspaceBrandingByActor, owner);
+      const saved = brandingKey ? state.workspaceBrandingByActor[brandingKey] : undefined;
+      if (!business || !saved || typeof input.locationId !== "string" || !saved.appointmentLocations?.some((entry) => entry.id === input.locationId)) {
+        throw new ApportionDirectoryError("Unknown business address.");
+      }
+      const remaining = saved.appointmentLocations.filter((entry) => entry.id !== input.locationId);
+      const first = remaining[0];
+      const branding = first ? { ...saved, appointmentLocations: remaining, address: first.address,
+        workingDays: first.workingDays, workingHours: first.workingHours, workingHoursSecondWindow: first.workingHoursSecondWindow } : null;
+      const prepared = await prepareApportionBrandingMutation(state, branding, brandingKey, false, actor);
+      mutateWorkspaceBrandingState(state, prepared, brandingKey);
     } else if (input.operation === "set-leaves") {
       if (!Array.isArray(input.closedDateKeys) || input.closedDateKeys.some((date) => typeof date !== "string"
         || !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(new Date(`${date}T00:00:00Z`).getTime())
@@ -624,22 +719,32 @@ export async function updateApportionPanel(actor: WorkspaceActor, input: Apporti
         const dailyHours = hours.dailyHours ? resolveApportionDailySchedule({ dailyHours: hours.dailyHours }) : resolveApportionDailySchedule(hours);
         const activeDays = dailyHours.filter((entry) => entry.workingHours || entry.workingHoursSecondWindow);
         Object.assign(membership, {
-          ...(hours.dailyHours ? { dailyHours } : {}),
-          workingDays: hours.dailyHours ? activeDays.map((entry) => WEEKDAYS[entry.weekday]).join(", ") : hours.workingDays!,
-          workingHours: hours.dailyHours ? activeDays[0]?.workingHours ?? "" : hours.workingHours!,
-          workingHoursSecondWindow: hours.dailyHours ? activeDays[0]?.workingHoursSecondWindow ?? "" : hours.workingHoursSecondWindow!,
+          dailyHours,
+          workingDays: activeDays.map((entry) => WEEKDAYS[entry.weekday]).join(", "),
+          workingHours: activeDays[0]?.workingHours ?? "",
+          workingHoursSecondWindow: activeDays[0]?.workingHoursSecondWindow ?? "",
           closedDateKeys: [...new Set(hours.closedDateKeys)],
         });
         assertProviderHours(state, identifier);
       } else if (input.operation === "set-delegate") {
         if (!isOwner) throw new ApportionDirectoryError("Only the owner may appoint or remove an Admin delegate.", 403);
+        if (business.active === false && input.delegateIdentifier !== null) throw new ApportionDirectoryError("Save an active business before appointing an Admin.");
         const delegate = input.delegateIdentifier === null ? null : await resolveRegisteredPhone(state, input.delegateIdentifier);
         if (delegate && matches(delegate, owner)) throw new ApportionDirectoryError("The owner cannot be their own Admin delegate.");
         if (delegate) {
-          const brandingKey = identifierKey(state.workspaceBrandingByActor, business.ownerIdentifier);
-          assertAddressCapacity(state, delegate, business.ownerIdentifier, brandingKey ? (state.workspaceBrandingByActor[brandingKey].appointmentLocations ?? []).map((location) => location.id) : []);
+          try { assertAddressCapacity(state, delegate, business.ownerIdentifier, ["admin-reservation-1", "admin-reservation-2"]); }
+          catch (error) {
+            if (!(error instanceof Error) || !error.message.startsWith("Address capacity exceeded:")) throw error;
+            throw new ApportionDirectoryError("Admin address unavailable");
+          }
+          if (Object.values(values.businesses).some((entry) => entry.services.some((service) =>
+            service.assignedIdentifier && matches(service.assignedIdentifier, delegate)))) {
+            throw new ApportionDirectoryError("A service-assigned user cannot be an Admin.");
+          }
         }
         business.adminDelegateIdentifier = delegate;
+        if (delegate) ensureOwnerMemberships(state, business);
+        else values.memberships = values.memberships.filter((entry) => !(matches(entry.ownerIdentifier, owner) && matches(entry.providerIdentifier, owner)));
       } else if (input.operation === "set-service") {
         if (!isOwner && !isAdmin) throw new ApportionDirectoryError("Business owner or appointed Admin access is required.", 403);
         const category = await resolveOwnerCategory(state, owner, actor);
@@ -647,9 +752,21 @@ export async function updateApportionPanel(actor: WorkspaceActor, input: Apporti
         const incoming = input.service;
         if (!incoming || typeof incoming.id !== "string" || !/^[a-zA-Z0-9_-]{1,80}$/.test(incoming.id) || typeof incoming.name !== "string" || !incoming.name.trim() || typeof incoming.active !== "boolean" || !Array.isArray(incoming.locationIds) || incoming.locationIds.some((location) => typeof location !== "string")) throw new ApportionDirectoryError("A valid service ID, name, status, and addresses are required.");
         const previous = business.services.find((service) => service.id === incoming.id);
+        if (isAdmin && incoming.id === "consultation" && previous && incoming.name.trim() !== previous.name) {
+          throw new ApportionDirectoryError("Only the owner may change their service name.", 403);
+        }
+        if (isOwner && business.adminDelegateIdentifier && (incoming.id !== "consultation" || !previous
+          || incoming.active !== previous.active || incoming.assignedIdentifier !== previous.assignedIdentifier
+          || JSON.stringify(incoming.locationIds) !== JSON.stringify(previous.locationIds))) {
+          throw new ApportionDirectoryError("Only the assigned Admin may manage business services during delegation.", 403);
+        }
         if (incoming.id !== "consultation" && incoming.assignedIdentifier && matches(incoming.assignedIdentifier, owner)) throw new ApportionDirectoryError("The owner is assigned to Consultation only.");
         if (incoming.id === "consultation" && (!incoming.assignedIdentifier || !matches(incoming.assignedIdentifier, owner))) throw new ApportionDirectoryError("The default Consultation ID and owner assignment cannot change.");
         const assignedIdentifier = incoming.id === "consultation" ? business.ownerIdentifier : incoming.assignedIdentifier === null ? null : await resolveRegisteredPhone(state, incoming.assignedIdentifier);
+        if (assignedIdentifier && Object.values(values.businesses).some((entry) =>
+          entry.adminDelegateIdentifier && matches(entry.adminDelegateIdentifier, assignedIdentifier))) {
+          throw new ApportionDirectoryError("An Admin cannot be assigned to a service.");
+        }
         const service: ApportionService = { id: incoming.id, name: incoming.name.trim(), active: incoming.locationIds.length > 0, assignedIdentifier, locationIds: [...new Set(incoming.locationIds)] };
         const brandingKey = identifierKey(state.workspaceBrandingByActor, owner);
         const locations = brandingKey ? state.workspaceBrandingByActor[brandingKey].appointmentLocations ?? [] : [];

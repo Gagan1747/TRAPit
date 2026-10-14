@@ -5,6 +5,7 @@ import { matchApportionIdentity, participantIdentifiersMatch, type ApportionRecu
 import { createPortal } from "react-dom";
 import { ArrowLeft, ArrowRight, Check, LoaderCircle, MessageSquare, X } from "lucide-react";
 import type { ApportionInvitation as StoredInvitation } from "../lib/apportion-store";
+import { ApportionCancellationDialog } from "./apportion-cancellation-dialog";
 
 export type ApportionInvitation = Omit<StoredInvitation, "notifications" | "bookedSettings">;
 type LogRow = { kind: "appointment"; entry: ApportionLogAppointment } | { kind: "invitation"; entry: ApportionInvitation };
@@ -25,6 +26,9 @@ export type ApportionLogAppointment = {
   hasUnreadMessages?: boolean;
   canManage?: boolean;
   canMessage?: boolean;
+  assignedStaffName?: string | null;
+  assignedStaffPhone?: string | null;
+  assignedStaffIdentifier?: string | null;
   currentStatus: AppointmentStatus;
   history: HistoryEntry[];
   id: string;
@@ -72,7 +76,7 @@ type ApportionAppointmentLogProps = {
   getStatusLabel: (appointment: ApportionLogAppointment) => string;
   getStatusHelper?: (appointment: ApportionLogAppointment) => string | null;
   onAction: (action: AppointmentUpdate) => Promise<void | string>;
-  onCancel: (appointmentId: string) => Promise<void | string>;
+  onCancel: (appointmentId: string, reason: string) => Promise<void | string>;
   onRefresh: () => void | Promise<void>;
   isUpdating: boolean;
 };
@@ -210,6 +214,8 @@ export function ApportionAppointmentLog({
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [invitationAction, setInvitationAction] = useState<"accept" | "decline" | "cancel" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [cancellationTarget, setCancellationTarget] = useState<LogRow | null>(null);
+  const [serviceFilter, setServiceFilter] = useState("");
   const [noteInvitationId, setNoteInvitationId] = useState<string | null>(null);
   const actionPendingRef = useRef(false);
   const acknowledgedRef = useRef(new Set<string>());
@@ -240,8 +246,15 @@ export function ApportionAppointmentLog({
     ...appointments.map((entry): LogRow => ({ kind: "appointment", entry })),
     ...invitations.filter((entry) => entry.status !== "accepted" && currentIdentifier && (matchApportionIdentity(entry.ownerIdentifier, currentIdentifier) || matchApportionIdentity(entry.requesterIdentifier, currentIdentifier))).map((entry): LogRow => ({ kind: "invitation", entry: entry.status === "pending" && new Date(entry.expiresAt).getTime() <= now ? { ...entry, status: "expired", statusUpdatedAt: entry.expiresAt } : entry })),
   ];
-  const activeAppointments = mergeActiveRows(rows.filter((row) => row.kind === "appointment" ? isActive(row.entry.currentStatus) : row.entry.status === "pending"));
-  const completedAppointments = rows.filter((row) => row.kind === "appointment" ? !isActive(row.entry.currentStatus) : row.entry.status !== "pending").sort((left, right) => (right.kind === "appointment" ? completionTime(right.entry) : new Date(right.entry.statusUpdatedAt).getTime()) - (left.kind === "appointment" ? completionTime(left.entry) : new Date(left.entry.statusUpdatedAt).getTime()) || left.entry.id.localeCompare(right.entry.id));
+  const serviceKey = (row: LogRow) => `${rows.find((other) => matchApportionIdentity(other.entry.ownerIdentifier, row.entry.ownerIdentifier))?.entry.ownerIdentifier || row.entry.ownerIdentifier}::${row.entry.serviceId || "consultation"}`;
+  const services = Array.from(new Map(rows.map((row) => [serviceKey(row), `${row.entry.ownerName || "Business"} → ${row.entry.serviceName || "Consultation"}`])).entries());
+  const filteredRows = rows.filter((row) => !serviceFilter || serviceKey(row) === serviceFilter);
+  const activeAppointments = mergeActiveRows(filteredRows.filter((row) => row.kind === "appointment" ? isActive(row.entry.currentStatus) : row.entry.status === "pending"));
+  const completedAppointments = filteredRows.filter((row) => row.kind === "appointment" ? !isActive(row.entry.currentStatus) : row.entry.status !== "pending").sort((left, right) => rowTime(left).localeCompare(rowTime(right)) || left.entry.id.localeCompare(right.entry.id));
+  function selectService(value: string) { setServiceFilter(value); setActivePage(0); setCompletedPage(0); }
+  useEffect(() => {
+    if (serviceFilter && !services.some(([key]) => key === serviceFilter)) { setServiceFilter(""); setActivePage(0); setCompletedPage(0); }
+  }, [serviceFilter, services]);
   const activePageCount = Math.max(1, Math.ceil(activeAppointments.length / PAGE_SIZE));
   const completedPageCount = Math.max(1, Math.ceil(completedAppointments.length / PAGE_SIZE));
   const visibleActive = activeAppointments.slice(activePage * PAGE_SIZE, (activePage + 1) * PAGE_SIZE);
@@ -308,32 +321,35 @@ export function ApportionAppointmentLog({
     }).catch(() => acknowledgedRef.current.delete(key));
   }, [threadAppointmentId, displayedLastMessageId]);
 
-  async function actOnInvitation(entry: ApportionInvitation, action: "accept" | "decline" | "cancel") {
-    if (actionPendingRef.current || isUpdating || !currentIdentifier || entry.status !== "pending" || new Date(entry.expiresAt).getTime() <= Date.now()) return;
-    if (!matchApportionIdentity(action === "cancel" ? entry.ownerIdentifier : entry.requesterIdentifier, currentIdentifier)) return;
+  async function actOnInvitation(entry: ApportionInvitation, action: "accept" | "decline" | "cancel", reason?: string) {
+    if (action === "cancel" && !reason) { setCancellationTarget({ kind: "invitation", entry }); return; }
+    if (actionPendingRef.current || isUpdating) return "Another update is in progress. Please retry.";
+    if (!currentIdentifier || entry.status !== "pending" || new Date(entry.expiresAt).getTime() <= Date.now()) return "This invitation is no longer pending. Refresh the log.";
+    if (!matchApportionIdentity(action === "cancel" ? entry.ownerIdentifier : entry.requesterIdentifier, currentIdentifier)) return "You cannot update this invitation.";
     actionPendingRef.current = true;
     setUpdatingId(entry.id);
     setInvitationAction(action);
     setActionError(null);
     try {
-      const response = await fetch("/api/user/apportion/invitations", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ invitationId: entry.id, action }) });
+      const response = await fetch("/api/user/apportion/invitations", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ invitationId: entry.id, action, reason }) });
       const payload = await response.json() as { error?: string };
       if (!response.ok) throw new Error(payload.error || "Unable to update invitation.");
       await onRefresh();
-    } catch (error) { setActionError(error instanceof Error ? error.message : "Unable to update invitation."); }
+    } catch (error) { const message = error instanceof Error ? error.message : "Unable to update invitation."; setActionError(message); return message; }
     finally { actionPendingRef.current = false; setUpdatingId(null); setInvitationAction(null); }
   }
 
-  async function actOnAppointment(entry: ApportionLogAppointment, action: "done" | "reject" | "cancel") {
-    if (actionPendingRef.current || isUpdating) return;
+  async function actOnAppointment(entry: ApportionLogAppointment, action: "done" | "reject" | "cancel", reason?: string) {
+    if (action === "cancel" && !reason) { setCancellationTarget({ kind: "appointment", entry }); return; }
+    if (actionPendingRef.current || isUpdating) return "Another update is in progress. Please retry.";
     document.getElementById(`apportion-actions-${entry.id}`)?.removeAttribute("open");
     actionPendingRef.current = true;
     setUpdatingId(entry.id);
     setActionError(null);
     try {
-      const result = await (action === "cancel" ? onCancel(entry.id) : onAction({ appointmentId: entry.id, action }));
+      const result = await (action === "cancel" ? onCancel(entry.id, reason!) : onAction({ appointmentId: entry.id, action }));
       if (typeof result === "string") throw new Error(result);
-    } catch (error) { setActionError(error instanceof Error ? error.message : "Unable to update appointment."); }
+    } catch (error) { const message = error instanceof Error ? error.message : "Unable to update appointment."; setActionError(message); return message; }
     finally { actionPendingRef.current = false; setUpdatingId(null); }
   }
 
@@ -373,12 +389,12 @@ export function ApportionAppointmentLog({
       if (row.kind === "invitation") {
         const invitation = row.entry;
         const incoming = Boolean(currentIdentifier && matchApportionIdentity(invitation.requesterIdentifier, currentIdentifier));
-        const contactName = incoming ? invitation.ownerName || "Business" : invitation.requesterName;
+        const contactName = incoming ? invitation.assignedStaffName || "Assigned provider" : invitation.requesterName;
         return <tr className="apportion-log-row" id={`apportion-invitation-${invitation.id}`} key={invitation.id} tabIndex={-1}>
           <td><span className={`apportion-origin ${incoming ? "is-invite-incoming" : "is-invite-outgoing"}`} title={incoming ? "Incoming invitation" : "Outgoing invitation"}>{serial}</span></td>
-          <td><strong>{tableDateTime(invitation.occurrences[0]?.startsAt ?? invitation.createdAt)}</strong><span className="apportion-status-helper">{invitation.serviceName} · {invitation.locationAddress}</span><details className="apportion-series-summary"><summary>{recurrenceLabel(invitation.recurrence) || "Once"} · {invitation.occurrences.length} appointment{invitation.occurrences.length === 1 ? "" : "s"}</summary><ul>{invitation.occurrences.map((occurrence) => <li key={occurrence.serviceDateKey}>{tableDateTime(occurrence.startsAt)}</li>)}</ul></details></td>
-          <td><strong>{contactName}</strong><span className="apportion-status-helper">{incoming ? invitation.ownerIdentifier : invitation.requesterPhone || invitation.requesterIdentifier}</span></td>
-          <td><button className="apportion-thread-trigger" type="button" aria-label={`View invitation note for ${contactName}`} onClick={() => setNoteInvitationId(invitation.id)}><MessageSquare aria-hidden="true" size={15} /><span>{invitation.notes || "Open notes"}</span></button></td>
+          <td><strong>{tableDateTime(invitation.occurrences[0]?.startsAt ?? invitation.createdAt)}</strong><span className="apportion-status-helper">{invitation.ownerName || "Business"}</span><span className="apportion-status-helper">{invitation.serviceName}</span><span className="apportion-status-helper">{invitation.locationAddress}</span><details className="apportion-series-summary"><summary>{recurrenceLabel(invitation.recurrence) || "Once"} · {invitation.occurrences.length} appointment{invitation.occurrences.length === 1 ? "" : "s"}</summary><ul>{invitation.occurrences.map((occurrence) => <li key={occurrence.serviceDateKey}>{tableDateTime(occurrence.startsAt)}</li>)}</ul></details></td>
+          <td><strong>{contactName}</strong><span className="apportion-status-helper">{incoming ? invitation.assignedStaffPhone || invitation.assignedStaffIdentifier || "Contact unavailable" : invitation.requesterPhone || invitation.requesterIdentifier}</span></td>
+          <td><button className="apportion-thread-trigger" type="button" aria-label={`View invitation note for ${contactName}`} onClick={() => setNoteInvitationId(invitation.id)}><MessageSquare aria-hidden="true" size={15} /><span>{invitation.messages?.at(-1)?.body || invitation.notes || "Open notes"}</span></button></td>
           <td><span className={`status-chip apportion-status-chip is-${invitation.status}`}>{invitation.status === "pending" ? incoming ? "Pending invitation" : "Pending Acceptance" : invitation.status.charAt(0).toUpperCase() + invitation.status.slice(1)}</span>
             {invitation.status === "pending" ? <div className="inline-actions apportion-invitation-actions">
               {incoming ? <><button className="button small-button" disabled={!!updatingId || isUpdating} type="button" onClick={() => void actOnInvitation(invitation, "accept")}>{updatingId === invitation.id && invitationAction === "accept" ? <LoaderCircle className="apportion-spinner" size={16} /> : <Check size={16} />}Accept</button><button className="button-secondary small-button" disabled={!!updatingId || isUpdating} type="button" onClick={() => void actOnInvitation(invitation, "decline")}>{updatingId === invitation.id && invitationAction === "decline" ? <LoaderCircle className="apportion-spinner" size={16} /> : <X size={16} />}Decline</button></> : <button className="button-secondary small-button" disabled={!!updatingId || isUpdating} type="button" onClick={() => void actOnInvitation(invitation, "cancel")}>{updatingId === invitation.id ? <LoaderCircle className="apportion-spinner" size={16} /> : <X size={16} />}Cancel</button>}
@@ -390,10 +406,10 @@ export function ApportionAppointmentLog({
       const canManage = appointment.canManage === true;
       const active = isActive(appointment.currentStatus);
       const canMessage = active && appointment.canMessage === true;
-      const contactName = appointment.scope === "owner" ? appointment.requesterName : appointment.ownerName || "Business";
+      const contactName = appointment.scope === "owner" ? appointment.requesterName : appointment.assignedStaffName || "Assigned provider";
       const contactPhone = appointment.scope === "owner"
         ? appointment.requesterPhone || appointment.requesterIdentifier
-        : appointment.ownerIdentifier;
+        : appointment.assignedStaffPhone || appointment.assignedStaffIdentifier || "Contact unavailable";
       const completion = appointment.currentStatus === "done"
         ? [...appointment.history].reverse().find((entry) => entry.action === "done")?.at ?? appointment.statusUpdatedAt
         : null;
@@ -410,7 +426,7 @@ export function ApportionAppointmentLog({
           <div className="apportion-actions-menu-list">
             {canManage && active ? <button className="button-secondary small-button" disabled={isUpdating || !!updatingId} type="button" onClick={() => void actOnAppointment(appointment, "done")}>Done</button> : null}
             {canManage && active && appointment.justAddToList ? <button className="button-secondary small-button" disabled={isUpdating || !!updatingId} type="button" onClick={() => void actOnAppointment(appointment, "reject")}>Absent</button> : null}
-            {requesterContext && active ? <button className="button-secondary small-button" disabled={isUpdating || !!updatingId} type="button" onClick={() => void actOnAppointment(appointment, "cancel")}>Cancel</button> : null}
+            {(requesterContext || canManage) && active ? <button className="button-secondary small-button" disabled={isUpdating || !!updatingId} type="button" onClick={() => void actOnAppointment(appointment, "cancel")}>Cancel</button> : null}
           </div>
         </details>
       );
@@ -431,7 +447,9 @@ export function ApportionAppointmentLog({
               {originalTime ? (
                 <AppointmentHistory appointment={appointment} contactName={contactName} originalTime={originalTime} formatDateTime={formatDateTime} />
               ) : null}
-              <span className="apportion-status-helper">{appointment.serviceName || "Consultation"} · {appointment.locationAddress}</span>
+              <span className="apportion-status-helper">{appointment.ownerName || "Business"}</span>
+              <span className="apportion-status-helper">{appointment.serviceName || "Consultation"}</span>
+              <span className="apportion-status-helper">{appointment.locationAddress}</span>
             </td>
             <td>
               <strong>{contactName}</strong>
@@ -482,6 +500,8 @@ export function ApportionAppointmentLog({
 
   return (
     <section aria-label="Appointment log" className="apportion-appointment-log">
+      {services.length > 4 ? <label>Filter service<select aria-label="Filter service" value={serviceFilter} onChange={(event) => selectService(event.target.value)}><option value="">All services</option>{services.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label> : services.length ? <div aria-label="Filter service" className="inline-actions"><button type="button" className="button-secondary small-button" aria-pressed={!serviceFilter} onClick={() => selectService("")}>All services</button>{services.map(([key, label]) => <button key={key} type="button" className="button-secondary small-button" aria-pressed={serviceFilter === key} onClick={() => selectService(serviceFilter === key ? "" : key)}>{label}</button>)}</div> : null}
+      {cancellationTarget ? <ApportionCancellationDialog onClose={() => setCancellationTarget(null)} onConfirm={(reason) => cancellationTarget.kind === "appointment" ? actOnAppointment(cancellationTarget.entry, "cancel", reason) : actOnInvitation(cancellationTarget.entry, "cancel", reason)} /> : null}
       {actionError ? <p className="form-error" role="alert">{actionError}</p> : null}
       <header className="question-head apportion-log-section-head">
         <strong>Active appointments</strong>
@@ -509,7 +529,7 @@ export function ApportionAppointmentLog({
           </table>
         </div>
       ) : <p className="muted-text">No completed appointments.</p>}
-      {noteInvitation ? createPortal(<div className="apportion-thread-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setNoteInvitationId(null); }}><section ref={threadRef} aria-labelledby="apportion-invitation-note-title" aria-modal="true" className="apportion-thread-drawer" role="dialog"><header className="apportion-thread-header"><h2 id="apportion-invitation-note-title">Invitation note</h2><button className="icon-button" aria-label="Close invitation note" type="button" onClick={() => setNoteInvitationId(null)}><X size={18} /></button></header><div className="apportion-thread-body"><p>{noteInvitation.notes || "No note."}</p></div></section></div>, document.body) : null}
+      {noteInvitation ? createPortal(<div className="apportion-thread-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setNoteInvitationId(null); }}><section ref={threadRef} aria-labelledby="apportion-invitation-note-title" aria-modal="true" className="apportion-thread-drawer" role="dialog"><header className="apportion-thread-header"><h2 id="apportion-invitation-note-title">Invitation note</h2><button className="icon-button" aria-label="Close invitation note" type="button" onClick={() => setNoteInvitationId(null)}><X size={18} /></button></header><div className="apportion-thread-body"><p>{noteInvitation.notes || "No note."}</p>{noteInvitation.messages?.map((message) => <article className="apportion-thread-message" key={message.id}><div><strong>{currentIdentifier && matchApportionIdentity(message.authorIdentifier, currentIdentifier) ? "You" : message.authorIdentifier}</strong><time dateTime={message.createdAt}>{formatDateTime(message.createdAt)}</time></div><p>{message.body}</p></article>)}</div></section></div>, document.body) : null}
       {threadAppointment ? createPortal(
         <div className="apportion-thread-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) setThreadAppointmentId(null); }}>
           <section ref={threadRef} aria-labelledby="apportion-thread-title" aria-modal="true" className="apportion-thread-drawer" role="dialog">
@@ -539,12 +559,4 @@ export function ApportionAppointmentLog({
       ) : null}
     </section>
   );
-}
-
-function completionTime(appointment: ApportionLogAppointment) {
-  if (appointment.currentStatus === "done") {
-    const doneEntry = [...appointment.history].reverse().find((entry) => entry.action === "done");
-    if (doneEntry) return new Date(doneEntry.at).getTime();
-  }
-  return new Date(appointment.statusUpdatedAt).getTime();
 }

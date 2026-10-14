@@ -3,6 +3,29 @@ import { NextResponse } from "next/server";
 import { removeOwnedWebPushSubscription, upsertWebPushSubscription } from "../../../../lib/notification-store";
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 
+function isSameOrigin(request: Request) {
+  if (request.headers.get("sec-fetch-site") === "cross-site") return false;
+  const origin = request.headers.get("origin");
+  if (!origin) return true;
+  // This deployment-owned URL is also used by mobile clients. Forwarded headers
+  // are not an allowlist: arbitrary clients can supply them.
+  const publicUrl = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
+  try {
+    const expected = new URL(publicUrl || request.url);
+    if (!["https:", "http:"].includes(expected.protocol) || expected.username || expected.password) return false;
+    if (origin === expected.origin) return true;
+    // Both production hostnames are served by the deployment. This exact HTTPS
+    // pair is not inferred from client-controlled Host/Forwarded headers.
+    if (publicUrl && expected.protocol === "https:" && !expected.port
+      && (expected.hostname === "trapit.in" || expected.hostname === "www.trapit.in")) {
+      return origin === (expected.hostname === "trapit.in" ? "https://www.trapit.in" : "https://trapit.in");
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(request: Request) {
   const actor = await getWorkspaceActor(request);
 
@@ -10,7 +33,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
-  if (request.headers.get("origin") && request.headers.get("origin") !== new URL(request.url).origin) {
+  if (!isSameOrigin(request)) {
     return NextResponse.json({ error: "Same-origin access is required." }, { status: 403 });
   }
 
@@ -48,7 +71,7 @@ export async function POST(request: Request) {
 export async function DELETE(request: Request) {
   const actor = await getWorkspaceActor(request);
   if (!actor?.sub) return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
-  if (request.headers.get("origin") && request.headers.get("origin") !== new URL(request.url).origin) {
+  if (!isSameOrigin(request)) {
     return NextResponse.json({ error: "Same-origin access is required." }, { status: 403 });
   }
   try {

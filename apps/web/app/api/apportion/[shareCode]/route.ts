@@ -1,5 +1,5 @@
 import { getSessionDisplayName, getSessionIdentifier } from "@trapit/auth";
-import { getApportionBookableServices, normalizeApportionProviderSettings, matchApportionIdentity, planApportionDateKeys, resolveApportionDailySchedule, type ApportionRecurrence, type WorkspaceBranding } from "@trapit/testing";
+import { assertApportionRecurringWeekdays, getApportionBookableServices, normalizeApportionProviderSettings, matchApportionIdentity, planApportionDateKeys, resolveApportionDailySchedule, type ApportionRecurrence, type WorkspaceBranding } from "@trapit/testing";
 import { NextResponse } from "next/server";
 
 import { isWebAuthConfigured } from "../../../../lib/auth-config";
@@ -44,8 +44,8 @@ async function resolveServiceBusiness(ownerIdentifier: string, serviceId: string
     : null;
   const locations = (ownerContext.branding.appointmentLocations ?? []).filter((location) => service.locationIds.includes(location.id))
     .flatMap((location) => {
-      if (isOwner || !providerIdentifier) return [location];
       const membership = memberships.find((entry) => entry.locationId === location.id);
+      if (!providerIdentifier || isOwner && !membership) return [location];
       return membership ? [{ ...location, dailyHours: membership.dailyHours, workingDays: membership.workingDays, workingHours: membership.workingHours, workingHoursSecondWindow: membership.workingHoursSecondWindow }] : [];
     });
   const branding: WorkspaceBranding = { ...ownerContext.branding, ...(settings ?? {}), appointmentLocations: locations,
@@ -400,8 +400,11 @@ export async function GET(
     }
   }
 
-  const contexts = await getApportionBusinessContexts(directServices.map((option) => option.ownerIdentifier)
-    .filter((owner) => !matchApportionIdentity(owner, business.ownerIdentifier)));
+  const [contexts, providerUsers] = await Promise.all([
+    getApportionBusinessContexts(directServices.map((option) => option.ownerIdentifier)
+      .filter((owner) => !matchApportionIdentity(owner, business.ownerIdentifier))),
+    isWebAuthConfigured() ? listRegisteredDirectoryUsers() : listParticipants(),
+  ]);
   contexts.set(business.ownerIdentifier, business.ownerContext);
   const appointmentReads = new Map<string, ReturnType<typeof listApportionAppointmentsForOwner>>();
   const countReads = new Map<string, ReturnType<typeof listApportionSlotCounts>>();
@@ -471,7 +474,8 @@ export async function GET(
             workingDays: location.workingDays,
             workingHours: location.workingHours,
             workingHoursSecondWindow: location.workingHoursSecondWindow,
-            providerClosedDateKeys: providerClosedDates(serviceBusiness.ownerContext, serviceBusiness.providerIdentifier),
+            providerClosedDateKeys: [...providerClosedDates(serviceBusiness.ownerContext, serviceBusiness.providerIdentifier),
+              ...(serviceBusiness.memberships.find((entry) => entry.locationId === location.id)?.closedDateKeys ?? [])],
           };
           const addressKey = `${serviceBusiness.ownerIdentifier}::${location.id}`;
           return {
@@ -482,6 +486,11 @@ export async function GET(
               serviceId: option.id,
               serviceName: option.name,
               businessName: option.businessName,
+              assignedProvider: serviceBusiness.service.assignedIdentifier ? {
+                name: providerUsers.find((entry) => matchApportionIdentity(entry.identifier, serviceBusiness.service.assignedIdentifier!))?.label
+                  ?? serviceBusiness.service.assignedIdentifier,
+                phone: serviceBusiness.service.assignedIdentifier,
+              } : null,
               business: businessProjection,
               queueCounts: queues.filter((entry) => entry.locationId === location.id),
               slotCounts: counts.filter((entry) => entry.locationId === location.id),
@@ -636,7 +645,7 @@ export async function POST(
     const membership = business.providerIdentifier
       ? business.memberships.find((entry) => entry.locationId === location.id)
       : undefined;
-    const effectiveLocation = business.isOwner || !business.providerIdentifier ? masterLocation
+    const effectiveLocation = !business.providerIdentifier || business.isOwner && !membership ? masterLocation
       : membership && !membership.closedDateKeys.includes(serviceDateKey)
         ? resolveAppointmentLocationSchedule({ ...business.branding, appointmentDateHoursOverrides: [], appointmentWeeklyHoursOverrides: [], appointmentDateOverrides: { closedDateKeys: [], openedDateKeys: [] } }, location.id, serviceDateKey)
         : null;
@@ -644,7 +653,7 @@ export async function POST(
     if (!effectiveLocation || !masterLocation) {
       throw new Error("This location is closed on the selected date.");
     }
-    if (business.providerIdentifier && !business.isOwner) assertApportionHoursWithinMaster(effectiveLocation, masterLocation);
+    if (membership) assertApportionHoursWithinMaster(effectiveLocation, masterLocation);
 
     return {
       ...business.branding,
@@ -661,6 +670,8 @@ export async function POST(
     try {
       const target = await resolveRegisteredTarget(body.targetPhone);
       if (!target) throw new Error("No registered user was found for that phone number.");
+      assertApportionRecurringWeekdays(body.recurrence, [location,
+        business.ownerContext.branding.appointmentLocations!.find((entry) => entry.id === location.id)!]);
       const requestedStart = new Date(body.startsAt ?? "");
       let selectedTime: { dayOffset: number; minutesOfDay: number } | null = null;
       if (!business.branding.justAddToList) {

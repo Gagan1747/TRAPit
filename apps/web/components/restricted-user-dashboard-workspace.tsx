@@ -17,7 +17,7 @@ import { AnswerStatusIndicator } from "./answer-status-indicator";
 import { AssessmentLogTable, type AssessmentLogRow } from "./assessment-log-table";
 import { CollapsibleWorkspaceSection } from "./collapsible-workspace-section";
 import { FloatingWindowCloseButton } from "./floating-window-close-button";
-import { NotificationBell, type NotificationBellItem } from "./notification-bell";
+import { BrowserPushPrompt } from "./browser-push-prompt";
 
 type AvailableTest = {
   createdAt: string;
@@ -289,51 +289,6 @@ export function RestrictedUserDashboardWorkspace({
 
     return poll.status === "scheduled" && startsAtMs > Date.now() && startsAtMs - Date.now() <= REMINDER_WINDOW_MS;
   });
-  const actionableNotificationItems: NotificationBellItem[] = [
-    ...sortedAvailableTests
-      .filter((test) => test.status === "live")
-      .map((test) => ({
-        actionHref: `/user/test/${encodeURIComponent(test.id)}?participantName=${encodeURIComponent(identifier)}`,
-        actionLabel: "Start",
-        count: 1,
-        detail: `Live now. Started at ${formatShortDateTime(test.startsAt)}.`,
-        label: `Test: ${test.title}`,
-        tone: "live" as const,
-      })),
-    ...sortedAvailablePolls
-      .filter((poll) => poll.status === "live" && poll.shareCode)
-      .map((poll) => ({
-        actionHref: getPollAccessPath(poll.shareCode ?? ""),
-        actionLabel: "Respond",
-        count: 1,
-        detail: `Live now. Closes at ${formatShortDateTime(poll.endsAt)}.`,
-        label: `Poll: ${poll.title}`,
-        tone: "live" as const,
-      })),
-    ...upcomingReminderTests.map((test) => ({
-      actionHref: `/user/test/${encodeURIComponent(test.id)}?participantName=${encodeURIComponent(identifier)}`,
-      actionLabel: "Open",
-      count: 1,
-      detail: getStartReminderDetail(test.startsAt),
-      label: `Test soon: ${test.title}`,
-      tone: "soon" as const,
-    })),
-    ...upcomingReminderPolls
-      .filter((poll) => poll.shareCode)
-      .map((poll) => ({
-        actionHref: getPollAccessPath(poll.shareCode ?? ""),
-        actionLabel: "Open",
-        count: 1,
-        detail: getStartReminderDetail(poll.startsAt),
-        label: `Poll soon: ${poll.title}`,
-        tone: "soon" as const,
-      })),
-  ];
-  const notificationItems: NotificationBellItem[] = actionableNotificationItems.length ? actionableNotificationItems : [
-    { count: liveTestsCount + livePollsCount, label: "Live tests and polls" },
-    { count: upcomingTestsCount + upcomingPollsCount, label: "Upcoming tests and polls" },
-    { count: releasedTestResultsCount + releasedPollResultsCount, label: "Released results" },
-  ];
 
   async function loadDashboard(nextIdentifier?: string) {
     const participantIdentifier = (nextIdentifier ?? identifier).trim();
@@ -602,15 +557,7 @@ export function RestrictedUserDashboardWorkspace({
 
   return (
     <div className="workspace-stack">
-      <div className="workspace-toolbar">
-        <NotificationBell
-          browserPushPublicKey={process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY ?? null}
-          enableBrowserPush={authConfigured}
-          items={notificationItems}
-          subtitle={notificationBaseline === null ? "Counts reflect the current dashboard state." : "Released results are measured from your previous sign in."}
-          title="User dashboard alerts"
-        />
-      </div>
+      {authConfigured ? <BrowserPushPrompt mode="automatic" publicKey={process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY ?? null} /> : null}
 
       <div className="admin-shell">
         <aside className="admin-menu panel workspace-card">

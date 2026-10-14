@@ -450,7 +450,8 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
   const apportionDirectory = migrateApportionDirectory(workspaceBrandingByActor, parsed.apportionDirectory);
   for (const [provider, settings] of Object.entries(apportionDirectory.providerSettings)) {
     const key = Object.keys(workspaceBrandingByActor).find((entry) => identifiersMatch(entry, provider));
-    if (key) workspaceBrandingByActor[key] = { ...workspaceBrandingByActor[key], ...settings };
+    const business = Object.values(apportionDirectory.businesses).find((entry) => identifiersMatch(entry.ownerIdentifier, provider));
+    if (key && !business?.adminDelegateIdentifier) workspaceBrandingByActor[key] = { ...workspaceBrandingByActor[key], ...settings };
   }
   return {
     apportionDirectory,
@@ -691,7 +692,8 @@ export function mutateWorkspaceBrandingState(
   const settingsKey = normalizedActorKey
     ? Object.keys(state.apportionDirectory?.providerSettings ?? {}).find((key) => identifiersMatch(key, normalizedActorKey))
     : undefined;
-  if (normalizedBranding && settingsKey) {
+  const business = normalizedActorKey ? state.apportionDirectory?.businesses[normalizedActorKey] : undefined;
+  if (normalizedBranding && settingsKey && !business?.adminDelegateIdentifier) {
     normalizedBranding = { ...normalizedBranding, ...state.apportionDirectory!.providerSettings[settingsKey] };
   }
   const existingBranding = normalizedActorKey
@@ -1295,14 +1297,14 @@ export async function readApportionWorkspaceState() {
   return readStore();
 }
 
-export async function backupApportionDelegationStore(state: TestingWorkspaceState) {
+export async function backupApportionDelegationStore(state: TestingWorkspaceState, version = 1) {
   await mkdir(path.dirname(STORE_PATH), { recursive: true });
   try {
-    await copyFile(STORE_PATH, `${STORE_PATH}.delegation-capacity-v1.backup`, constants.COPYFILE_EXCL);
+    await copyFile(STORE_PATH, `${STORE_PATH}.delegation-capacity-v${version}.backup`, constants.COPYFILE_EXCL);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") {
-      await writeFile(`${STORE_PATH}.delegation-capacity-v1.backup`, JSON.stringify(state), { flag: "wx" });
+      await writeFile(`${STORE_PATH}.delegation-capacity-v${version}.backup`, JSON.stringify(state), { flag: "wx" });
     } else if (code !== "EEXIST") throw error;
   }
 }

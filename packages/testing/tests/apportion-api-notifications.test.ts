@@ -8,7 +8,7 @@ const fixtures = vi.hoisted(() => ({
   pending: [{ id: "optout-1", recipientIdentifier: "+919222222222", title: "Address unavailable", body: "Appointment cancelled.", url: "/user" }] as Array<{ id: string; recipientIdentifier: string; title: string; body: string; url: string; webPushEligible?: boolean; mobilePushEligible?: boolean }>,
   schedulePending: [] as Array<{ id: string; recipientIdentifier: string; message: string; createdAt: string }>,
   schedules: [] as Array<{ kind: "test" | "poll"; id: string; startsAt: string; endsAt: string; recipients: string[] }>,
-  intents: [] as Array<{ key: string; instanceKey: string; recipientIdentifier: string; kind: "test" | "poll"; entityId: string; phase: "confirmed" | "15min" | "start" }>,
+  intents: [] as Array<{ key: string; instanceKey: string; recipientIdentifier: string; kind: "test" | "poll"; entityId: string; phase: "confirmed" | "30min" | "1min"; dueAt: string }>,
   remove: vi.fn(),
 }));
 vi.mock("server-only", () => ({}));
@@ -48,7 +48,7 @@ beforeEach(() => {
   fixtures.tokens = [];
   fixtures.subscriptions = [];
   fixtures.schedulePending = [];
-  fixtures.pending = [{ id: "optout-1", recipientIdentifier: "+919222222222", title: "Address unavailable", body: "Appointment cancelled.", url: "/user" }];
+  fixtures.pending = [{ id: "optout-1", recipientIdentifier: "+919222222222", title: "Address unavailable", body: "Appointment cancelled.", url: "/user", webPushEligible: true }];
   fixtures.schedules = [];
   fixtures.intents = [];
   fixtures.remove.mockImplementation(async (id: string) => { fixtures.subscriptions = fixtures.subscriptions.filter((entry) => entry.id !== id); });
@@ -66,7 +66,7 @@ describe("durable Apportion notification worker", () => {
     fixtures.lifecycle.mockImplementation(async () => {
       await Promise.resolve();
       if (notices.length) return false;
-      notices.push({ id: "invitation-expiry", recipientIdentifier: "+919222222222", title: "Appointment invitation expired", body: "Acceptance deadline passed.", url: "/user?section=apportion&invitationId=invite-1" });
+      notices.push({ id: "invitation-expiry", recipientIdentifier: "+919222222222", title: "Appointment invitation expired", body: "Acceptance deadline passed.", url: "/user?section=apportion&invitationId=invite-1", webPushEligible: true });
       return true;
     });
     fixtures.readPending.mockImplementation(async () => {
@@ -156,18 +156,61 @@ describe("durable Apportion notification worker", () => {
     expect(fixtures.delivered.has("apportion:optout-1:mobile")).toBe(true);
     expect(fixtures.mark).toHaveBeenCalledWith("optout-1");
   });
-  it("delivers and acknowledges durable schedule notices through the existing push worker", async () => {
+  it("does not browser-push provider schedule notices, retaining native delivery", async () => {
     fixtures.schedulePending = [{ id: "schedule-1", recipientIdentifier: "+919222222222", message: "Your hours changed.", createdAt: "2026-10-04T09:00:00Z" }];
     fixtures.subscriptions = [{ id: "browser", userIdentifier: "9222222222", endpoint: "endpoint", keys: { auth: "auth", p256dh: "key" } }];
-    fixtures.send.mockResolvedValueOnce({}).mockResolvedValueOnce({});
+    fixtures.tokens = [{ id: "mobile", userIdentifier: "9222222222", token: "ExponentPushToken[test]" }];
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response(JSON.stringify({ data: [{ status: "ok" }] }))));
+    fixtures.send.mockResolvedValue({});
     await worker.POST(request());
-    expect(fixtures.send).toHaveBeenNthCalledWith(2, expect.objectContaining({ endpoint: "endpoint" }), expect.stringContaining("Sign in to view it."));
+    expect(fixtures.send).toHaveBeenCalledOnce();
+    expect(fixtures.delivered.has("apportion:schedule-1:mobile")).toBe(true);
+    expect(fixtures.delivered.has("apportion:schedule-1:browser")).toBe(false);
     expect(fixtures.markSchedule).toHaveBeenCalledWith("schedule-1");
   });
 
   describe("browser scheduling worker", () => {
+    it("retries customer-only outbox delivery per browser subscription, never via Expo", async () => {
+      const id = "apportion-browser:customer-confirmed";
+      fixtures.pending = [{ id, recipientIdentifier: "9222222222", title: "Appointment update", body: "Scheduled", url: "/user", mobilePushEligible: false, webPushEligible: true }];
+      fixtures.tokens = [{ id: "mobile", userIdentifier: "9222222222", token: "ExponentPushToken[test]" }];
+      fixtures.subscriptions = ["first", "second"].map((id) => ({ id, userIdentifier: "9222222222", endpoint: id, keys: { auth: "auth", p256dh: "key" } }));
+      const expo = vi.fn();
+      vi.stubGlobal("fetch", expo);
+      fixtures.send.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error("Retry"));
+      expect((await worker.POST(request())).status).toBe(503);
+      expect(fixtures.mark).not.toHaveBeenCalled();
+      expect(fixtures.delivered.has(`apportion:${id}:first`)).toBe(true);
+      fixtures.send.mockResolvedValueOnce({});
+      expect((await worker.POST(request())).status).toBe(200);
+      expect(fixtures.send).toHaveBeenCalledTimes(3);
+      expect(fixtures.send.mock.calls[2][0].endpoint).toBe("second");
+      expect(fixtures.mark).toHaveBeenCalledWith(id);
+      expect(expo).not.toHaveBeenCalled();
+    });
+    it("never treats native tokens as delivered evidence for browser-only appointment outbox intents", async () => {
+      fixtures.pending = [{ id: "apportion-browser:customer-confirmed", recipientIdentifier: "9222222222", title: "Appointment update", body: "Scheduled", url: "/user", mobilePushEligible: false, webPushEligible: true }];
+      fixtures.tokens = [{ id: "mobile", userIdentifier: "9222222222", token: "ExponentPushToken[test]" }];
+      vi.stubGlobal("fetch", vi.fn());
+      await worker.POST(request());
+      expect(fixtures.mark).not.toHaveBeenCalled();
+      expect(fixtures.send).not.toHaveBeenCalled();
+    });
+    it("does not replay unflagged legacy or provider appointment notices into browser push", async () => {
+      fixtures.pending = [{ id: "legacy-owner", recipientIdentifier: "9222222222", title: "New appointment", body: "Booking", url: "/user" }];
+      fixtures.subscriptions = [{ id: "browser", userIdentifier: "9222222222", endpoint: "endpoint", keys: { auth: "auth", p256dh: "key" } }];
+      await worker.POST(request());
+      expect(fixtures.send).not.toHaveBeenCalled();
+    });
+    it("rechecks customer appointment eligibility after cancellation or rescheduling", async () => {
+      fixtures.subscriptions = ["first", "second"].map((id) => ({ id, userIdentifier: "9222222222", endpoint: id, keys: { auth: "auth", p256dh: "key" } }));
+      fixtures.send.mockImplementation(async () => { fixtures.pending = []; return {}; });
+      await worker.POST(request());
+      expect(fixtures.send).toHaveBeenCalledOnce();
+      expect(fixtures.delivered.has("apportion:optout-1:second")).toBe(false);
+    });
     it("does not add native New appointment delivery while retaining browser delivery", async () => {
-      fixtures.pending = [{ id: "new-appointment", recipientIdentifier: "9222222222", title: "New appointment", body: "New booking", url: "/user", mobilePushEligible: false }];
+      fixtures.pending = [{ id: "new-appointment", recipientIdentifier: "9222222222", title: "New appointment", body: "New booking", url: "/user", mobilePushEligible: false, webPushEligible: true }];
       fixtures.tokens = [{ id: "mobile", userIdentifier: "9222222222", token: "ExponentPushToken[test]" }];
       fixtures.subscriptions = [{ id: "browser", userIdentifier: "9222222222", endpoint: "endpoint", keys: { auth: "auth", p256dh: "key" } }];
       const fetchMock = vi.fn();
@@ -218,15 +261,15 @@ describe("durable Apportion notification worker", () => {
       expect(fixtures.send).not.toHaveBeenCalled();
       expect(fixtures.mark).toHaveBeenCalledWith("owner-invitation");
     });
-    function schedule(phase: "confirmed" | "15min" | "start") {
+    function schedule(phase: "confirmed" | "30min" | "1min") {
       fixtures.pending = [];
-      const startsAt = new Date(Date.now() + (phase === "start" ? -1000 : 60_000)).toISOString();
+      const startsAt = new Date(Date.now() + (phase === "30min" ? 30 * 60_000 : 60_000)).toISOString();
       const instanceKey = `poll:instance-2:${startsAt}`;
       fixtures.schedules = [{ kind: "poll", id: "instance-2", startsAt, endsAt: new Date(Date.now() + 3600_000).toISOString(), recipients: ["9222222222"] }];
-      fixtures.intents = [{ key: `browser:${instanceKey}:9222222222:${phase}`, instanceKey, recipientIdentifier: "9222222222", kind: "poll", entityId: "instance-2", phase }];
+      fixtures.intents = [{ key: `browser:${instanceKey}:9222222222:${phase}`, instanceKey, recipientIdentifier: "9222222222", kind: "poll", entityId: "instance-2", phase, dueAt: new Date(Date.now()).toISOString() }];
       fixtures.subscriptions = ["first", "second"].map((id) => ({ id, userIdentifier: "9222222222", endpoint: id, keys: { auth: "auth", p256dh: "key" } }));
     }
-    it.each(["confirmed", "15min", "start"] as const)("delivers private %s payloads and deduplicates per subscription", async (phase) => {
+    it.each(["confirmed", "30min", "1min"] as const)("delivers private %s payloads and deduplicates per subscription", async (phase) => {
       schedule(phase);
       fixtures.send.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error("retry"));
       const failed = await worker.POST(request());
@@ -238,7 +281,7 @@ describe("durable Apportion notification worker", () => {
       expect(JSON.parse(fixtures.send.mock.calls[0][1])).toMatchObject({ body: "Sign in to view your scheduled activity.", data: { url: "/user?section=polls" } });
     });
     it("rechecks cancellations, reassignment, and expired instances before sending", async () => {
-      schedule("start");
+      schedule("1min");
       fixtures.schedules[0].recipients = [];
       await worker.POST(request());
       expect(fixtures.send).not.toHaveBeenCalled();
@@ -247,6 +290,17 @@ describe("durable Apportion notification worker", () => {
       await worker.POST(request());
       expect(fixtures.send).not.toHaveBeenCalled();
       fixtures.schedules = [];
+      await worker.POST(request());
+      expect(fixtures.send).not.toHaveBeenCalled();
+    });
+    it("does not deliver reminders before their due time or at/after start", async () => {
+      schedule("30min");
+      fixtures.intents[0].dueAt = new Date(Date.now() + 1000).toISOString();
+      await worker.POST(request());
+      expect(fixtures.send).not.toHaveBeenCalled();
+      fixtures.intents[0].dueAt = new Date(Date.now() - 1000).toISOString();
+      fixtures.schedules[0].startsAt = new Date(Date.now() - 1000).toISOString();
+      fixtures.schedules[0].id = "different-instance";
       await worker.POST(request());
       expect(fixtures.send).not.toHaveBeenCalled();
     });
@@ -259,7 +313,7 @@ describe("durable Apportion notification worker", () => {
       expect(fixtures.send).toHaveBeenCalledTimes(2);
     });
     it("uses a safe URL for malicious appointment links", async () => {
-      fixtures.pending = [{ id: "unsafe", recipientIdentifier: "9222222222", title: "Private name", body: "Private address", url: "//attacker.invalid" }];
+      fixtures.pending = [{ id: "unsafe", recipientIdentifier: "9222222222", title: "Private name", body: "Private address", url: "//attacker.invalid", webPushEligible: true }];
       fixtures.subscriptions = [{ id: "browser", userIdentifier: "9222222222", endpoint: "endpoint", keys: { auth: "auth", p256dh: "key" } }];
       fixtures.send.mockResolvedValue({});
       await worker.POST(request());

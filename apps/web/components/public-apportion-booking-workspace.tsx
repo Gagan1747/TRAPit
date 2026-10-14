@@ -2,10 +2,10 @@
 
 import { ChevronLeft, ChevronRight, LoaderCircle, Search, Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { findNextApportionRecurringDate, matchApportionIdentity, planApportionDates, resolveApportionDailySchedule } from "@trapit/testing";
+import { findNextApportionRecurringDate, matchApportionIdentity, planApportionDates, resolveApportionDailySchedule, resolveApportionLocationForDate } from "@trapit/testing";
 
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
-import { BrowserPushPrompt, markNotificationPromptOpportunity } from "./browser-push-prompt";
+import { markNotificationPromptOpportunity } from "./browser-push-prompt";
 
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const WEEKDAY_SHORT_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -23,6 +23,7 @@ type BookingPayload = {
       serviceId: string;
       serviceName: string;
       businessName: string;
+      assignedProvider: { name: string; phone: string } | null;
       business: BookingPayload["business"];
       queueCounts: Array<{ count: number; dateKey: string; locationId: string }>;
       slotCounts: Array<{ count: number; locationId: string; startsAt: string }>;
@@ -104,38 +105,8 @@ function resolveEffectiveLocation(
   location: BookingLocation,
   serviceDateKey: string,
 ) {
-  if (!serviceDateKey || business.providerClosedDateKeys.includes(serviceDateKey)) {
-    return null;
-  }
-
-  if (business.appointmentDateOverrides.closedDateKeys.includes(serviceDateKey)) {
-    return null;
-  }
-
-  const dateOverride = business.appointmentDateHoursOverrides.find((entry) => entry.dateKey === serviceDateKey);
-  if (dateOverride) {
-    const hours = dateOverride.locations.find((entry) => entry.locationId === location.id);
-    return hours ? { ...location, ...hours } : null;
-  }
-
-  const date = createDateFromKey(serviceDateKey);
-  const weeklyOverride = business.appointmentWeeklyHoursOverrides.find((entry) => entry.weekday === date.getDay());
-  if (weeklyOverride) {
-    const hours = weeklyOverride.locations.find((entry) => entry.locationId === location.id);
-    return hours ? { ...location, ...hours } : null;
-  }
-
-  if (location.dailyHours) {
-    const hours = resolveApportionDailySchedule({ dailyHours: location.dailyHours })[date.getDay()];
-    if (hours.workingHours || hours.workingHoursSecondWindow) {
-      return { ...location, ...hours };
-    }
-  }
-
-  const isWorkingDay = location.dailyHours
-    ? false
-    : parseWorkingDays(location.workingDays).has(WEEKDAY_NAMES[date.getDay()]);
-  return isWorkingDay || business.appointmentDateOverrides.openedDateKeys.includes(serviceDateKey) ? location : null;
+  return resolveApportionLocationForDate(location, serviceDateKey,
+    [...business.providerClosedDateKeys, ...business.appointmentDateOverrides.closedDateKeys]);
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -541,6 +512,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
     return () => { window.clearInterval(interval); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
   }, []);
   const bookingPendingRef = useRef(false);
+  const bookingRequestVersion = useRef(0);
   const lookupPendingRef = useRef(false);
   const lookupContextRef = useRef("");
   const lookupVersionRef = useRef(0);
@@ -636,6 +608,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
   }
 
   async function loadBookingPage(ownerIdentifier = selectedOwnerIdentifier, serviceId = selectedServiceId, preserveLocation = false, preserveFeedback = false, preferredLocationId?: string) {
+    const version = ++bookingRequestVersion.current;
     setIsLoading(true);
 
     try {
@@ -645,6 +618,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
       const nextPayload = await readJson<BookingPayload>(
         await fetch(`/api/apportion/${encodeURIComponent(shareCode)}${query.size ? `?${query}` : ""}`),
       );
+      if (version !== bookingRequestVersion.current) return;
       setPayload(nextPayload);
       setSelectedServiceId(nextPayload.serviceId);
       setSelectedOwnerIdentifier(nextPayload.businessOwnerIdentifier);
@@ -668,9 +642,9 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
       setWeekOffset(0);
       if (!preserveFeedback) setFeedback(null);
     } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Unable to load this booking page.");
+      if (version === bookingRequestVersion.current) setFeedback(error instanceof Error ? error.message : "Unable to load this booking page.");
     } finally {
-      setIsLoading(false);
+      if (version === bookingRequestVersion.current) setIsLoading(false);
     }
   }
 
@@ -976,11 +950,6 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
   const recurringAllowed = isTargeted && payload.business.recurringBookingsEnabled;
   const recurringWorkingWeekdays = WEEKDAY_KEYS.filter((_, weekday) => {
     if (!selectedLocation) return false;
-    const weeklyOverride = payload.business.appointmentWeeklyHoursOverrides.find((entry) => entry.weekday === weekday);
-    if (weeklyOverride) {
-      const hours = weeklyOverride.locations.find((entry) => entry.locationId === selectedLocation.id);
-      return Boolean(hours?.workingHours || hours?.workingHoursSecondWindow);
-    }
     if (selectedLocation.dailyHours) {
       const hours = resolveApportionDailySchedule({ dailyHours: selectedLocation.dailyHours })[weekday];
       return Boolean(hours.workingHours || hours.workingHoursSecondWindow);
@@ -1023,7 +992,6 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
 
   return (
     <div className="workspace-card-stack">
-      <BrowserPushPrompt publicKey={process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY ?? null} />
       <section className="workspace-card apportion-booking-hero">
         <div className="apportion-booking-hero-row">
           <div className="apportion-business-image-slot left-slot">
@@ -1149,58 +1117,6 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                 </> : null}
               </div>
             ) : null}
-            {addressServices.length > 1 ? (
-              <div className="field">
-                <label htmlFor="apportion-service">Service</label>
-                {addressServices.length > 4 ? (
-                  <select
-                    className="select-field"
-                    id="apportion-service"
-                    value={`${selectedOwnerIdentifier}::${selectedServiceId}`}
-                    onChange={(event) => {
-                      const service = addressServices.find((entry) => `${entry.ownerIdentifier}::${entry.serviceId}` === event.target.value);
-                      if (!service) return;
-                      setSelectedOwnerIdentifier(service.ownerIdentifier);
-                      setSelectedServiceId(service.serviceId);
-                      setSelectedLocationId("");
-                      setFeedback(null);
-                      void loadBookingPage(service.ownerIdentifier, service.serviceId, false, false, selectedLocationId);
-                    }}
-                  >
-                    {addressServices.map((service) => (
-                      <option key={`${service.ownerIdentifier}::${service.serviceId}`} value={`${service.ownerIdentifier}::${service.serviceId}`}>
-                        {service.serviceName} · {service.businessName}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <div className="apportion-service-choices" role="group" aria-label="Choose a service">
-                    {addressServices.map((service) => {
-                      const isSelected = service.ownerIdentifier === selectedOwnerIdentifier && service.serviceId === selectedServiceId;
-                      return (
-                        <button
-                          aria-pressed={isSelected}
-                          className={`apportion-service-choice${isSelected ? " is-selected" : ""}`}
-                          key={`${service.ownerIdentifier}::${service.serviceId}`}
-                          type="button"
-                          onClick={() => {
-                            if (isSelected) return;
-                            setSelectedOwnerIdentifier(service.ownerIdentifier);
-                            setSelectedServiceId(service.serviceId);
-                            setFeedback(null);
-                            void loadBookingPage(service.ownerIdentifier, service.serviceId, false, false, selectedLocationId);
-                          }}
-                        >
-                          <strong>{service.serviceName}</strong>
-                          <span>{service.businessName}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            ) : null}
-
             <div className="field apportion-location-selector">
               <label>Business address</label>
               <div className="apportion-location-cards">
@@ -1239,6 +1155,46 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                 })}
               </div>
             </div>
+
+            {addressServices.length > 0 ? (
+              <div className="field apportion-services-section">
+                <label htmlFor="apportion-service">Service</label>
+                {addressServices.length > 4 ? (
+                  <select className="select-field" id="apportion-service" value={`${selectedOwnerIdentifier}::${selectedServiceId}`}
+                    onChange={(event) => {
+                      const service = addressServices.find((entry) => `${entry.ownerIdentifier}::${entry.serviceId}` === event.target.value);
+                      if (!service) return;
+                      setFeedback(null);
+                      void loadBookingPage(service.ownerIdentifier, service.serviceId, false, false, selectedLocationId);
+                    }}>
+                    {addressServices.map((service) => (
+                      <option key={`${service.ownerIdentifier}::${service.serviceId}`} value={`${service.ownerIdentifier}::${service.serviceId}`}>
+                        {service.serviceName} · {service.assignedProvider
+                          ? `${service.assignedProvider.name} · ${formatPhoneNumberForDisplay(service.assignedProvider.phone, { showFullPhoneNumber: true })}`
+                          : service.businessName}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="apportion-service-choices" role="group" aria-label="Choose a service">
+                    {addressServices.map((service) => {
+                      const isSelected = service.ownerIdentifier === selectedOwnerIdentifier && service.serviceId === selectedServiceId;
+                      return <button aria-pressed={isSelected} className={`apportion-service-choice${isSelected ? " is-selected" : ""}`}
+                        key={`${service.ownerIdentifier}::${service.serviceId}`} type="button" disabled={isLoading}
+                        onClick={() => {
+                          if (!isSelected) void loadBookingPage(service.ownerIdentifier, service.serviceId, false, false, selectedLocationId);
+                        }}>
+                        <strong>{service.serviceName}</strong>
+                        {service.assignedProvider ? <>
+                          <span>{service.assignedProvider.name}</span>
+                          <span>{formatPhoneNumberForDisplay(service.assignedProvider.phone, { showFullPhoneNumber: true })}</span>
+                        </> : <span>{service.businessName}</span>}
+                      </button>;
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : null}
 
             {selectedLocation && !recurrenceActive ? (
               <div className="apportion-week-calendar-shell">
@@ -1296,6 +1252,9 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                       >
                         <small>{WEEKDAY_SHORT_NAMES[date.getDay()]}</small>
                         <strong>{date.getDate()}</strong>
+                        <small className="apportion-calendar-hours">{effectiveDateLocation
+                          ? [effectiveDateLocation.workingHours, effectiveDateLocation.workingHoursSecondWindow].filter(Boolean).join(" / ")
+                          : "Closed"}</small>
                         {isSameDay(date, new Date()) ? <small>Today</small> : null}
                       </button>
                     );

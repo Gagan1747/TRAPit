@@ -1592,6 +1592,13 @@ main {
   margin: -2px 0 8px;
 }
 
+.apportion-calendar-day .apportion-calendar-hours {
+  font-size: 0.62rem;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  line-height: 1.3;
+}
+
 .apportion-queue-estimate {
   margin: 0;
   color: var(--ink);

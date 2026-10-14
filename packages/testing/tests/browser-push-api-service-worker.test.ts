@@ -21,7 +21,7 @@ beforeEach(() => {
   fixtures.upsert.mockResolvedValue({ id: "subscription" });
   fixtures.remove.mockResolvedValue(undefined);
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 describe("authenticated browser push enrollment", () => {
   it("derives ownership only from the authenticated session, ignoring submitted account identifiers", async () => {
@@ -41,6 +41,45 @@ describe("authenticated browser push enrollment", () => {
     expect((await api.DELETE(request(subscription, "DELETE", "https://attacker.invalid"))).status).toBe(403);
     expect(fixtures.upsert).not.toHaveBeenCalled();
     expect(fixtures.remove).not.toHaveBeenCalled();
+  });
+  it("accepts the configured public origin behind Nginx without trusting forwarded origins", async () => {
+    vi.stubEnv("EXPO_PUBLIC_API_BASE_URL", "https://trapit.in");
+    const proxied = (origin: string) => new Request("http://localhost:3000/api/user/web-push-subscriptions", {
+      method: "POST", headers: { origin, "Content-Type": "application/json", "x-forwarded-host": "attacker.invalid", "x-forwarded-proto": "https" },
+      body: JSON.stringify(subscription),
+    });
+    expect((await api.POST(proxied("https://trapit.in"))).status).toBe(200);
+    expect((await api.POST(proxied("https://www.trapit.in"))).status).toBe(200);
+    expect((await api.POST(proxied("https://attacker.invalid"))).status).toBe(403);
+    expect((await api.POST(proxied("http://www.trapit.in"))).status).toBe(403);
+    expect((await api.POST(proxied("https://www.trapit.in:444"))).status).toBe(403);
+    expect((await api.POST(proxied("https://evil.trapit.in"))).status).toBe(403);
+    expect((await api.POST(proxied("https://www.trapit.in.attacker.invalid"))).status).toBe(403);
+    expect((await api.POST(proxied("http://localhost:3000"))).status).toBe(403);
+    expect((await api.DELETE(new Request("http://localhost:3000/api/user/web-push-subscriptions", {
+      method: "DELETE", headers: { origin: "https://trapit.in" }, body: JSON.stringify(subscription),
+    }))).status).toBe(200);
+    expect((await api.DELETE(new Request("http://localhost:3000/api/user/web-push-subscriptions", {
+      method: "DELETE", headers: { origin: "https://www.trapit.in" }, body: JSON.stringify(subscription),
+    }))).status).toBe(200);
+  });
+  it("allows the apex counterpart when production is configured with www, but never aliases another deployment", async () => {
+    const proxied = (origin: string) => new Request("http://localhost:3000/api/user/web-push-subscriptions", {
+      method: "POST", headers: { origin }, body: JSON.stringify(subscription),
+    });
+    vi.stubEnv("EXPO_PUBLIC_API_BASE_URL", "https://www.trapit.in");
+    expect((await api.POST(proxied("https://trapit.in"))).status).toBe(200);
+    expect((await api.POST(proxied("https://www.trapit.in"))).status).toBe(200);
+    vi.stubEnv("EXPO_PUBLIC_API_BASE_URL", "https://preview.example.com");
+    expect((await api.POST(proxied("https://trapit.in"))).status).toBe(403);
+    expect((await api.POST(proxied("https://www.trapit.in"))).status).toBe(403);
+    expect((await api.POST(proxied("https://preview.example.com"))).status).toBe(200);
+  });
+  it("rejects cross-site fetch metadata even when Origin is omitted", async () => {
+    const response = await api.POST(new Request("https://trapit.in/api/user/web-push-subscriptions", {
+      method: "POST", headers: { "sec-fetch-site": "cross-site" }, body: JSON.stringify(subscription),
+    }));
+    expect(response.status).toBe(403);
   });
   it.each(["http://fcm.googleapis.com/push/a", "https://127.0.0.1/push", "https://fcm.googleapis.com.attacker.invalid/push"])("rejects unsafe push endpoint %s", async (endpoint) => {
     expect((await api.POST(request({ ...subscription, endpoint }))).status).toBe(400);
@@ -65,14 +104,25 @@ describe("private and same-origin service worker notifications", () => {
     const handlers = new Map<string, (event: unknown) => void>();
     const showNotification = vi.fn().mockResolvedValue(undefined);
     const openWindow = vi.fn().mockResolvedValue(undefined);
+    const skipWaiting = vi.fn().mockResolvedValue(undefined);
+    const claim = vi.fn().mockResolvedValue(undefined);
     const source = await readFile(path.resolve("..", "..", "apps", "web", "public", "sw.js"), "utf8");
     vm.runInNewContext(source, {
-      self: { location: { origin: "https://trapit.in" }, registration: { showNotification }, addEventListener: (name: string, callback: (event: unknown) => void) => handlers.set(name, callback) },
-      clients: { matchAll: async () => [], openWindow },
+      self: { skipWaiting, location: { origin: "https://trapit.in" }, registration: { showNotification }, addEventListener: (name: string, callback: (event: unknown) => void) => handlers.set(name, callback) },
+      clients: { claim, matchAll: async () => [], openWindow },
       URL, Date,
     });
-    return { handlers, showNotification, openWindow };
+    return { handlers, showNotification, openWindow, skipWaiting, claim };
   }
+  it("activates the notification worker and claims dashboard clients immediately", async () => {
+    const worker = await harness();
+    const waitUntil = vi.fn();
+    worker.handlers.get("install")!({ waitUntil });
+    worker.handlers.get("activate")!({ waitUntil });
+    expect(worker.skipWaiting).toHaveBeenCalledOnce();
+    expect(worker.claim).toHaveBeenCalledOnce();
+    expect(waitUntil).toHaveBeenCalledTimes(2);
+  });
   it("never displays private payload text or titles and safely handles malformed payloads", async () => {
     const worker = await harness();
     const waitUntil = vi.fn();

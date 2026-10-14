@@ -1,14 +1,14 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { normalizeWorkspaceBranding } from "../src/quiz";
 import { matchApportionIdentity } from "../src/apportion-identity";
+import { resolveApportionDailySchedule } from "../src/apportion";
 import type { ApportionBusinessContext } from "../../../apps/web/lib/apportion-directory";
 
 const fixtures = vi.hoisted(() => ({ context: null as import("../../../apps/web/lib/apportion-directory").ApportionBusinessContext | null, getContext: vi.fn() }));
 vi.mock("server-only", () => ({}));
-vi.mock("../../../apps/web/lib/apportion-directory", () => ({ getApportionBusinessContext: fixtures.getContext, getApportionBusinessContexts: async (owners: string[]) => new Map(await Promise.all([...new Set(owners)].map(async (owner) => [owner, await fixtures.getContext(owner)] as const))) }));
+vi.mock("../../../apps/web/lib/apportion-directory", () => ({ resolveApportionProviderContact: async (identifier: string) => ({ name: "Therapist", phone: identifier }), getApportionBusinessContext: fixtures.getContext, getApportionBusinessContexts: async (owners: string[]) => new Map(await Promise.all([...new Set(owners)].map(async (owner) => [owner, await fixtures.getContext(owner)] as const))) }));
 const OWNER = "+919111111111";
 const STAFF = "+919222222222";
 const TARGET = "+919444444444";
@@ -35,13 +35,13 @@ function context(): ApportionBusinessContext {
 const occurrence = (date = "2026-10-05") => ({ serviceDateKey: date, startsAt: `${date}T04:00:00.000Z` });
 const input = (dates = ["2026-10-05"]) => ({ actorIdentifier: "9111111111", ownerIdentifier: OWNER, requesterIdentifier: TARGET,
   requesterName: "Customer", requesterPhone: TARGET, serviceId: "therapy", locationId: "location-1", notes: "Initial note", occurrences: dates.map((date) => occurrence(date)) });
-const respond = (id: string, action: "accept" | "decline" | "cancel" = "accept", actorIdentifier = "9444444444") => store.respondToApportionInvitation({ invitationId: id, action, actorIdentifier });
+const respond = (id: string, action: "accept" | "decline" | "cancel" = "accept", actorIdentifier = "9444444444") => store.respondToApportionInvitation({ invitationId: id, action, actorIdentifier, reason: action === "cancel" ? "Provider unavailable" : undefined });
 async function persisted() { return JSON.parse(await readFile(storePath, "utf8")); }
 async function book(date = "2026-10-05", requesterIdentifier = OTHER) {
   return store.createApportionAppointment({ ownerIdentifier: OWNER, requesterIdentifier, requesterName: "Other", serviceId: "therapy", locationId: "location-1", locationName: "Untrusted", ...occurrence(date) });
 }
 beforeAll(async () => {
-  directory = await mkdtemp(path.join(tmpdir(), "trapit-invitations-"));
+  directory = await mkdtemp(path.join(process.cwd(), ".trapit-invitations-"));
   storePath = path.join(directory, "apportion-appointments.json");
   vi.stubEnv("TRAPIT_DATA_DIR", directory);
   store = await import("../../../apps/web/lib/apportion-store");
@@ -57,6 +57,32 @@ afterEach(() => vi.useRealTimers());
 afterAll(async () => { vi.unstubAllEnvs(); await rm(directory, { recursive: true, force: true }); });
 
 describe("Apportion invitations", () => {
+  it("preserves owner/customer access and booked details after business deactivation", async () => {
+    const appointment = await book();
+    fixtures.context = null;
+    expect(await store.resolveApportionAppointmentAccess(appointment, OWNER)).toMatchObject({ canManage: true, canView: true });
+    expect(await store.resolveApportionAppointmentAccess(appointment, appointment.requesterIdentifier)).toMatchObject({ isRequester: true, canView: true });
+    await store.updateApportionAppointment({ appointmentId: appointment.id, action: "cancel", actorIdentifier: OWNER, reason: "Business is closed" });
+    const saved = (await persisted()).appointments[0];
+    expect(saved).toMatchObject({
+      id: appointment.id, startsAt: appointment.startsAt, locationAddress: appointment.locationAddress,
+      serviceName: appointment.serviceName, currentStatus: "cancelled",
+    });
+    expect(saved.messages.at(-1)).toMatchObject({ authorIdentifier: OWNER, body: "Cancellation reason: Business is closed" });
+  });
+  it("requires a reason and retains pending-series notes with one authored cancellation message on retry", async () => {
+    const invitation = await store.createApportionInvitation(input(["2026-10-05", "2026-10-06"]));
+    const before = await persisted();
+    await expect(store.respondToApportionInvitation({ actorIdentifier: OWNER, invitationId: invitation.id, action: "cancel", reason: " " })).rejects.toThrow("cancellation reason");
+    expect(await persisted()).toEqual(before);
+    await respond(invitation.id, "cancel", OWNER);
+    await respond(invitation.id, "cancel", OWNER);
+    const cancelled = (await persisted()).invitations[0];
+    expect(cancelled).toMatchObject({ status: "cancelled", notes: "Initial note", canceledByIdentifier: OWNER });
+    expect(cancelled.messages).toHaveLength(1);
+    expect(cancelled.messages[0]).toMatchObject({ authorIdentifier: OWNER, body: "Cancellation reason: Provider unavailable" });
+    expect(cancelled.appointmentIds).toEqual([]);
+  });
   it("acknowledges displayed messages per actor without clearing later arrivals or exposing cursors", async () => {
     const invitation = await store.createApportionInvitation(input());
     await respond(invitation.id);
@@ -206,7 +232,9 @@ describe("Apportion invitations", () => {
   it("rolls back every queue occurrence when a later current window cannot fit", async () => {
     fixtures.context!.providerSettings[STAFF].justAddToList = true;
     const invitation = await store.createApportionInvitation(input(["2026-10-05", "2026-10-06"]));
-    fixtures.context!.branding.appointmentDateHoursOverrides = [{ dateKey: "2026-10-06", locations: [{ locationId: "location-1", workingHours: "9:00 AM - 9:20 AM", workingHoursSecondWindow: "" }] }];
+    const location = fixtures.context!.branding.appointmentLocations![0];
+    location.dailyHours = resolveApportionDailySchedule(location).map((hours) => hours.weekday === 2
+      ? { ...hours, workingHours: "9:00 AM - 9:20 AM" } : hours);
     const before = await persisted();
     await expect(respond(invitation.id)).rejects.toThrow("No queue appointment fits");
     expect(await persisted()).toEqual(before);
@@ -479,13 +507,16 @@ describe("Apportion invitations", () => {
   it("aggregates recipient notices into the existing durable outbox and acknowledges once", async () => {
     await store.createApportionInvitation(input());
     const outbox = await store.listApportionPendingNotifications();
-    expect(outbox).toHaveLength(2);
+    expect(outbox.filter((notice) => !notice.webPushEligible)).toHaveLength(2);
+    expect(outbox.filter((notice) => notice.webPushEligible)).toHaveLength(1);
     expect(outbox.filter((notice) => notice.webPushEligible).map((notice) => notice.recipientIdentifier)).toEqual([TARGET]);
     expect(await store.listApportionNotificationsForActor(TARGET)).toHaveLength(1);
     await store.markApportionNotificationDelivered(outbox[0].id);
     const saved = await persisted();
     await store.markApportionNotificationDelivered(outbox[0].id);
     expect(await persisted()).toEqual(saved);
-    expect(await store.listApportionPendingNotifications()).toHaveLength(1);
+    const remaining = await store.listApportionPendingNotifications();
+    expect(remaining.filter((notice) => !notice.webPushEligible)).toHaveLength(1);
+    expect(remaining.filter((notice) => notice.webPushEligible)).toHaveLength(1);
   });
 });

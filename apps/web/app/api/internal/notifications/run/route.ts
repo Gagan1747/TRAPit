@@ -178,13 +178,19 @@ async function runNotificationWorker(request: Request) {
     const mobileEligible = !("mobilePushEligible" in notification && notification.mobilePushEligible === false);
     const matchingTokens = mobileEligible ? allMatchingTokens : [];
     const allMatchingSubscriptions = webPushSubscriptions.filter((entry) => entry.userIdentifier && participantIdentifiersMatch(entry.userIdentifier, notification.recipientIdentifier));
-    const browserEligible = !("webPushEligible" in notification && notification.webPushEligible === false);
+    // Appointment browser delivery is opt-in from the customer-only outbox.
+    // Legacy/provider/schedule notices remain native/in-app, never browser alerts.
+    const browserEligible = "webPushEligible" in notification && notification.webPushEligible === true;
     const matchingSubscriptions = browserEligible ? allMatchingSubscriptions : [];
     const deliveryKey = `apportion:${notification.id}`;
     let fullyDelivered = matchingTokens.length + matchingSubscriptions.length > 0
       || (!browserEligible && allMatchingSubscriptions.length > 0)
       || (!mobileEligible && allMatchingTokens.length > 0)
       || (!mobileEligible && !browserEligible);
+    if (notification.id.startsWith("apportion-browser:")) {
+      // Native tokens are never evidence of delivery for a browser-only intent.
+      fullyDelivered = matchingSubscriptions.length > 0;
+    }
     for (const token of matchingTokens) {
       if (await hasNotificationDelivery(deliveryKey, token.id)) continue;
       try {
@@ -203,7 +209,10 @@ async function runNotificationWorker(request: Request) {
       try {
         const current = (await listWebPushSubscriptions()).find((entry) => entry.id === subscription.id);
         if (!current || current.userSub !== subscription.userSub || current.userIdentifier !== subscription.userIdentifier) { fullyDelivered = false; continue; }
-        await sendWebPushNotification({ endpoint: subscription.endpoint, keys: subscription.keys }, { title: "TRAPit.in appointment update", body: "An appointment update is available. Sign in to view it.", data: { kind: "apportion", url: safeNotificationUrl(notification.url), deliveryKey } });
+        const pending = (await listApportionPendingNotifications()).find((entry) => entry.id === notification.id
+          && entry.webPushEligible === true && participantIdentifiersMatch(entry.recipientIdentifier, notification.recipientIdentifier));
+        if (!pending) continue;
+        await sendWebPushNotification({ endpoint: current.endpoint, keys: current.keys }, { title: "TRAPit.in appointment update", body: "An appointment update is available. Sign in to view it.", data: { kind: "apportion", url: safeNotificationUrl(pending.url), deliveryKey } });
         await recordNotificationDelivery(deliveryKey, subscription.id);
         apportionSent += 1;
       } catch (error) {
@@ -297,9 +306,9 @@ async function runNotificationWorker(request: Request) {
         const now = Date.now();
         if (!schedule || Date.parse(schedule.endsAt) <= now
           || !schedule.recipients.some((recipient) => participantIdentifiersMatch(recipient, intent.recipientIdentifier))
-          || (intent.phase === "15min" && (now >= Date.parse(schedule.startsAt) || now < Date.parse(schedule.startsAt) - REMINDER_WINDOW_MS))
-          || (intent.phase === "start" && now < Date.parse(schedule.startsAt))) continue;
-        const eventLabel = intent.phase === "confirmed" ? "scheduling confirmed" : intent.phase === "start" ? "starting now" : "starting soon";
+          || now < Date.parse(intent.dueAt)
+          || (intent.phase !== "confirmed" && now >= Date.parse(schedule.startsAt))) continue;
+        const eventLabel = intent.phase === "confirmed" ? "scheduling confirmed" : "starting soon";
         await sendWebPushNotification({ endpoint: current.endpoint, keys: current.keys }, {
           title: `TRAPit.in ${intent.kind} ${eventLabel}`,
           body: "Sign in to view your scheduled activity.",
