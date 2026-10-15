@@ -47,6 +47,7 @@ import { usePathname } from "next/navigation";
 import { ArrowLeft, ArrowRight, Check, Copy, ExternalLink, LoaderCircle, QrCode, X } from "lucide-react";
 import QRCode from "qrcode";
 import { readJsonResponse } from "../lib/read-json-response";
+import { createRefreshQueue } from "../lib/refresh-queue";
 import { createBusinessBookingQrCode } from "../lib/business-booking-qr";
 
 import { formatShortDate, formatShortDateTime, formatShortDateTimeIst } from "../lib/date-format";
@@ -1936,6 +1937,7 @@ export function AdminQuestionWorkspace({
   const [isSavingBusiness, setIsSavingBusiness] = useState(false);
   const [isBrandingDraftDirty, setIsBrandingDraftDirty] = useState(false);
   const businessSavePendingRef = useRef(false);
+  const workspaceRefreshQueue = useRef(createRefreshQueue());
   const apportionUpdatePendingRef = useRef(false);
   const participantAnswersRef = useRef<Record<string, number | undefined>>({});
   const participantIsSubmittingRef = useRef(false);
@@ -1991,7 +1993,11 @@ export function AdminQuestionWorkspace({
     setIsBrandingDraftDirty(true);
   }
 
-  async function loadWorkspace(options?: { silent?: boolean }) {
+  function loadWorkspace(options?: { silent?: boolean }) {
+    return workspaceRefreshQueue.current(() => loadWorkspaceData(options));
+  }
+
+  async function loadWorkspaceData(options?: { silent?: boolean }) {
     if (!options?.silent) {
       setIsLoading(true);
     }
@@ -2023,15 +2029,15 @@ export function AdminQuestionWorkspace({
 
       const [userDashboardPayload, userParticipantsPayload, categorySnapshotPayload, categoryManagementPayload] =
         await Promise.all([
-          readJson<UserDashboardResponse>(await fetch("/api/user/dashboard")),
+          fetch("/api/user/dashboard").then(readJson<UserDashboardResponse>),
           currentActorRole === "user"
-            ? readJson<ParticipantsResponse>(await fetch("/api/admin/participants"))
+            ? fetch("/api/admin/participants").then(readJson<ParticipantsResponse>)
             : Promise.resolve<ParticipantsResponse | null>(null),
           currentActorRole === "user"
-            ? readJson<UserCategorySnapshotResponse>(await fetch("/api/user/category"))
+            ? fetch("/api/user/category").then(readJson<UserCategorySnapshotResponse>)
             : Promise.resolve<UserCategorySnapshotResponse | null>(null),
           isSuperAdmin
-            ? readJson<SuperAdminCategoryManagementResponse>(await fetch("/api/admin/user-categories"))
+            ? fetch("/api/admin/user-categories").then(readJson<SuperAdminCategoryManagementResponse>)
             : Promise.resolve<SuperAdminCategoryManagementResponse | null>(null),
         ]);
 
@@ -2046,9 +2052,9 @@ export function AdminQuestionWorkspace({
 
       if (currentActorRole === "user") {
         const [questionsPayload, poolsPayload, testsPayload] = await Promise.all([
-          readJson<QuestionApiResponse>(await fetch("/api/admin/questions")),
-          readJson<PoolsResponse>(await fetch("/api/admin/pools")),
-          readJson<ScheduledTestsResponse>(await fetch("/api/admin/tests")),
+          fetch("/api/admin/questions").then(readJson<QuestionApiResponse>),
+          fetch("/api/admin/pools").then(readJson<PoolsResponse>),
+          fetch("/api/admin/tests").then(readJson<ScheduledTestsResponse>),
         ]);
 
         setQuestions(questionsPayload.questions);
@@ -2068,12 +2074,12 @@ export function AdminQuestionWorkspace({
 
       const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, pollsPayload] =
         await Promise.all([
-          readJson<QuestionApiResponse>(await fetch("/api/admin/questions")),
-          readJson<PoolsResponse>(await fetch("/api/admin/pools")),
-          readJson<ParticipantsResponse>(await fetch("/api/admin/participants")),
-          readJson<ScheduledTestsResponse>(await fetch("/api/admin/tests")),
-          readJson<HistoryResponse>(await fetch("/api/admin/history")),
-          readJson<PollsResponse>(await fetch("/api/admin/polls")),
+          fetch("/api/admin/questions").then(readJson<QuestionApiResponse>),
+          fetch("/api/admin/pools").then(readJson<PoolsResponse>),
+          fetch("/api/admin/participants").then(readJson<ParticipantsResponse>),
+          fetch("/api/admin/tests").then(readJson<ScheduledTestsResponse>),
+          fetch("/api/admin/history").then(readJson<HistoryResponse>),
+          fetch("/api/admin/polls").then(readJson<PollsResponse>),
         ]);
 
       setQuestions(questionsPayload.questions);
@@ -2116,7 +2122,9 @@ export function AdminQuestionWorkspace({
     let intervalId: number | null = null;
     const source = new EventSource("/api/internal/events");
 
-    source.onmessage = () => {
+    source.onmessage = (event) => {
+      const payload = JSON.parse(event.data) as { initial?: boolean };
+      if (payload.initial) return;
       void loadWorkspace({ silent: true });
     };
 

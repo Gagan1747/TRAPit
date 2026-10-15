@@ -10,6 +10,7 @@ import { getWebSession } from "../../../../lib/session";
 import { getWorkspaceBrandingByAppointmentShareCode, listParticipants } from "../../../../lib/testing-store";
 import { resolveAppointmentLocationSchedule } from "../../../../lib/appointment-locations";
 import { assertApportionHoursWithinMaster, getApportionBusinessContext, getApportionBusinessContexts, listApportionDirectLinkServices } from "../../../../lib/apportion-directory";
+import { getBookingImageResponse, getBookingImageUrls, getBrandingImages } from "../../../../lib/apportion-images";
 
 function canInviteForOwner(viewerIdentifier: string | null, linkedOwnerIdentifier: string, ownerIdentifier: string) {
   return Boolean(viewerIdentifier && matchApportionIdentity(viewerIdentifier, ownerIdentifier)
@@ -371,6 +372,11 @@ export async function GET(
   }
 
   const url = new URL(request.url);
+  if (url.searchParams.has("image")) {
+    return getBookingImageResponse(request, linkedBusiness.branding);
+  }
+  const compact = url.searchParams.get("compact") === "1";
+  const emptyImages = { imageDataUrl: null, profileImageDataUrl: null, promotionalImageDataUrls: [] };
   const directServices = await listApportionDirectLinkServices(linkedBusiness.ownerIdentifier);
   const requestedOwnerIdentifier = url.searchParams.get("ownerIdentifier")?.trim() ?? "";
   const requestedServiceId = url.searchParams.get("serviceId")?.trim() ?? "";
@@ -458,13 +464,11 @@ export async function GET(
               ...entry,
               locations: entry.locations.filter((hours) => hours.locationId === location.id),
             })).filter((entry) => entry.locations.length),
-            imageDataUrl: serviceBusiness.branding.imageDataUrl,
+            ...(compact ? emptyImages : getBrandingImages(serviceBusiness.branding)),
             justAddToList: serviceBusiness.branding.justAddToList === true,
             locations: [location],
             name: serviceBusiness.branding.instituteName,
             ownerIdentifier: serviceBusiness.ownerIdentifier,
-            profileImageDataUrl: serviceBusiness.branding.profileImageDataUrl,
-            promotionalImageDataUrls: serviceBusiness.branding.promotionalImageDataUrls ?? [],
             canInvite: canInviteForOwner(viewerIdentifier, linkedBusiness.ownerIdentifier, serviceBusiness.ownerIdentifier),
             recurringBookingLimit: canInviteForOwner(viewerIdentifier, linkedBusiness.ownerIdentifier, serviceBusiness.ownerIdentifier) ? 6 : null,
             recurringBookingsEnabled: canInviteForOwner(viewerIdentifier, linkedBusiness.ownerIdentifier, serviceBusiness.ownerIdentifier),
@@ -532,9 +536,7 @@ export async function GET(
       name: linkedBusiness.branding.instituteName,
       address: linkedBusiness.branding.address,
       ownerIdentifier: linkedBusiness.ownerIdentifier,
-      imageDataUrl: linkedBusiness.branding.imageDataUrl,
-      profileImageDataUrl: linkedBusiness.branding.profileImageDataUrl,
-      promotionalImageDataUrls: linkedBusiness.branding.promotionalImageDataUrls ?? [],
+      ...(compact ? getBookingImageUrls(linkedBusiness.branding, params.shareCode) : getBrandingImages(linkedBusiness.branding)),
     },
     business: {
       serviceId,
@@ -546,13 +548,11 @@ export async function GET(
       appointmentNotesPrompt: business.branding.appointmentNotesPrompt,
       appointmentsPerSlot: business.branding.appointmentsPerSlot ?? 1,
       appointmentWeeklyHoursOverrides: business.branding.appointmentWeeklyHoursOverrides ?? [],
-      imageDataUrl: business.branding.imageDataUrl,
+      ...(compact ? emptyImages : getBrandingImages(business.branding)),
       justAddToList: business.branding.justAddToList === true,
       locations: business.branding.appointmentLocations ?? [],
       name: business.branding.instituteName,
       ownerIdentifier: business.ownerIdentifier,
-      profileImageDataUrl: business.branding.profileImageDataUrl,
-      promotionalImageDataUrls: business.branding.promotionalImageDataUrls ?? [],
       canInvite,
       recurringBookingLimit: canInvite ? 6 : null,
       recurringBookingsEnabled: canInvite,

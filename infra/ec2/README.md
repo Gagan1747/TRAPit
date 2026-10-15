@@ -74,6 +74,39 @@ The recovery command creates a `.pre-pool-recovery-*.json` rollback copy beside 
 4. Certbot issues a Let's Encrypt certificate.
 5. PM2 keeps the Node.js process running.
 
+## Page loading and performance verification
+
+The web booking page requests `/api/apportion/<shareCode>?compact=1`. This keeps
+booking metadata separate from branding images instead of repeating base64
+images for every service and address. Images are fetched through the same
+authenticated booking API using content-versioned URLs and private browser
+caching. Replacing an image changes its URL. Existing stored branding and API
+clients that do not request compact mode keep their original format.
+
+Workspace refreshes are serialized with one latest trailing refresh, so realtime
+events cannot start overlapping full dashboard request batches. Independent
+requests within a batch run in parallel. The event stream disables Nginx response
+buffering and cleans up subscriptions on timeout, disconnect, or cancellation.
+
+After deploying, verify in browser Developer Tools:
+
+1. Booking metadata contains no `data:image/` strings. With four services and two
+   addresses, the regression fixture must stay below 30 KB even with a large
+   promotional image.
+2. Branding images load separately and are reused from browser cache when switching
+   services. Changing a promotional image generates a new URL.
+3. Rapid service/address changes preserve the final selection and availability.
+   Superseded metadata requests may be cancelled intentionally.
+4. Dashboard API requests within each loading stage start together; realtime
+   events do not produce overlapping full refresh batches.
+5. Booking, invitation, permissions, Business Panel saves, and live game updates
+   still work. Check for HTTP/2 stream errors and correlate any remaining failures
+   with Nginx/application logs and EC2 metrics.
+
+These code changes do not resize EBS or change the live Nginx configuration.
+An HTTP/2 protocol error still requires production verification; large responses
+and duplicate loads alone do not prove its underlying transport cause.
+
 ## 1. Create the EC2 instance
 
 Use these baseline choices:

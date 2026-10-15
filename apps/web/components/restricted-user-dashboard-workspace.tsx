@@ -9,8 +9,9 @@ import {
   type TestHistoryEntry,
   type TestLeaderboardEntry,
 } from "@trapit/testing";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { createRefreshQueue } from "../lib/refresh-queue";
 import { formatShortDateTime } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { AnswerStatusIndicator } from "./answer-status-indicator";
@@ -146,6 +147,8 @@ export function RestrictedUserDashboardWorkspace({
   previousSignInAt,
 }: RestrictedUserDashboardWorkspaceProps) {
   const [availablePolls, setAvailablePolls] = useState<ScheduledPoll[]>([]);
+  const dashboardRefreshQueue = useRef(createRefreshQueue());
+  const loadedDashboardIdentifier = useRef<string | null>(null);
   const [availableGames, setAvailableGames] = useState<AvailableGameSummary[]>([]);
   const [availableTests, setAvailableTests] = useState<AvailableTest[]>([]);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -290,8 +293,13 @@ export function RestrictedUserDashboardWorkspace({
     return poll.status === "scheduled" && startsAtMs > Date.now() && startsAtMs - Date.now() <= REMINDER_WINDOW_MS;
   });
 
-  async function loadDashboard(nextIdentifier?: string) {
+  function loadDashboard(nextIdentifier?: string) {
+    return dashboardRefreshQueue.current(() => loadDashboardData(nextIdentifier));
+  }
+
+  async function loadDashboardData(nextIdentifier?: string) {
     const participantIdentifier = (nextIdentifier ?? identifier).trim();
+    loadedDashboardIdentifier.current = participantIdentifier;
 
     if (!authConfigured && !participantIdentifier) {
       setAvailablePolls([]);
@@ -332,9 +340,15 @@ export function RestrictedUserDashboardWorkspace({
 
   useEffect(() => {
     const source = new EventSource("/api/internal/events");
+    let connected = false;
+    source.onopen = () => {
+      if (connected || loadedDashboardIdentifier.current !== identifier.trim()) void loadDashboard(identifier);
+      connected = true;
+    };
 
     source.onmessage = (event) => {
-      const payload = JSON.parse(event.data) as { scope?: string };
+      const payload = JSON.parse(event.data) as { scope?: string; initial?: boolean };
+      if (payload.initial) return;
 
       if (payload.scope === "all" || payload.scope === "game") {
         void loadDashboard(identifier);

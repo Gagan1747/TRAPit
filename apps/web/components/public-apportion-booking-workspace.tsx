@@ -513,6 +513,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
   }, []);
   const bookingPendingRef = useRef(false);
   const bookingRequestVersion = useRef(0);
+  const bookingRequestController = useRef<AbortController | null>(null);
   const lookupPendingRef = useRef(false);
   const lookupContextRef = useRef("");
   const lookupVersionRef = useRef(0);
@@ -609,14 +610,17 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
 
   async function loadBookingPage(ownerIdentifier = selectedOwnerIdentifier, serviceId = selectedServiceId, preserveLocation = false, preserveFeedback = false, preferredLocationId?: string) {
     const version = ++bookingRequestVersion.current;
+    bookingRequestController.current?.abort();
+    const controller = new AbortController();
+    bookingRequestController.current = controller;
     setIsLoading(true);
 
     try {
-      const query = new URLSearchParams();
+      const query = new URLSearchParams({ compact: "1" });
       if (ownerIdentifier) query.set("ownerIdentifier", ownerIdentifier);
       if (serviceId) query.set("serviceId", serviceId);
       const nextPayload = await readJson<BookingPayload>(
-        await fetch(`/api/apportion/${encodeURIComponent(shareCode)}${query.size ? `?${query}` : ""}`),
+        await fetch(`/api/apportion/${encodeURIComponent(shareCode)}?${query}`, { signal: controller.signal }),
       );
       if (version !== bookingRequestVersion.current) return;
       setPayload(nextPayload);
@@ -642,7 +646,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
       setWeekOffset(0);
       if (!preserveFeedback) setFeedback(null);
     } catch (error) {
-      if (version === bookingRequestVersion.current) setFeedback(error instanceof Error ? error.message : "Unable to load this booking page.");
+      if (!controller.signal.aborted && version === bookingRequestVersion.current) setFeedback(error instanceof Error ? error.message : "Unable to load this booking page.");
     } finally {
       if (version === bookingRequestVersion.current) setIsLoading(false);
     }
@@ -650,6 +654,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
 
   useEffect(() => {
     void loadBookingPage();
+    return () => bookingRequestController.current?.abort();
   }, [shareCode, initialOwnerIdentifier, initialServiceId, initialLocationId]);
 
   useEffect(() => {

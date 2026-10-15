@@ -5,6 +5,7 @@ import { validateAppointmentLocations } from "../../../apps/web/lib/appointment-
 const fixtures = vi.hoisted(() => ({
   actor: { identifier: "+919222222222", userCategory: "trapit-normal", isSuperAdmin: false },
   authConfigured: true,
+  authenticated: true,
   registeredUsers: [{ identifier: "+919333333333", label: "Registered Name" }],
   appointments: [] as Array<Record<string, unknown>>,
   invitations: [] as Array<Record<string, unknown>>,
@@ -26,7 +27,7 @@ vi.mock("../../../apps/web/lib/auth-config", () => ({ isWebAuthConfigured: () =>
 vi.mock("../../../apps/web/lib/cognito", () => ({ listRegisteredDirectoryUsers: async () => fixtures.registeredUsers }));
 vi.mock("../../../apps/web/lib/apportion-directory", () => ({ getApportionPanel: async () => fixtures.panel, getApportionBusinessContext: vi.fn(async (ownerIdentifier: string) => ownerIdentifier === OWNER ? fixtures.context : ownerIdentifier === STAFF ? fixtures.personalContext : null), getApportionBusinessContexts: async (owners: string[]) => new Map(owners.map((owner) => [owner, owner === OWNER ? fixtures.context : owner === STAFF ? fixtures.personalContext : null])), listApportionDirectLinkServices: async () => fixtures.directServices, assertApportionHoursWithinMaster: vi.fn(), listApportionScheduleNotificationsForActor: async () => fixtures.scheduleNotifications }));
 vi.mock("../../../apps/web/lib/realtime-events", () => ({ publishWorkspaceEvent: vi.fn() }));
-vi.mock("../../../apps/web/lib/session", () => ({ getWebSession: async () => ({ phoneNumber: fixtures.actor.identifier, displayName: "Requester" }) }));
+vi.mock("../../../apps/web/lib/session", () => ({ getWebSession: async () => fixtures.authenticated ? { phoneNumber: fixtures.actor.identifier, displayName: "Requester" } : null }));
 vi.mock("../../../apps/web/lib/testing-store", () => ({ getOrCreateWorkspaceAppointmentShareCode: fixtures.share, listWorkspaceAppointmentBusinesses: async () => [], listParticipants: async () => fixtures.registeredUsers, getWorkspaceBranding: async () => fixtures.context?.branding, getWorkspaceBrandingByAppointmentShareCode: async () => ({ ownerIdentifier: fixtures.linkedBusinessOwnerIdentifier, branding: fixtures.linkedBusinessBranding ?? fixtures.context?.branding }) }));
 vi.mock("../../../apps/web/lib/apportion-store", () => ({
   createApportionInvitation: fixtures.invite,
@@ -49,6 +50,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   fixtures.actor = { identifier: STAFF, userCategory: "trapit-normal", isSuperAdmin: false };
   fixtures.authConfigured = true;
+  fixtures.authenticated = true;
   fixtures.registeredUsers = [{ identifier: "+919333333333", label: "Registered Name" }];
   fixtures.invite.mockReset().mockResolvedValue({ id: "invitation", status: "pending" });
   fixtures.appointments = [];
@@ -73,6 +75,55 @@ beforeEach(() => {
 });
 
 describe("Apportion API role and service contracts", () => {
+  it("keeps compact booking metadata below 30 KB with four services and two addresses", async () => {
+    const context = fixtures.context!;
+    const image = `data:image/png;base64,${Buffer.alloc(800_000, 1).toString("base64")}`;
+    context.branding.promotionalImageDataUrls = [image];
+    const location = context.branding.appointmentLocations![0];
+    context.branding.appointmentLocations = [location, { ...location, id: "location-2" }];
+    context.business.services = Array.from({ length: 4 }, (_, index) => ({
+      id: index === 0 ? "consultation" : `service-${index}`,
+      name: `Service ${index}`,
+      active: true,
+      assignedIdentifier: OWNER,
+      locationIds: ["location-1", "location-2"],
+    }));
+    fixtures.directServices = context.business.services.map((service) => ({
+      ...service, ownerIdentifier: OWNER, businessName: "Clinic",
+    }));
+    const legacy = await publicApi.GET(new Request("https://trapit.in/api/apportion/CODE"), { params: { shareCode: "CODE" } });
+    const legacyText = await legacy.text();
+    const response = await publicApi.GET(new Request("https://trapit.in/api/apportion/CODE?compact=1"), { params: { shareCode: "CODE" } });
+    const text = await response.text();
+    const payload = JSON.parse(text);
+
+    expect(response.status).toBe(200);
+    expect(Buffer.byteLength(text)).toBeLessThan(30_000);
+    expect(Buffer.byteLength(text)).toBeLessThan(Buffer.byteLength(legacyText) * 0.01);
+    expect(legacyText.split(image)).toHaveLength(11);
+    expect(text).not.toContain("data:image/");
+    expect(payload.addressOptions).toHaveLength(2);
+    expect(payload.addressOptions[0].contexts).toHaveLength(4);
+    expect(payload.services).toHaveLength(4);
+    expect(payload.providerProfile.promotionalImageDataUrls[0]).toMatch(/^\/api\/apportion\/CODE\?image=promotion&v=[a-f0-9]{64}&index=0$/);
+    expect(JSON.parse(legacyText).providerProfile.promotionalImageDataUrls).toEqual([image]);
+
+    const imageResponse = await publicApi.GET(
+      new Request(`https://trapit.in${payload.providerProfile.promotionalImageDataUrls[0]}`),
+      { params: { shareCode: "CODE" } },
+    );
+    expect(imageResponse.status).toBe(200);
+    expect(imageResponse.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await imageResponse.arrayBuffer()).equals(Buffer.alloc(800_000, 1))).toBe(true);
+
+    fixtures.authenticated = false;
+    const forbidden = await publicApi.GET(
+      new Request(`https://trapit.in${payload.providerProfile.promotionalImageDataUrls[0]}`),
+      { params: { shareCode: "CODE" } },
+    );
+    expect(forbidden.status).toBe(403);
+  });
+
   it("rejects cancellation without a reason and forwards authored reasons using signed-in identity", async () => {
     const request = (body: unknown) => new Request("https://trapit.in/api/user/apportion", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     expect((await dashboard.DELETE(request({ appointmentId: "appointment" }))).status).toBe(400);
