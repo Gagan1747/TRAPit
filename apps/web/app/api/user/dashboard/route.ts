@@ -10,6 +10,7 @@ import {
   listGroupJoinRequestsForUser,
   listUserHistory,
   getWorkspaceData,
+  reconcileExpiredTestSessions,
 } from "../../../../lib/testing-store";
 
 export async function GET(request: Request) {
@@ -20,6 +21,7 @@ export async function GET(request: Request) {
   }
 
   try {
+    await reconcileExpiredTestSessions();
     const [availableGames, availablePolls, availableTests, groupJoinRequests, history, overallGamePoints, workspace] = await Promise.all([
       listGamesForParticipant(actor.identifier),
       listAvailablePollsForParticipant(actor.identifier),
@@ -47,24 +49,32 @@ export async function GET(request: Request) {
           countdownDeadline: game.countdownDeadline,
           createdAt: game.createdAt,
           creatorIdentifier: game.creatorIdentifier,
+          creatorDisplayName: workspace.participants.find((profile) => participantIdentifiersMatch(profile.identifier, game.creatorIdentifier))?.label
+            || game.participants.find((entry) => participantIdentifiersMatch(entry.identifier, game.creatorIdentifier))?.label
+            || game.creatorIdentifier,
           creatorRole: game.creatorRole ?? null,
           displayStatus: game.status === "upcoming"
             ? "Upcoming"
             : game.status === "completed"
-              ? (isMissed ? "Missed" : "Completed")
+              ? (game.rulesVersion === 4 ? "Results" : isMissed ? "Missed" : "Completed")
               : "In Progress",
           id: game.id,
           isAccepted,
           isCreator,
           isMissed,
-          leaderboard: game.status === "completed" ? game.leaderboard : [],
+          leaderboard: game.status === "completed" ? game.leaderboard.filter((entry, index) =>
+            game.rulesVersion !== 4 || isCreator || index < 10 || participantIdentifiersMatch(entry.participantIdentifier, actor.identifier)) : [],
           participantCount: game.participants.length,
           participantGroupId: game.participantGroupId,
-          groupName: workspace.participantGroups.find((group) => group.id === game.participantGroupId)?.name ?? "Unknown group",
+          participantGroupIds: game.participantGroupIds ?? [game.participantGroupId],
+          groupName: (game.participantGroupIds ?? [game.participantGroupId]).map((id) =>
+            workspace.participantGroups.find((group) => group.id === id)?.name ?? "Unknown group").join(", "),
           participants: game.participants.map((gameParticipant) => ({
             accepted: Boolean(gameParticipant.acceptedAt),
             identifier: gameParticipant.identifier,
             label: gameParticipant.label,
+            submitted: game.rulesVersion === 4 && Boolean(gameParticipant.acceptedAt)
+              && game.answers.filter((answer) => participantIdentifiersMatch(answer.participantIdentifier, gameParticipant.identifier)).length === 20,
           })),
           poolId: game.poolId,
           poolName: workspace.pools.find((pool) => pool.id === game.poolId)?.name ?? "Unknown pool",

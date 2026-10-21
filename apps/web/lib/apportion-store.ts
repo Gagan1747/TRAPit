@@ -419,6 +419,13 @@ async function resolveBookingContext(ownerIdentifier: string, locationId: string
   if (providerIdentifier && !providerIsLinked(context, providerIdentifier, locationId)) {
     throw new Error("Staff address unavailable.");
   }
+  if (providerIdentifier && !participantIdentifiersMatch(providerIdentifier, context.business.ownerIdentifier)) {
+    const membership = context.memberships.find((entry) => entry.locationId === locationId
+      && participantIdentifiersMatch(entry.providerIdentifier, providerIdentifier));
+    if (!membership || !resolveApportionDailySchedule(membership).some((day) => day.workingHours || day.workingHoursSecondWindow)) {
+      throw new Error("Staff working hours unavailable at this address.");
+    }
+  }
   const settingsKey = providerIdentifier
     ? Object.keys(context.providerSettings).find((identifier) => participantIdentifiersMatch(identifier, providerIdentifier))
     : undefined;
@@ -858,8 +865,8 @@ export async function listApportionAppointmentsForActor(identifier: string) {
     for (const appointment of state.appointments) {
       const context = contexts.get(appointment.ownerIdentifier) ?? null;
       if (!appointmentAccessFromContext(appointment, identifier, context).canView) continue;
-      if (!Object.prototype.hasOwnProperty.call(appointment, "assignedStaffName") && appointment.assignedStaffIdentifier) {
-        const provider = appointment.assignedStaffIdentifier;
+      if (!Object.prototype.hasOwnProperty.call(appointment, "assignedStaffName") || !appointment.assignedStaffIdentifier && !appointment.assignedStaffPhone) {
+        const provider = appointment.assignedStaffIdentifier || appointment.ownerIdentifier;
         if (!contacts.has(provider)) contacts.set(provider, await resolveApportionProviderContact(provider));
         const contact = contacts.get(provider)!;
         appointment.assignedStaffName = contact.name;
@@ -970,7 +977,7 @@ async function buildApportionAppointment(state: ApportionState, input: Apportion
   const bookedQueuePosition = Number.isFinite(input.bookedQueuePosition) && (input.bookedQueuePosition ?? 0) > 0
     ? Math.floor(input.bookedQueuePosition ?? 0)
     : ownerDayAppointments.length + 1;
-  const providerContact = booking.providerIdentifier ? await resolveApportionProviderContact(booking.providerIdentifier) : null;
+  const providerContact = await resolveApportionProviderContact(booking.providerIdentifier || booking.context.business.ownerIdentifier);
 
   const appointment: ApportionAppointment = {
     messageReadCursors: {}, messageReadBaselineId: null,
@@ -1183,7 +1190,7 @@ export async function createApportionInvitation(input: {
       if (planned.join() !== occurrences.map((entry) => entry.serviceDateKey).sort().join()) throw new ApportionInvitationError("Occurrences must match the selected duration and working dates.");
     }
     const timestamp = new Date().toISOString();
-    const providerContact = booking.providerIdentifier ? await resolveApportionProviderContact(booking.providerIdentifier) : null;
+    const providerContact = await resolveApportionProviderContact(booking.providerIdentifier || booking.context.business.ownerIdentifier);
     const invitation: ApportionInvitation = {
       assignedStaffIdentifier: booking.providerIdentifier,
       assignedStaffName: providerContact?.name ?? null, assignedStaffPhone: providerContact?.phone ?? null,

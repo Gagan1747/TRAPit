@@ -2,6 +2,7 @@ import "server-only";
 
 import { isAppointmentBusinessProfileComplete } from "./appointment-locations";
 import { reconcileBrowserNotificationIntents, type BrowserSchedule } from "./notification-store";
+import { formatPhoneNumberForDisplay } from "./privacy";
 
 import {
   buildPollRecurrenceCycles,
@@ -26,6 +27,9 @@ import {
   getGameQuestionIndex,
   getGamePresentedQuestionIndex,
   getGameQuestionPoints,
+  getRapidGameDeadline,
+  getRapidParticipantQuestionIndex,
+  reconcileRapidGame,
   getNextGameQuestionStartedAt,
   getGameStatus,
   getIncorrectCount,
@@ -212,6 +216,17 @@ async function withPollStoreFallback<T>(
 }
 
 export type AvailableUserTest = {
+  assessmentKind?: ScheduledTest["assessmentKind"];
+  rulesVersion?: 2;
+  creatorDisplayName?: string | null;
+  creatorIdentifier?: string | null;
+  countdownStartedAt?: string | null;
+  startedAt?: string | null;
+  isCreator?: boolean;
+  hasJoined?: boolean;
+  acceptedCount?: number;
+  joinedCount?: number;
+  sharedCount?: number;
   branding?: WorkspaceBranding | null;
   createdAt: string;
   durationMinutes: number;
@@ -904,7 +919,10 @@ function rescoreAttemptsForScheduledTest(state: TestingWorkspaceState, scheduled
 
       return {
         ...attempt,
-        result: scoreObjectiveTest(questions, attempt.answers, startedAtMs, completedAtMs),
+        result: {
+          ...scoreObjectiveTest(questions, attempt.answers, startedAtMs, completedAtMs),
+          ...(scheduledTest.rulesVersion === 2 ? { correctMarks: scheduledTest.assessmentKind === "instant" ? 4 : 1 } : {}),
+        },
       };
     })
     .sort((left, right) => {
@@ -1216,11 +1234,10 @@ function resolveParticipantIdentifiers(
 function hydrateScheduledTests(state: TestingWorkspaceState) {
   return state.scheduledTests.map((scheduledTest) => ({
     ...scheduledTest,
-    resolvedParticipantIdentifiers: resolveParticipantIdentifiers(
-      state,
-      dedupe(scheduledTest.participantIds),
-      dedupe(scheduledTest.participantGroupIds),
-    ),
+    resolvedParticipantIdentifiers: dedupeParticipantIdentifiers([
+      ...resolveParticipantIdentifiers(state, dedupe(scheduledTest.participantIds), dedupe(scheduledTest.participantGroupIds)),
+      ...(scheduledTest.participantSessions ?? []).map((session) => session.identifier),
+    ]),
     status: resolveScheduledTestStatus(scheduledTest, state.attempts, scheduledTest.id),
   }));
 }
@@ -1318,7 +1335,7 @@ export function withSerializedTestingMutation<T>(
     const result = await mutate(state);
     const changedFields = new Set((Array.from(new Set([...Object.keys(originalState), ...Object.keys(state)])) as Array<keyof TestingWorkspaceState>)
       .filter((field) => !isDeepStrictEqual(state[field], originalState[field])));
-    await writeStore(state, changedFields);
+    if (changedFields.size) await writeStore(state, changedFields);
     return result;
   });
 
@@ -1377,6 +1394,7 @@ export async function createQuestion(
 ) {
   const state = await readStore();
   const trimmedPoolName = newPoolName?.trim() ?? "";
+  if (trimmedPoolName) assertAssessmentName(trimmedPoolName, "Pool name");
 
   if (trimmedPoolName && state.pools.some((pool) =>
     pool.createdBy === actorId && pool.name.trim().toLowerCase() === trimmedPoolName.toLowerCase(),
@@ -1428,6 +1446,7 @@ export async function importQuestions(
 ) {
   const state = await readStore();
   const trimmedPoolName = newPoolName?.trim() ?? "";
+  if (trimmedPoolName) assertAssessmentName(trimmedPoolName, "Pool name");
 
   if (trimmedPoolName && state.pools.some((pool) =>
     pool.createdBy === actorId && pool.name.trim().toLowerCase() === trimmedPoolName.toLowerCase(),
@@ -2010,6 +2029,7 @@ export async function createPool(input: {
   description?: string;
   name: string;
 }) {
+  assertAssessmentName(input.name, "Pool name");
   const state = await readStore();
   const timestamp = new Date().toISOString();
   const pool: QuestionPool = {
@@ -2078,6 +2098,7 @@ export async function renamePool(input: {
   const state = await readStore();
   const pool = ensureActorOwnsPool(state, input.poolId, input.actorId, input.actorIdentifier);
   const name = input.name.trim();
+  if (name !== pool.name) assertAssessmentName(name, "Pool name");
 
   if (!name) {
     throw new Error("Pool name is required.");
@@ -2286,6 +2307,7 @@ export async function createGroup(input: {
   ownerIdentifier: string | null;
   participantIds: string[];
 }) {
+  assertAssessmentName(input.name, "Group name");
   const state = await readStore();
   const shouldCreateInvites = Boolean(input.ownerIdentifier);
   const group = createParticipantGroup({
@@ -2331,6 +2353,7 @@ export async function updateGroup(input: {
   if (!existingGroup) {
     throw new Error("Group not found.");
   }
+  if (input.name.trim() !== existingGroup.name) assertAssessmentName(input.name, "Group name");
 
   if (
     existingGroup.ownerIdentifier &&
@@ -2757,7 +2780,12 @@ export async function resolveGroupJoinRequest(input: {
   await writeStore(state);
 
   return {
-    games: state.games.map((game) => hydrateGame(game)),
+    games: state.games.map((game) => {
+      const hydrated = hydrateGame(game);
+      return game.rulesVersion === 4
+        ? { ...hydrated, answers: [], presentedQuestions: undefined, leaderboard: hydrated.status === "completed" ? hydrated.leaderboard : [] }
+        : hydrated;
+    }),
     groupJoinRequests: state.groupJoinRequests,
     participantGroups: state.participantGroups,
     participants: state.participants,
@@ -2834,8 +2862,43 @@ export async function resolveGroupInvitationForUser(input: {
 }
 
 export async function listScheduledTests(actorId: string | null = null) {
+  await reconcileExpiredTestSessions();
   const state = await readStore();
   return filterScheduledTestsForActor(hydrateScheduledTests(state), actorId);
+}
+
+function assertAssessmentName(value: string, label: string) {
+  if (!value.trim() || Array.from(value.trim()).length > 30) {
+    throw new Error(`${label} is required and must not exceed 30 characters.`);
+  }
+}
+
+function assertNewTestConfiguration(state: TestingWorkspaceState, input: {
+  actorIdentifier?: string | null;
+  assessmentKind: "standard" | "instant";
+  participantGroupIds: string[];
+  participantIds: string[];
+  durationMinutes: number;
+  questionCount: number;
+  startsAt: string;
+  generateInviteLink?: boolean;
+}) {
+  if (![5, 10, 20, 30, 60].includes(input.durationMinutes)) throw new Error("Choose a supported test duration.");
+  if (![20, 40, 60, 100, 200].includes(input.questionCount)) throw new Error("Choose a supported question count.");
+  if (!input.participantGroupIds.length) throw new Error("Choose at least one group created by you.");
+  if (input.participantIds.length) throw new Error("New tests are shared through selected groups.");
+  for (const groupId of dedupe(input.participantGroupIds)) {
+    const group = state.participantGroups.find((entry) => entry.id === groupId);
+    if (!group || !input.actorIdentifier || !isGroupOwnedBy(group, input.actorIdentifier)) {
+      throw new Error("You can only schedule tests for groups created by you.");
+    }
+  }
+  const members = dedupeParticipantIdentifiers(resolveParticipantIdentifiers(state, [], input.participantGroupIds));
+  if (members.length < (input.assessmentKind === "instant" ? 4 : 1)) {
+    throw new Error(input.assessmentKind === "instant" ? "Selected groups need at least 4 unique members." : "Selected groups need at least one participant.");
+  }
+  if (input.generateInviteLink) throw new Error("Share new tests using their group links.");
+  if (!Number.isFinite(Date.parse(input.startsAt))) throw new Error("Choose a valid test date and time.");
 }
 
 export async function createScheduledTest(input: Parameters<typeof createScheduledTestWithoutNotifications>[0]) {
@@ -2846,6 +2909,7 @@ export async function createScheduledTest(input: Parameters<typeof createSchedul
 }
 
 async function createScheduledTestWithoutNotifications(input: {
+  assessmentKind?: "standard" | "instant";
   actorIdentifier?: string | null;
   branding?: WorkspaceBranding | null;
   createdBy: string | null;
@@ -2860,7 +2924,10 @@ async function createScheduledTestWithoutNotifications(input: {
   title?: string | null;
   titleSuffix?: string | null;
 }) {
-  const state = await readStore();
+  return withSerializedTestingMutation((state) => {
+  assertAssessmentName(input.title ?? "", "Test name");
+  const kind = input.assessmentKind ?? "standard";
+  assertNewTestConfiguration(state, { ...input, assessmentKind: kind });
   const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy, input.actorIdentifier ?? null);
 
   const poolQuestionIds = dedupe(pool.questionIds).filter((questionId) =>
@@ -2896,8 +2963,13 @@ async function createScheduledTestWithoutNotifications(input: {
 
   const timestamp = new Date().toISOString();
   const baseTitle = input.title?.trim() || `${pool.name} test`;
-  const title = input.titleSuffix?.trim() ? `${baseTitle} ${input.titleSuffix.trim()}` : baseTitle;
+  const title = baseTitle;
   const scheduledTest: ScheduledTest = {
+    assessmentKind: kind,
+    rulesVersion: 2,
+    countdownStartedAt: null,
+    startedAt: null,
+    participantSessions: [],
     branding: normalizeWorkspaceBranding(input.branding),
     createdAt: timestamp,
     createdBy: input.createdBy,
@@ -2916,19 +2988,17 @@ async function createScheduledTestWithoutNotifications(input: {
       [input.poolId, input.startsAt, resolvedParticipantIdentifiers.join(",")].join(":"),
     ),
     resolvedParticipantIdentifiers,
-    shareCode: input.generateInviteLink
-      ? `TRAPIT-TEST-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
-      : null,
+    shareCode: null,
     startsAt: input.startsAt,
-    status: new Date(input.startsAt).getTime() > Date.now() ? "scheduled" : "live",
+    status: kind === "instant" || new Date(input.startsAt).getTime() - 60_000 > Date.now() ? "scheduled" : "live",
     title,
     updatedAt: timestamp,
   };
 
   state.scheduledTests = [scheduledTest, ...state.scheduledTests];
-  await writeStore(state);
 
   return filterScheduledTestsForActor(hydrateScheduledTests(state), input.createdBy);
+  });
 }
 
 export async function updateScheduledTest(input: Parameters<typeof updateScheduledTestWithoutNotifications>[0]) {
@@ -2954,6 +3024,11 @@ async function updateScheduledTestWithoutNotifications(input: {
 }) {
   const state = await readStore();
   const existingTest = ensureActorOwnsScheduledTest(state, input.testId, input.createdBy);
+  if (existingTest.rulesVersion === 2) {
+    assertNewTestConfiguration(state, { ...input, assessmentKind: existingTest.assessmentKind ?? "standard" });
+    if (existingTest.countdownStartedAt) throw new Error("Tests cannot be edited after launch.");
+  }
+  if (input.title?.trim() !== existingTest.title) assertAssessmentName(input.title ?? "", "Test name");
 
   if (existingTest.status !== "scheduled") {
     throw new Error("Only tests that have not started can be edited.");
@@ -3011,9 +3086,7 @@ async function updateScheduledTestWithoutNotifications(input: {
             [input.poolId, input.startsAt, resolvedParticipantIdentifiers.join(","), scheduledTest.id].join(":"),
           ),
           resolvedParticipantIdentifiers,
-          shareCode: input.generateInviteLink
-            ? scheduledTest.shareCode ?? `TRAPIT-TEST-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
-            : null,
+          shareCode: scheduledTest.rulesVersion === 2 ? null : scheduledTest.shareCode,
           startsAt: input.startsAt,
           status: new Date(input.startsAt).getTime() > Date.now() ? "scheduled" : "live",
           title,
@@ -3121,7 +3194,8 @@ export async function listAvailableTestsForParticipant(
   const state = await readStore();
   const normalizedIdentifier = normalizeParticipantIdentifier(identifier);
   const scheduledTests = hydrateScheduledTests(state).filter((scheduledTest) =>
-    scheduledTest.resolvedParticipantIdentifiers.some((participantIdentifier) =>
+    Boolean(scheduledTest.creatorIdentifier && identifiersMatch(scheduledTest.creatorIdentifier, normalizedIdentifier))
+    || scheduledTest.resolvedParticipantIdentifiers.some((participantIdentifier) =>
       identifiersMatch(participantIdentifier, normalizedIdentifier),
     ),
   );
@@ -3146,6 +3220,17 @@ export async function listAvailableTestsForParticipant(
       );
 
       return {
+    assessmentKind: scheduledTest.assessmentKind,
+    rulesVersion: scheduledTest.rulesVersion,
+    creatorDisplayName: scheduledTest.creatorDisplayName,
+    creatorIdentifier: scheduledTest.creatorIdentifier,
+    countdownStartedAt: scheduledTest.countdownStartedAt,
+    startedAt: scheduledTest.startedAt,
+    isCreator: Boolean(scheduledTest.creatorIdentifier && identifiersMatch(scheduledTest.creatorIdentifier, normalizedIdentifier)),
+    hasJoined: scheduledTest.participantSessions?.some((session) => identifiersMatch(session.identifier, normalizedIdentifier)) ?? false,
+    acceptedCount: scheduledTest.participantSessions?.length ?? 0,
+    joinedCount: scheduledTest.participantSessions?.length,
+    sharedCount: dedupeParticipantIdentifiers(resolveParticipantIdentifiers(state, [], scheduledTest.participantGroupIds)).length,
     branding: scheduledTest.branding ?? null,
     createdAt: scheduledTest.createdAt,
     durationMinutes: scheduledTest.durationMinutes,
@@ -3179,7 +3264,7 @@ export async function listAvailableTestsForParticipant(
       };
     })(),
     questionCount: scheduledTest.questionCount,
-    questions: scheduledTest.questionIds
+    questions: scheduledTest.rulesVersion === 2 ? [] : scheduledTest.questionIds
       .map((questionId) => questionMap.get(questionId))
       .filter((question): question is PersistentQuestion => Boolean(question)),
     startsAt: scheduledTest.startsAt,
@@ -3208,7 +3293,7 @@ export async function listBrowserNotificationSchedules(): Promise<BrowserSchedul
     ? await listAllScheduledPollsFromBackend()
     : hydrateScheduledPolls(state);
   return [
-    ...hydrateScheduledTests(state).filter((test) => test.status !== "completed").map((test) => ({
+    ...hydrateScheduledTests(state).filter((test) => test.status !== "completed" && (test.assessmentKind !== "instant" || test.startedAt)).map((test) => ({
       kind: "test" as const,
       id: test.id,
       startsAt: test.startsAt,
@@ -4072,6 +4157,184 @@ export async function recordParticipantPollAttempt(input: {
   return attempt;
 }
 
+function findVersionedTest(state: TestingWorkspaceState, testId: string) {
+  const test = state.scheduledTests.find((entry) => entry.id === testId);
+  if (!test || test.rulesVersion !== 2) throw new Error("This test does not support participant sessions.");
+  return test;
+}
+
+function canAccessTest(state: TestingWorkspaceState, test: ScheduledTest, identifier: string) {
+  return Boolean(test.creatorIdentifier && identifiersMatch(test.creatorIdentifier, identifier))
+    || (test.participantSessions ?? []).some((entry) => identifiersMatch(entry.identifier, identifier))
+    || resolveParticipantIdentifiers(state, [], test.participantGroupIds).some((entry) => identifiersMatch(entry, identifier));
+}
+
+function finalizeTestSession(state: TestingWorkspaceState, test: ScheduledTest, session: NonNullable<ScheduledTest["participantSessions"]>[number], completedAt: string) {
+  const previous = state.attempts.find((entry) => entry.testId === test.id && identifiersMatch(entry.userId, session.identifier));
+  if (previous) return previous;
+  const questions = test.questionIds.map((id) => state.questions.find((entry) => entry.id === id)).filter((entry): entry is PersistentQuestion => Boolean(entry));
+  const effectiveStart = Math.max(Date.parse(test.startsAt), Date.parse(session.startedAt ?? test.startsAt));
+  const attempt: TestAttempt = {
+    id: createEntityId("attempt"),
+    testId: test.id,
+    userId: session.identifier,
+    participantName: session.participantName,
+    answers: { ...session.answers },
+    startedAt: new Date(effectiveStart).toISOString(),
+    completedAt,
+    result: {
+      ...scoreObjectiveTest(questions, session.answers, effectiveStart, Date.parse(completedAt)),
+      correctMarks: test.assessmentKind === "instant" ? 4 : 1,
+    },
+  };
+  session.submittedAt = completedAt;
+  state.attempts.push(attempt);
+  return attempt;
+}
+
+function finalizeExpiredTestSessions(state: TestingWorkspaceState, now: number) {
+  for (const test of state.scheduledTests) {
+    if (test.rulesVersion !== 2 || (test.assessmentKind === "instant" && !test.startedAt)) continue;
+    const end = getScheduledTestEndTime(test);
+    if (now < Date.parse(end)) continue;
+    for (const session of test.participantSessions ?? []) {
+      if (!session.submittedAt) finalizeTestSession(state, test, session, end);
+    }
+  }
+}
+
+export async function reconcileExpiredTestSessions() {
+  return withSerializedTestingMutation((state) => {
+    finalizeExpiredTestSessions(state, Date.now());
+  });
+}
+
+function testSessionPayload(state: TestingWorkspaceState, test: ScheduledTest, identifier: string) {
+  const session = test.participantSessions?.find((entry) => identifiersMatch(entry.identifier, identifier)) ?? null;
+  const now = Date.now();
+  const status = resolveScheduledTestStatus(test, state.attempts, test.id);
+  const canReadQuestions = Boolean(session && !session.submittedAt && status === "live" && now >= Date.parse(test.startsAt));
+  return {
+    test: {
+      id: test.id,
+      title: test.title,
+      branding: test.branding,
+      assessmentKind: test.assessmentKind,
+      rulesVersion: test.rulesVersion,
+      startsAt: test.startsAt,
+      startedAt: test.startedAt,
+      countdownStartedAt: test.countdownStartedAt,
+      durationMinutes: test.durationMinutes,
+      questionCount: test.questionCount,
+      status,
+      questions: canReadQuestions
+        ? test.questionIds.map((id) => state.questions.find((question) => question.id === id))
+          .filter((question): question is PersistentQuestion => Boolean(question))
+          .map(({ id, prompt, options }) => ({ id, prompt, options }))
+        : [],
+    },
+    session,
+    acceptedCount: test.participantSessions?.length ?? 0,
+    isCreator: Boolean(test.creatorIdentifier && identifiersMatch(test.creatorIdentifier, identifier)),
+  };
+}
+
+export async function getTestParticipantSession(testId: string, identifier: string) {
+  return withSerializedTestingMutation((state) => {
+    finalizeExpiredTestSessions(state, Date.now());
+    const test = findVersionedTest(state, testId);
+    if (!canAccessTest(state, test, identifier)) throw new Error("You are not assigned to this test.");
+    return testSessionPayload(state, test, identifier);
+  });
+}
+
+export async function saveTestParticipantSession(input: {
+  testId: string;
+  identifier: string;
+  participantName?: string;
+  answers?: Record<string, number | undefined>;
+  revision?: number;
+}) {
+  return withSerializedTestingMutation((state) => {
+    const test = findVersionedTest(state, input.testId);
+    if (!canAccessTest(state, test, input.identifier)) throw new Error("You are not assigned to this test.");
+    const now = Date.now();
+    const instant = test.assessmentKind === "instant";
+    const startsAt = Date.parse(test.startsAt);
+    if ((!instant || test.startedAt) && now >= Date.parse(getScheduledTestEndTime(test))) throw new Error("This test has ended.");
+    let session = test.participantSessions?.find((entry) => identifiersMatch(entry.identifier, input.identifier));
+    if (!session) {
+      if (instant && test.countdownStartedAt) throw new Error("This test has already launched.");
+      if (!instant && now < startsAt - 60_000) throw new Error("Entry opens one minute before the test.");
+      const participantName = input.participantName?.trim();
+      if (!participantName) throw new Error("Enter your name before joining.");
+      session = {
+        identifier: normalizeParticipantIdentifier(input.identifier),
+        participantName,
+        joinedAt: new Date(now).toISOString(),
+        startedAt: instant ? null : new Date(Math.max(now, startsAt)).toISOString(),
+        answers: {},
+        revision: 0,
+        submittedAt: null,
+      };
+      (test.participantSessions ??= []).push(session);
+    }
+    if (session.submittedAt) throw new Error("This test has already been submitted.");
+    if (input.answers) {
+      if ((instant && !test.startedAt) || now < startsAt) throw new Error("Questions are not available yet.");
+      if (!Number.isSafeInteger(input.revision) || (input.revision ?? 0) < 1) throw new Error("A valid answer revision is required.");
+      for (const [id, answer] of Object.entries(input.answers)) {
+        const question = state.questions.find((entry) => entry.id === id && test.questionIds.includes(id));
+        if (!question || (answer !== undefined && (!Number.isInteger(answer) || answer < 0 || answer >= question.options.length))) {
+          throw new Error("An answer references an invalid question or option.");
+        }
+      }
+      const revision = input.revision;
+      if (typeof revision === "number" && revision > session.revision) {
+        session.answers = { ...input.answers };
+        session.revision = revision;
+      } else if (!isDeepStrictEqual(session.answers, input.answers)) {
+        throw new Error("A newer answer revision was already saved. Refresh this test before continuing.");
+      }
+    }
+    test.updatedAt = new Date(now).toISOString();
+    return testSessionPayload(state, test, input.identifier);
+  });
+}
+
+export async function startInstantTest(testId: string, identifier: string) {
+  return withSerializedTestingMutation((state) => {
+    const test = findVersionedTest(state, testId);
+    if (test.assessmentKind !== "instant") throw new Error("Only Instant Tests use a creator-controlled start.");
+    if (!test.creatorIdentifier || !identifiersMatch(test.creatorIdentifier, identifier)) throw new Error("Only the creator can start this test.");
+    if (test.countdownStartedAt) return testSessionPayload(state, test, identifier);
+    const eligible = resolveParticipantIdentifiers(state, [], test.participantGroupIds);
+    test.participantSessions = (test.participantSessions ?? []).filter((session) =>
+      identifiersMatch(session.identifier, identifier) || eligible.some((member) => identifiersMatch(member, session.identifier)));
+    if (test.participantSessions.length < 4) throw new Error("At least 4 participants must accept before starting.");
+    const now = Date.now();
+    test.countdownStartedAt = new Date(now).toISOString();
+    test.startsAt = new Date(now + GAME_LAUNCH_COUNTDOWN_MS).toISOString();
+    test.startedAt = test.startsAt;
+    for (const session of test.participantSessions) session.startedAt = test.startsAt;
+    test.updatedAt = test.countdownStartedAt;
+    return testSessionPayload(state, test, identifier);
+  });
+}
+
+export async function submitVersionedTest(testId: string, identifier: string) {
+  return withSerializedTestingMutation((state) => {
+    const test = findVersionedTest(state, testId);
+    const session = test.participantSessions?.find((entry) => identifiersMatch(entry.identifier, identifier));
+    if (!session) throw new Error("Join this test and enter your name before submitting.");
+    if ((test.assessmentKind === "instant" && !test.startedAt) || Date.now() < Date.parse(test.startsAt)) throw new Error("This test has not started.");
+    const end = getScheduledTestEndTime(test);
+    const completedAt = new Date(Math.min(Date.now(), Date.parse(end))).toISOString();
+    const attempt = finalizeTestSession(state, test, session, completedAt);
+    return { attempt: { id: attempt.id }, resultReleased: Date.now() >= Date.parse(end), resultReleaseAt: end };
+  });
+}
+
 export async function recordAttempt(input: {
   answers: Record<string, number | undefined>;
   completedAt: string;
@@ -4086,6 +4349,10 @@ export async function recordAttempt(input: {
 
   if (!scheduledTest) {
     throw new Error("The selected test could not be found.");
+  }
+
+  if (scheduledTest.rulesVersion === 2) {
+    throw new Error("Use the participant session to save and submit this test.");
   }
 
   if (
@@ -4493,6 +4760,7 @@ export async function getTestResults(input: {
   participantIdentifier: string;
   testId: string;
 }) {
+  await reconcileExpiredTestSessions();
   const state = await readStore();
   const scheduledTest = getCompletedScheduledTest(state, input.testId);
   const normalizedParticipantIdentifier = normalizeParticipantIdentifier(input.participantIdentifier);
@@ -4524,10 +4792,20 @@ export async function getTestResults(input: {
     scheduledTest.creatorIdentifier
     && identifiersMatch(participant.identifier, scheduledTest.creatorIdentifier),
   );
-  const creatorName = scheduledTest.creatorDisplayName?.trim()
+  const creatorName = formatPhoneNumberForDisplay(scheduledTest.creatorDisplayName?.trim()
     || creatorProfile?.label?.trim()
-    || scheduledTest.creatorIdentifier?.trim()
-    || "Unknown creator";
+    || formatPhoneNumberForDisplay(scheduledTest.creatorIdentifier)
+    || "Unknown creator");
+  const visibleEntries = hasCreatorScope
+    ? leaderboard.entries
+    : leaderboard.entries.filter((entry, index) =>
+        index < 10 || identifiersMatch(entry.participantId, normalizedParticipantIdentifier),
+      );
+  const sharedCount = dedupeParticipantIdentifiers(resolveParticipantIdentifiers(
+    state,
+    [],
+    scheduledTest.participantGroupIds,
+  )).length;
 
   return {
     branding: scheduledTest.branding ?? null,
@@ -4541,23 +4819,21 @@ export async function getTestResults(input: {
           elapsedMs: participantEntry.elapsedMs,
           incorrectCount: participantEntry.incorrectCount,
           marks: participantEntry.marks,
-          participantName: participantEntry.participantName?.trim() || normalizedParticipantIdentifier,
+          participantName: formatPhoneNumberForDisplay(participantEntry.participantName?.trim() || normalizedParticipantIdentifier),
           rank: participantEntry.rank,
           rankedParticipantCount: leaderboard.submittedCount,
           totalCount: participantEntry.totalCount,
         }
       : null,
-    participants: leaderboard.entries.map((entry) => {
-          const profile = state.participants.find((participant) =>
-            identifiersMatch(participant.identifier, entry.participantId),
-          );
-
+    participants: visibleEntries.map((entry) => {
           return {
             correctCount: entry.correctCount,
             elapsedMs: entry.elapsedMs,
             marks: entry.marks,
             incorrectCount: entry.incorrectCount,
-            manualName: entry.participantName?.trim() || "—",
+            isCurrentParticipant: identifiersMatch(entry.participantId, normalizedParticipantIdentifier),
+            manualName: formatPhoneNumberForDisplay(entry.participantName?.trim()) || "—",
+            maskedIdentifier: formatPhoneNumberForDisplay(entry.participantId),
             rank: entry.rank,
             totalCount: entry.totalCount,
             unansweredCount: entry.unansweredCount,
@@ -4590,10 +4866,11 @@ export async function getTestResults(input: {
     summary: {
       creatorName,
       durationMinutes: scheduledTest.durationMinutes,
-      participantName: participantEntry?.participantName?.trim() || normalizedParticipantIdentifier || "—",
+      participantName: formatPhoneNumberForDisplay(participantEntry?.participantName?.trim() || normalizedParticipantIdentifier) || "—",
       poolName: pool?.name ?? "Unknown pool",
       startsAt: scheduledTest.startsAt,
       submittedCount: leaderboard.submittedCount,
+      sharedCount,
       testId: scheduledTest.id,
       title: scheduledTest.title,
     },
@@ -4704,6 +4981,20 @@ function findGameParticipant(game: ScheduledGame, participantIdentifier: string)
   );
 }
 
+function refreshRapidInvitations(state: TestingWorkspaceState, game: ScheduledGame) {
+  if (game.rulesVersion !== 4 || game.countdownStartedAt) return;
+  const groups = state.participantGroups.filter((group) =>
+    (game.participantGroupIds ?? [game.participantGroupId]).includes(group.id)
+    && isGroupOwnedBy(group, game.creatorIdentifier));
+  const memberIds = new Set(groups.flatMap((group) => group.participantIds));
+  const profiles = state.participants.filter((profile) => memberIds.has(profile.id));
+  const identifiers = dedupeParticipantIdentifiers([...profiles.map((profile) => profile.identifier), game.creatorIdentifier]);
+  game.participants = identifiers.map((identifier) => findGameParticipant(game, identifier) ?? {
+    acceptedAt: null, identifier,
+    label: profiles.find((profile) => identifiersMatch(profile.identifier, identifier))?.label || identifier,
+  });
+}
+
 function getAcceptedGameParticipants(game: ScheduledGame) {
   return game.participants.filter((participant, participantIndex, participants) =>
     Boolean(participant.acceptedAt)
@@ -4715,6 +5006,10 @@ function getAcceptedGameParticipants(game: ScheduledGame) {
 }
 
 function advanceGameLifecycle(game: ScheduledGame, now: Date) {
+  if (game.rulesVersion === 4) {
+    reconcileRapidGame(game, now.getTime());
+    return;
+  }
   if (game.completedAt) {
     return;
   }
@@ -4894,13 +5189,22 @@ export type AvailableGame = ScheduledGame & {
   preparationDeadline: string | null;
   questionDeadline: string | null;
   status: ReturnType<typeof getGameStatus>;
+  globalDeadline: string | null;
+  participantQuestionStartedAt: string | null;
 };
 
-function hydrateGame(game: ScheduledGame, nowMs = Date.now()): AvailableGame {
-  const currentQuestionIndex = getGamePresentedQuestionIndex(game, nowMs);
+function hydrateGame(game: ScheduledGame, nowMs = Date.now(), viewerIdentifier?: string): AvailableGame {
+  const participant = viewerIdentifier ? findGameParticipant(game, viewerIdentifier) : undefined;
+  const currentQuestionIndex = game.rulesVersion === 4
+    ? participant ? getRapidParticipantQuestionIndex(game, participant, nowMs) : null
+    : getGamePresentedQuestionIndex(game, nowMs);
+  const participantQuestionStartedAt = currentQuestionIndex === null ? null : participant?.questionStartedAt?.[currentQuestionIndex] ?? null;
+  const globalDeadlineMs = game.rulesVersion === 4 ? getRapidGameDeadline(game) : null;
 
   return {
     ...game,
+    globalDeadline: globalDeadlineMs === null ? null : new Date(globalDeadlineMs).toISOString(),
+    participantQuestionStartedAt,
     acceptedCount: getAcceptedGameParticipants(game).length,
     countdownDeadline: game.countdownStartedAt && !game.startedAt && !game.questionPreparedAt?.length
       ? new Date(new Date(game.countdownStartedAt).getTime() + GAME_LAUNCH_COUNTDOWN_MS).toISOString()
@@ -4915,7 +5219,11 @@ function hydrateGame(game: ScheduledGame, nowMs = Date.now()): AvailableGame {
           new Date(game.questionPreparedAt[currentQuestionIndex]).getTime() + GAME_QUESTION_READY_FALLBACK_MS,
         ).toISOString()
       : null,
-    questionDeadline: currentQuestionIndex === null
+    questionDeadline: game.rulesVersion === 4
+      ? participantQuestionStartedAt && globalDeadlineMs
+        ? new Date(Math.min(Date.parse(participantQuestionStartedAt) + GAME_QUESTION_DURATION_MS, globalDeadlineMs)).toISOString()
+        : null
+      : currentQuestionIndex === null
       ? null
       : getGameQuestionDeadline(game, currentQuestionIndex),
     status: getGameStatus(game, nowMs),
@@ -4926,25 +5234,30 @@ export async function createScheduledGame(input: {
   actorIdentifier: string;
   actorLabel?: string | null;
   createdBy: string | null;
-  participantGroupId: string;
+  participantGroupId?: string;
+  participantGroupIds?: string[];
   poolId: string;
   title?: string | null;
 }) {
   return withSerializedGameMutation((state) => {
     const actorIdentifier = normalizeParticipantIdentifier(input.actorIdentifier);
     const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy, actorIdentifier);
-    const group = state.participantGroups.find((entry) => entry.id === input.participantGroupId);
+    const groupIds = dedupe(input.participantGroupIds?.length ? input.participantGroupIds : input.participantGroupId ? [input.participantGroupId] : []);
+    const groups = groupIds.map((id) => state.participantGroups.find((entry) => entry.id === id));
+    const group = groups[0];
 
     if (!actorIdentifier) {
       throw new Error("A signed-in identifier is required to create a game.");
     }
 
-    if (!group || !isGroupOwnedBy(group, actorIdentifier)) {
-      throw new Error("Choose a group you manage.");
+    if (!group || groups.some((entry) => !entry || !isGroupOwnedBy(entry, actorIdentifier))) {
+      throw new Error("Choose groups you manage.");
     }
+    const title = input.title?.trim() || "Rapid test";
+    if (title.length > 30) throw new Error("Rapid test titles must be 30 characters or fewer.");
 
     const participantMap = getParticipantMap(state);
-    const groupParticipants = group.participantIds.flatMap((participantId) => {
+    const groupParticipants = groups.flatMap((entry) => entry!.participantIds).flatMap((participantId) => {
       const participant = participantMap.get(participantId);
       return participant ? [participant] : [];
     });
@@ -4953,7 +5266,7 @@ export async function createScheduledGame(input: {
     );
 
     if (uniqueGroupIdentifiers.length < 4) {
-      throw new Error("Games require a selected group with at least 4 participants.");
+      throw new Error("Rapid tests require at least 4 unique current members across the selected groups.");
     }
 
     const availableQuestionIds = dedupe(pool.questionIds).filter((questionId) =>
@@ -5014,6 +5327,7 @@ export async function createScheduledGame(input: {
       creatorIdentifier: actorIdentifier,
       id: createEntityId("game"),
       participantGroupId: group.id,
+      participantGroupIds: groupIds,
       participants,
       poolId: pool.id,
       presentedQuestions,
@@ -5021,9 +5335,9 @@ export async function createScheduledGame(input: {
       questionReadyParticipantIdentifiers: [],
       questionStartedAt: [],
       questionIds: presentedQuestions.map((question) => question.id),
-      rulesVersion: 3,
+      rulesVersion: 4,
       startedAt: null,
-      title: input.title?.trim() || `${group.name} game`,
+      title,
       updatedAt: timestamp,
     };
 
@@ -5038,12 +5352,27 @@ export async function listGamesForParticipant(participantIdentifier: string) {
     const now = new Date();
 
     for (const game of state.games) {
+      refreshRapidInvitations(state, game);
       advanceGameLifecycle(game, now);
     }
 
     return state.games
       .filter((game) => findGameParticipant(game, normalizedIdentifier))
-      .map((game) => hydrateGame(game, now.getTime()));
+      .map((game) => hydrateGame(game, now.getTime(), normalizedIdentifier));
+  });
+}
+
+export async function reconcileExpiredGames() {
+  return withSerializedGameMutation((state) => {
+    const now = new Date();
+    let changed = false;
+    for (const game of state.games) {
+      if (game.rulesVersion !== 4 || game.completedAt) continue;
+      const previous = JSON.stringify(game);
+      advanceGameLifecycle(game, now);
+      changed ||= previous !== JSON.stringify(game);
+    }
+    return changed;
   });
 }
 
@@ -5060,7 +5389,7 @@ export async function recordGameQuestionReady(input: {
   return withSerializedGameMutation((state) => {
     const game = state.games.find((entry) => entry.id === input.gameId);
 
-    if (!game || game.rulesVersion !== 3) {
+    if (!game || (game.rulesVersion !== 3 && game.rulesVersion !== 4)) {
       throw new Error("Game readiness is unavailable.");
     }
 
@@ -5070,6 +5399,18 @@ export async function recordGameQuestionReady(input: {
     }
 
     advanceGameLifecycle(game, new Date());
+    if (game.rulesVersion === 4) {
+      const nowMs = Date.now();
+      const starts = participant.questionStartedAt ?? (participant.questionStartedAt = []);
+      if (starts[input.questionIndex]) return hydrateGame(game, nowMs, participant.identifier);
+      const index = getRapidParticipantQuestionIndex(game, participant, nowMs);
+      if (!Number.isInteger(input.questionIndex) || index === null || index !== input.questionIndex) {
+        throw new Error("This question is not available.");
+      }
+      starts[index] = new Date(nowMs).toISOString();
+      game.updatedAt = starts[index];
+      return hydrateGame(game, nowMs, participant.identifier);
+    }
     const presentedQuestionIndex = getGamePresentedQuestionIndex(game);
     if (presentedQuestionIndex === null || presentedQuestionIndex !== input.questionIndex) {
       throw new Error("This question is no longer preparing.");
@@ -5097,6 +5438,7 @@ export async function acceptGame(gameId: string, participantIdentifier: string, 
       throw new Error("Game not found.");
     }
 
+    refreshRapidInvitations(state, game);
     const participant = findGameParticipant(game, participantIdentifier);
 
     if (!participant) {
@@ -5117,6 +5459,7 @@ export async function acceptGame(gameId: string, participantIdentifier: string, 
       if (!normalizedParticipantName) {
         throw new Error("Enter your name before accepting the game.");
       }
+      if (game.rulesVersion === 4 && normalizedParticipantName.length > 80) throw new Error("Names must be 80 characters or fewer.");
 
       participant.label = normalizedParticipantName;
       participant.acceptedAt = new Date().toISOString();
@@ -5161,6 +5504,7 @@ export async function setGameCreatorRole(
       if (!normalizedParticipantName) {
         throw new Error("Enter your name before joining the game.");
       }
+      if (game.rulesVersion === 4 && normalizedParticipantName.length > 80) throw new Error("Names must be 80 characters or fewer.");
 
       participant.label = normalizedParticipantName;
     }
@@ -5188,6 +5532,17 @@ export async function startGame(gameId: string, creatorIdentifier: string) {
       throw new Error("Choose Join Game or Watch Game before starting.");
     }
 
+    refreshRapidInvitations(state, game);
+    if (game.rulesVersion === 4 && !game.countdownStartedAt) {
+      const groups = state.participantGroups.filter((group) =>
+        (game.participantGroupIds ?? [game.participantGroupId]).includes(group.id)
+        && isGroupOwnedBy(group, game.creatorIdentifier));
+      const ids = new Set(groups.flatMap((group) => group.participantIds));
+      if (dedupeParticipantIdentifiers(state.participants.filter((participant) => ids.has(participant.id))
+        .map((participant) => participant.identifier)).length < 4) {
+        throw new Error("At least 4 unique current group members are required.");
+      }
+    }
     if (getAcceptedGameParticipants(game).length < 4) {
       throw new Error("At least 4 participants must accept before the game can start.");
     }
@@ -5202,6 +5557,7 @@ export async function startGame(gameId: string, creatorIdentifier: string) {
 }
 
 export async function recordGameAnswer(input: {
+  elapsedMs?: number;
   gameId: string;
   optionIndex: number;
   participantIdentifier: string;
@@ -5220,6 +5576,35 @@ export async function recordGameAnswer(input: {
 
     if (!participant?.acceptedAt) {
       throw new Error("Accept the game invitation before playing.");
+    }
+
+    if (game.rulesVersion === 4) {
+      const duplicate = game.answers.find((answer) => answer.questionIndex === input.questionIndex
+        && identifiersMatch(answer.participantIdentifier, participant.identifier));
+      if (duplicate) {
+        if (duplicate.optionIndex !== input.optionIndex) throw new Error("This question is already resolved.");
+        return { answer: duplicate, game: hydrateGame(game, now.getTime(), participant.identifier) };
+      }
+      const index = getRapidParticipantQuestionIndex(game, participant, now.getTime());
+      const start = participant.questionStartedAt?.[input.questionIndex];
+      if (index === null || index !== input.questionIndex || !start) throw new Error("This question is no longer accepting answers.");
+      const serverElapsed = now.getTime() - Date.parse(start);
+      const elapsedMs = input.elapsedMs ?? serverElapsed;
+      if (!Number.isFinite(elapsedMs) || elapsedMs < 0 || elapsedMs > serverElapsed
+        || elapsedMs >= GAME_QUESTION_DURATION_MS) throw new Error("Invalid answer timing. Refresh and retry.");
+      const question = game.presentedQuestions?.[index];
+      if (!question || !Number.isInteger(input.optionIndex) || input.optionIndex < 0 || input.optionIndex >= question.options.length) {
+        throw new Error("Choose a valid answer.");
+      }
+      const answer = {
+        answeredAt: now.toISOString(), elapsedMs, kind: "submitted" as const,
+        isCorrect: input.optionIndex === question.correctOptionIndex, optionIndex: input.optionIndex,
+        participantIdentifier: participant.identifier, points: GAME_INCORRECT_POINTS, questionIndex: index,
+        responsePosition: null as number | null,
+      };
+      game.answers.push(answer);
+      reconcileRapidGame(game, now.getTime());
+      return { answer, game: hydrateGame(game, now.getTime(), participant.identifier) };
     }
 
     const currentQuestionIndex = getGameQuestionIndex(game, now.getTime());

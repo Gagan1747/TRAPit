@@ -5,6 +5,7 @@ import { matchApportionIdentity, participantIdentifiersMatch, type ApportionRecu
 import { createPortal } from "react-dom";
 import { ArrowLeft, ArrowRight, Check, LoaderCircle, MessageSquare, X } from "lucide-react";
 import type { ApportionInvitation as StoredInvitation } from "../lib/apportion-store";
+import type { getApportionPanel } from "../lib/apportion-directory";
 import { ApportionCancellationDialog } from "./apportion-cancellation-dialog";
 
 export type ApportionInvitation = Omit<StoredInvitation, "notifications" | "bookedSettings">;
@@ -83,6 +84,27 @@ type ApportionAppointmentLogProps = {
 
 const PAGE_SIZE = 6;
 const CLOSED_STATUSES = new Set<AppointmentStatus>(["cancelled", "done", "missed", "rejected"]);
+
+type AssignmentPanel = Pick<Awaited<ReturnType<typeof getApportionPanel>>, "businesses">;
+export function getAppointmentFilterPairs(panel: AssignmentPanel, identifier: string) {
+  return panel.businesses.flatMap((business) => business.business.services.flatMap((service) => {
+    if (!service.active || !business.bookableServiceIds.includes(service.id)) return [];
+    const provider = service.assignedIdentifier || (service.id === "consultation" ? business.business.ownerIdentifier : "");
+    if (business.role !== "admin" && !matchApportionIdentity(provider, identifier)) return [];
+    return (business.branding.appointmentLocations ?? []).flatMap((location, index) =>
+      service.locationIds.includes(location.id) && location.address.trim()
+        && (business.role === "admin" || matchApportionIdentity(provider, business.business.ownerIdentifier)
+          || business.memberships.some((membership) => membership.locationId === location.id && matchApportionIdentity(membership.providerIdentifier, identifier)))
+        ? [{ key: `${business.business.ownerIdentifier}::${location.id}::${service.id}`, ownerIdentifier: business.business.ownerIdentifier,
+          locationId: location.id, serviceId: service.id, label: `${business.branding.instituteName} → Address #${index + 1} (${location.address}) → ${service.name}` }]
+        : []);
+  }));
+}
+
+export function matchesAppointmentFilter(entry: { ownerIdentifier: string; locationId?: string; serviceId?: string }, pair?: ReturnType<typeof getAppointmentFilterPairs>[number]) {
+  return !pair || (matchApportionIdentity(entry.ownerIdentifier, pair.ownerIdentifier)
+    && entry.locationId === pair.locationId && (entry.serviceId || "consultation") === pair.serviceId);
+}
 
 function AppointmentHistory({ appointment, contactName, originalTime, formatDateTime }: {
   appointment: ApportionLogAppointment;
@@ -216,6 +238,7 @@ export function ApportionAppointmentLog({
   const [actionError, setActionError] = useState<string | null>(null);
   const [cancellationTarget, setCancellationTarget] = useState<LogRow | null>(null);
   const [serviceFilter, setServiceFilter] = useState("");
+  const [assignmentPanel, setAssignmentPanel] = useState<AssignmentPanel | null>(null);
   const [noteInvitationId, setNoteInvitationId] = useState<string | null>(null);
   const actionPendingRef = useRef(false);
   const acknowledgedRef = useRef(new Set<string>());
@@ -223,12 +246,24 @@ export function ApportionAppointmentLog({
   refreshRef.current = onRefresh;
   const threadRef = useRef<HTMLElement>(null);
   useEffect(() => {
-    const refresh = () => { setNow(Date.now()); void refreshRef.current(); };
+    const controller = new AbortController();
+    const loadAssignments = () => {
+      if (!currentIdentifier) { setAssignmentPanel(null); return; }
+      void fetch("/api/user/apportion/business", { signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("Unable to load assignments.");
+          const panel = await response.json() as AssignmentPanel;
+          if (!controller.signal.aborted) setAssignmentPanel(panel);
+        }).catch(() => { if (!controller.signal.aborted) setAssignmentPanel(null); });
+    };
+    setAssignmentPanel(null);
+    loadAssignments();
+    const refresh = () => { setNow(Date.now()); void refreshRef.current(); loadAssignments(); };
     const timer = window.setInterval(refresh, 30_000);
     window.addEventListener("focus", refresh);
     document.addEventListener("visibilitychange", refresh);
-    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
-  }, []);
+    return () => { controller.abort(); window.clearInterval(timer); window.removeEventListener("focus", refresh); document.removeEventListener("visibilitychange", refresh); };
+  }, [currentIdentifier]);
   const [activePage, setActivePage] = useState(0);
   const [completedPage, setCompletedPage] = useState(0);
   const [threadAppointmentId, setThreadAppointmentId] = useState<string | null>(null);
@@ -246,14 +281,14 @@ export function ApportionAppointmentLog({
     ...appointments.map((entry): LogRow => ({ kind: "appointment", entry })),
     ...invitations.filter((entry) => entry.status !== "accepted" && currentIdentifier && (matchApportionIdentity(entry.ownerIdentifier, currentIdentifier) || matchApportionIdentity(entry.requesterIdentifier, currentIdentifier))).map((entry): LogRow => ({ kind: "invitation", entry: entry.status === "pending" && new Date(entry.expiresAt).getTime() <= now ? { ...entry, status: "expired", statusUpdatedAt: entry.expiresAt } : entry })),
   ];
-  const serviceKey = (row: LogRow) => `${rows.find((other) => matchApportionIdentity(other.entry.ownerIdentifier, row.entry.ownerIdentifier))?.entry.ownerIdentifier || row.entry.ownerIdentifier}::${row.entry.serviceId || "consultation"}`;
-  const services = Array.from(new Map(rows.map((row) => [serviceKey(row), `${row.entry.ownerName || "Business"} → ${row.entry.serviceName || "Consultation"}`])).entries());
-  const filteredRows = rows.filter((row) => !serviceFilter || serviceKey(row) === serviceFilter);
+  const services = assignmentPanel && currentIdentifier ? getAppointmentFilterPairs(assignmentPanel, currentIdentifier) : [];
+  const selectedPair = services.length > 1 ? services.find((pair) => pair.key === serviceFilter) : undefined;
+  const filteredRows = rows.filter((row) => matchesAppointmentFilter(row.entry, selectedPair));
   const activeAppointments = mergeActiveRows(filteredRows.filter((row) => row.kind === "appointment" ? isActive(row.entry.currentStatus) : row.entry.status === "pending"));
   const completedAppointments = filteredRows.filter((row) => row.kind === "appointment" ? !isActive(row.entry.currentStatus) : row.entry.status !== "pending").sort((left, right) => rowTime(left).localeCompare(rowTime(right)) || left.entry.id.localeCompare(right.entry.id));
   function selectService(value: string) { setServiceFilter(value); setActivePage(0); setCompletedPage(0); }
   useEffect(() => {
-    if (serviceFilter && !services.some(([key]) => key === serviceFilter)) { setServiceFilter(""); setActivePage(0); setCompletedPage(0); }
+    if (serviceFilter && (services.length <= 1 || !services.some(({ key }) => key === serviceFilter))) { setServiceFilter(""); setActivePage(0); setCompletedPage(0); }
   }, [serviceFilter, services]);
   const activePageCount = Math.max(1, Math.ceil(activeAppointments.length / PAGE_SIZE));
   const completedPageCount = Math.max(1, Math.ceil(completedAppointments.length / PAGE_SIZE));
@@ -389,11 +424,11 @@ export function ApportionAppointmentLog({
       if (row.kind === "invitation") {
         const invitation = row.entry;
         const incoming = Boolean(currentIdentifier && matchApportionIdentity(invitation.requesterIdentifier, currentIdentifier));
-        const contactName = incoming ? invitation.assignedStaffName || "Assigned provider" : invitation.requesterName;
+        const contactName = incoming ? invitation.assignedStaffName || invitation.ownerName || "Business owner" : invitation.requesterName;
         return <tr className="apportion-log-row" id={`apportion-invitation-${invitation.id}`} key={invitation.id} tabIndex={-1}>
           <td><span className={`apportion-origin ${incoming ? "is-invite-incoming" : "is-invite-outgoing"}`} title={incoming ? "Incoming invitation" : "Outgoing invitation"}>{serial}</span></td>
           <td><strong>{tableDateTime(invitation.occurrences[0]?.startsAt ?? invitation.createdAt)}</strong><span className="apportion-status-helper">{invitation.ownerName || "Business"}</span><span className="apportion-status-helper">{invitation.serviceName}</span><span className="apportion-status-helper">{invitation.locationAddress}</span><details className="apportion-series-summary"><summary>{recurrenceLabel(invitation.recurrence) || "Once"} · {invitation.occurrences.length} appointment{invitation.occurrences.length === 1 ? "" : "s"}</summary><ul>{invitation.occurrences.map((occurrence) => <li key={occurrence.serviceDateKey}>{tableDateTime(occurrence.startsAt)}</li>)}</ul></details></td>
-          <td><strong>{contactName}</strong><span className="apportion-status-helper">{incoming ? invitation.assignedStaffPhone || invitation.assignedStaffIdentifier || "Contact unavailable" : invitation.requesterPhone || invitation.requesterIdentifier}</span></td>
+          <td><strong>{contactName}</strong><span className="apportion-status-helper">{incoming ? invitation.assignedStaffPhone || invitation.assignedStaffIdentifier || invitation.ownerIdentifier : invitation.requesterPhone || invitation.requesterIdentifier}</span></td>
           <td><button className="apportion-thread-trigger" type="button" aria-label={`View invitation note for ${contactName}`} onClick={() => setNoteInvitationId(invitation.id)}><MessageSquare aria-hidden="true" size={15} /><span>{invitation.messages?.at(-1)?.body || invitation.notes || "Open notes"}</span></button></td>
           <td><span className={`status-chip apportion-status-chip is-${invitation.status}`}>{invitation.status === "pending" ? incoming ? "Pending invitation" : "Pending Acceptance" : invitation.status.charAt(0).toUpperCase() + invitation.status.slice(1)}</span>
             {invitation.status === "pending" ? <div className="inline-actions apportion-invitation-actions">
@@ -406,10 +441,10 @@ export function ApportionAppointmentLog({
       const canManage = appointment.canManage === true;
       const active = isActive(appointment.currentStatus);
       const canMessage = active && appointment.canMessage === true;
-      const contactName = appointment.scope === "owner" ? appointment.requesterName : appointment.assignedStaffName || "Assigned provider";
+      const contactName = appointment.scope === "owner" ? appointment.requesterName : appointment.assignedStaffName || appointment.ownerName || "Business owner";
       const contactPhone = appointment.scope === "owner"
         ? appointment.requesterPhone || appointment.requesterIdentifier
-        : appointment.assignedStaffPhone || appointment.assignedStaffIdentifier || "Contact unavailable";
+        : appointment.assignedStaffPhone || appointment.assignedStaffIdentifier || appointment.ownerIdentifier;
       const completion = appointment.currentStatus === "done"
         ? [...appointment.history].reverse().find((entry) => entry.action === "done")?.at ?? appointment.statusUpdatedAt
         : null;
@@ -500,7 +535,7 @@ export function ApportionAppointmentLog({
 
   return (
     <section aria-label="Appointment log" className="apportion-appointment-log">
-      {services.length > 4 ? <label>Filter service<select aria-label="Filter service" value={serviceFilter} onChange={(event) => selectService(event.target.value)}><option value="">All services</option>{services.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label> : services.length ? <div aria-label="Filter service" className="inline-actions"><button type="button" className="button-secondary small-button" aria-pressed={!serviceFilter} onClick={() => selectService("")}>All services</button>{services.map(([key, label]) => <button key={key} type="button" className="button-secondary small-button" aria-pressed={serviceFilter === key} onClick={() => selectService(serviceFilter === key ? "" : key)}>{label}</button>)}</div> : null}
+      {services.length > 1 ? <div aria-label="Filter Address — Service" className="inline-actions">{services.map(({ key, label }) => <button key={key} type="button" className="button-secondary small-button" aria-pressed={serviceFilter === key} onClick={() => selectService(serviceFilter === key ? "" : key)}>{label}</button>)}</div> : null}
       {cancellationTarget ? <ApportionCancellationDialog onClose={() => setCancellationTarget(null)} onConfirm={(reason) => cancellationTarget.kind === "appointment" ? actOnAppointment(cancellationTarget.entry, "cancel", reason) : actOnInvitation(cancellationTarget.entry, "cancel", reason)} /> : null}
       {actionError ? <p className="form-error" role="alert">{actionError}</p> : null}
       <header className="question-head apportion-log-section-head">

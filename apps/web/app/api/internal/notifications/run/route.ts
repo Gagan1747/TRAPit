@@ -19,6 +19,8 @@ import {
   listAvailablePollsForParticipant,
   listAvailableTestsForParticipant,
   listBrowserNotificationSchedules,
+  reconcileExpiredGames,
+  reconcileExpiredTestSessions,
 } from "../../../../../lib/testing-store";
 
 const REMINDER_WINDOW_MS = 15 * 60 * 1000;
@@ -150,6 +152,8 @@ async function runNotificationWorker(request: Request) {
   await reconcileApportionAddressOptOuts();
   await reconcileApportionProviderLeaves();
   if (await reconcileApportionLifecycle()) publishWorkspaceEvent("apportion");
+  if (await reconcileExpiredGames()) publishWorkspaceEvent("game");
+  await reconcileExpiredTestSessions();
   const [pushTokens, webPushSubscriptions, appointmentNotifications, scheduleNotifications] = await Promise.all([
     listPushTokens(),
     listWebPushSubscriptions(),

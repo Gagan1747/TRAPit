@@ -66,6 +66,18 @@ beforeEach(async () => {
 });
 
 describe("canonical appointment store", () => {
+  it("rejects assigned staff without configured hours even when address overrides open the day", async () => {
+    const membership = fixtures.context!.memberships[0];
+    Object.assign(membership, { workingDays: "", workingHours: "", workingHoursSecondWindow: "", dailyHours: [] });
+    fixtures.context!.branding.appointmentDateOverrides = { closedDateKeys: [], openedDateKeys: ["2099-10-05"] };
+    await expect(store.createApportionAppointment(booking())).rejects.toThrow("Staff working hours unavailable");
+  });
+  it("keeps unassigned business-hour bookings and snapshots the owner's provider contact without changing assignment", async () => {
+    const appointment = await store.createApportionAppointment(booking("unassigned"));
+    expect(appointment).toMatchObject({ assignedStaffIdentifier: null, assignedStaffName: "Owner", assignedStaffPhone: OWNER, requesterName: "Customer" });
+    const projected = (await store.listApportionAppointmentsForActor(REQUESTER)).find((entry) => entry.id === appointment.id);
+    expect(projected).toMatchObject({ assignedStaffIdentifier: null, assignedStaffName: "Owner", assignedStaffPhone: OWNER });
+  });
   it("requires a reason, preserves notes, atomically appends an authored cancellation, and retries once", async () => {
     const appointment = await store.createApportionAppointment({ ...booking(), notes: "Original customer note" });
     const before = await persisted();

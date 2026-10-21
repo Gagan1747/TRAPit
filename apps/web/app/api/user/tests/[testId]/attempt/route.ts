@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getScheduledTestEndTime } from "@trapit/testing";
 
 import { getUserActor } from "../../../../../../lib/user-api";
-import { listAvailableTestsForParticipant, recordAttempt } from "../../../../../../lib/testing-store";
+import { listAvailableTestsForParticipant, recordAttempt, submitVersionedTest } from "../../../../../../lib/testing-store";
 
 export async function POST(
   request: Request,
@@ -14,6 +14,11 @@ export async function POST(
     return NextResponse.json({ error: "User access is required." }, { status: 403 });
   }
 
+  try {
+  const tests = await listAvailableTestsForParticipant(actor.identifier);
+  if (tests.find((test) => test.id === context.params.testId)?.rulesVersion === 2) {
+    return NextResponse.json(await submitVersionedTest(context.params.testId, actor.identifier));
+  }
   const body = (await request.json()) as {
     answers?: Record<string, number | undefined>;
     completedAt?: string;
@@ -28,7 +33,6 @@ export async function POST(
     );
   }
 
-  try {
     const attempt = await recordAttempt({
       answers: body.answers,
       completedAt: body.completedAt,

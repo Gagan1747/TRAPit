@@ -47,6 +47,7 @@ async function resolveServiceBusiness(ownerIdentifier: string, serviceId: string
     .flatMap((location) => {
       const membership = memberships.find((entry) => entry.locationId === location.id);
       if (!providerIdentifier || isOwner && !membership) return [location];
+      if (!isOwner && (!membership || !resolveApportionDailySchedule(membership).some((day) => day.workingHours || day.workingHoursSecondWindow))) return [];
       return membership ? [{ ...location, dailyHours: membership.dailyHours, workingDays: membership.workingDays, workingHours: membership.workingHours, workingHoursSecondWindow: membership.workingHoursSecondWindow }] : [];
     });
   const branding: WorkspaceBranding = { ...ownerContext.branding, ...(settings ?? {}), appointmentLocations: locations,

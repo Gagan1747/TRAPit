@@ -1,9 +1,11 @@
 "use client";
 
 import { APPORTION_NEW_DURATION_MINUTES, getApportionServiceLimit, getApportionWeeklyIntervals, participantIdentifiersMatch, resolveApportionDailySchedule, type AppointmentLocation, type ApportionDailyHours, type ApportionProviderSettings, type ApportionService, type ApportionWeeklyInterval } from "@trapit/testing";
-import { ChevronLeft, ChevronRight, Plus, Save, Search, Unlink } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Copy, ExternalLink, Plus, QrCode, Save, Search, Unlink } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import QRCode from "qrcode";
 import type { ApportionPanelInput, getApportionPanel } from "../lib/apportion-directory";
+import { buildApportionBookingPath } from "../lib/apportion-booking-path";
 import { BusinessHoursGrid } from "./business-hours-grid";
 import { readJsonResponse } from "../lib/read-json-response";
 
@@ -14,6 +16,47 @@ type SaveOperation = (input: ApportionPanelInput) => Promise<boolean>;
 
 async function readResponse<T>(response: Response): Promise<T> {
   return readJsonResponse<T>(response);
+}
+
+export function BusinessBookingLink({ business, actions = false }: { business: Business; actions?: boolean }) {
+  const code = business.branding.appointmentShareCode;
+  const path = code ? buildApportionBookingPath(code) : "";
+  const [qr, setQr] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setCopied(false); setQr(""); setError(null);
+    if (!actions || !path) return;
+    let active = true;
+    void QRCode.toDataURL(new URL(path, window.location.origin).href, { margin: 1, width: 512 })
+      .then((value: string) => { if (active) setQr(value); })
+      .catch(() => { if (active) setError("Unable to generate the booking QR code."); });
+    return () => { active = false; };
+  }, [actions, path]);
+  return <div className="question-head">
+    <h4>{path ? <a href={path} target="_blank" rel="noreferrer">{business.branding.instituteName || "Business"}</a> : business.branding.instituteName || "Business"} <span className="status-chip">{business.role}</span></h4>
+    {actions && path ? <div className="apportion-link-actions" aria-label="Business booking link actions">
+      <button aria-label={copied ? "Booking link copied" : "Copy booking link"} className="button-secondary small-button icon-button" title="Copy booking link" type="button" onClick={() => {
+        void navigator.clipboard.writeText(new URL(path, window.location.origin).href).then(() => { setCopied(true); setError(null); }).catch(() => setError("Unable to copy the booking link."));
+      }}>{copied ? <Check aria-hidden="true" className="apportion-action-icon" /> : <Copy aria-hidden="true" className="apportion-action-icon" />}</button>
+      <a aria-label="Open booking page" className="button-secondary small-button icon-button" href={path} target="_blank" rel="noreferrer" title="Open booking page"><ExternalLink aria-hidden="true" className="apportion-action-icon" /></a>
+      {qr ? <a aria-label="Download QR code" className="button-secondary small-button icon-button" download="trapit-apportion-qr.png" href={qr} title="Download QR code"><QrCode aria-hidden="true" className="apportion-action-icon" /></a>
+        : <button aria-label="QR code unavailable" className="button-secondary small-button icon-button" disabled title={error || "Generating QR code..."} type="button"><QrCode aria-hidden="true" className="apportion-action-icon" /></button>}
+    </div> : null}
+    {error ? <p role="status">{error}</p> : null}
+  </div>;
+}
+
+function BookingChoices({ settings, onChange, label }: { settings: ApportionProviderSettings; onChange: (settings: ApportionProviderSettings) => void; label: string }) {
+  return <div className="field business-field-card">
+    <span className="field-label">Appointments per slot</span>
+    <div className="business-choice-row" role="group" aria-label={`${label} appointments per slot`}>{[1, 2, 3, 4, 5, 6].map((capacity) => <button className="business-choice-button" aria-pressed={settings.appointmentsPerSlot === capacity} key={capacity} type="button" onClick={() => onChange({ ...settings, appointmentsPerSlot: capacity })}>{capacity}</button>)}</div>
+    <span className="field-label">Slot duration</span>
+    <div className="business-choice-row business-duration-choices" role="group" aria-label={`${label} slot duration`}>{APPORTION_NEW_DURATION_MINUTES.map((duration) => <button className="business-choice-button" aria-pressed={settings.slotDurationMinutes === duration} key={duration} type="button" onClick={() => onChange({ ...settings, slotDurationMinutes: duration })}>{duration === 1440 ? "All Day" : duration === 240 ? "4 hr" : duration === 60 ? "1 hr" : `${duration} min`}</button>)}</div>
+    {!APPORTION_NEW_DURATION_MINUTES.some((duration) => duration === settings.slotDurationMinutes) ? <span className="muted-text">Current: {settings.slotDurationMinutes} min</span> : null}
+    <span className="field-label business-booking-type-heading">Booking type</span>
+    <div className="business-choice-row business-mode-choices" role="group" aria-label={`${label} booking type`}>{[{ label: "Slot Based", queue: false }, { label: "Queue Based", queue: true }].map((mode) => <button className="business-choice-button" aria-pressed={settings.justAddToList === mode.queue} key={mode.label} type="button" onClick={() => onChange({ ...settings, justAddToList: mode.queue })}>{mode.label}</button>)}</div>
+  </div>;
 }
 
 function RegisteredPhone({ value, onChange, onResolved, disabled = false }: { value: string; onChange: (value: string) => void; onResolved?: (identifier: string | null) => void; disabled?: boolean }) {
@@ -88,11 +131,13 @@ export function BusinessAddresses({ business, busy, save }: { business: Business
     setError(null);
     await save({ operation: "business-branding", ownerIdentifier: business.business.ownerIdentifier, branding });
   }
-  return <section className="workspace-card-stack">
+  return <section className="business-details-panel"><div className="business-details-form">
+    <BusinessBookingLink business={business} actions={business.role === "admin"} />
+    <section className="business-form-section"><h3>Address &amp; Operating Hours</h3>
     <label>Business name<input readOnly value={branding.instituteName} /></label>
     {(branding.appointmentLocations ?? []).map((location, index) => {
       const dailyHours = resolveApportionDailySchedule(location);
-      return <fieldset className="workspace-card-stack" disabled={busy || business.role !== "admin"} key={location.id}>
+      return <fieldset className="field business-field-card" disabled={busy || business.role !== "admin"} key={location.id}>
         <legend>Address #{index + 1}</legend>
         <label>Address<input readOnly value={location.address} /></label>
         <BusinessHoursGrid label={`Address ${index + 1}`} dailyHours={dailyHours} activeWeekdays={activeDays[location.id] ?? []}
@@ -107,12 +152,12 @@ export function BusinessAddresses({ business, busy, save }: { business: Business
           onHoursChange={(weekday, field, value) => setHours(location.id, weekday, field, value)} />
       </fieldset>;
     })}
-    <fieldset disabled={busy} className="workspace-card-stack">
+    </section>
+    <fieldset disabled={busy || business.role !== "admin"} className="business-form-section">
       <legend>Business-wide configuration</legend>
+      <BookingChoices label="Business" settings={{ appointmentsPerSlot: branding.appointmentsPerSlot ?? 1, slotDurationMinutes: branding.slotDurationMinutes ?? 10, justAddToList: branding.justAddToList ?? true }}
+        onChange={(settings) => setBranding((current) => ({ ...current, ...settings, showRemainingBookings: !settings.justAddToList }))} />
       <label>Notes explanation text<input value={branding.appointmentNotesPrompt ?? ""} onChange={(event) => setBranding((current) => ({ ...current, appointmentNotesPrompt: event.target.value }))} /></label>
-      <label>Appointments per slot<select value={branding.appointmentsPerSlot ?? 1} onChange={(event) => setBranding((current) => ({ ...current, appointmentsPerSlot: Number(event.target.value) }))}>{[1, 2, 3, 4, 5, 6].map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
-      <label>Slot duration<select value={branding.slotDurationMinutes ?? 10} onChange={(event) => setBranding((current) => ({ ...current, slotDurationMinutes: Number(event.target.value) }))}>{[5, 10, 15, 30, 45, 60, 120, 180, 240, 1440].map((duration) => <option key={duration} value={duration}>{duration === 1440 ? "All Day" : `${duration} min`}</option>)}</select></label>
-      <label>Booking mode<select value={branding.justAddToList ? "queue" : "standard"} onChange={(event) => setBranding((current) => ({ ...current, justAddToList: event.target.value === "queue", showRemainingBookings: event.target.value !== "queue" }))}><option value="standard">Slot Based</option><option value="queue">Queue Based</option></select></label>
       {(["imageDataUrl", "profileImageDataUrl"] as const).map((field) => <label key={field}>{field === "imageDataUrl" ? "Business logo" : "Profile image"}<input accept="image/*" type="file" onChange={(event) => {
         const file = event.target.files?.[0];
         if (!file) return;
@@ -155,7 +200,7 @@ export function BusinessAddresses({ business, busy, save }: { business: Business
         appointmentLocations: business.branding.appointmentLocations?.map((location) => ({ ...location, workingDays: "", workingHours: "", workingHoursSecondWindow: "", dailyHours: resolveApportionDailySchedule({}) })),
       } });
     }}>Clear business-wide settings</button> : null}
-  </section>;
+  </div></section>;
 }
 
 function ServiceRow({ business, service, index, busy, save }: { business: Business; service: ApportionService; index: number; busy: boolean; save: SaveOperation }) {
@@ -194,7 +239,7 @@ export function BusinessRoles({ business, save, busy }: { business: Business; sa
   useEffect(() => { setDelegate(business.business.adminDelegateIdentifier || ""); }, [business.business.adminDelegateIdentifier]);
   const canEdit = (business.role === "admin" || (business.role === "owner" && !business.business.adminDelegateIdentifier)) && getApportionServiceLimit(business.ownerCategory) > 0;
   return <section className="workspace-card-stack">
-    <h4>{business.branding.instituteName || "Business"} <span className="status-chip">{business.role}</span></h4>
+    <BusinessBookingLink business={business} />
     {business.business.services.filter((service) => service.id === "consultation").map((service) => <ServiceRow key={service.id} business={business} service={service} index={0} busy={busy} save={save} />)}
     {business.role !== "staff" ? <fieldset disabled={busy || business.role !== "owner"} className="apportion-matrix-row">
       <div><strong>Delegate</strong><span>Admin</span></div>
@@ -456,14 +501,9 @@ export function ApportionRolePanel({ canCreateBusiness: fallbackCanCreateBusines
     <h3>Staff and Service Matrix</h3>
     {assignedBusinesses.map((business) => <BusinessRoles key={business.business.ownerIdentifier} business={business} busy={busy} save={save} />)}
     {canCreateBusiness && !ownerDelegated ? personalBusinessConfiguration : null}
-    {(ownerDelegated || !canCreateBusiness) && assignedBusinesses.length ? <fieldset disabled={busy} className="workspace-card-stack">
-      <legend>Bookings Configuration</legend>
-      <span className="field-label">Appointments per slot</span>
-      <div className="business-choice-row" role="group" aria-label="My appointments per slot">{[1, 2, 3, 4, 5, 6].map((capacity) => <button className="business-choice-button" aria-pressed={panel.providerSettings.appointmentsPerSlot === capacity} key={capacity} type="button" onClick={() => { setProviderSettingsDirty(true); setPanel({ ...panel, providerSettings: { ...panel.providerSettings, appointmentsPerSlot: capacity } }); }}>{capacity}</button>)}</div>
-      <span className="field-label">Slot duration</span>
-      <div className="business-choice-row" role="group" aria-label="My slot duration">{APPORTION_NEW_DURATION_MINUTES.map((duration) => <button className="business-choice-button" aria-pressed={panel.providerSettings.slotDurationMinutes === duration} key={duration} type="button" onClick={() => { setProviderSettingsDirty(true); setPanel({ ...panel, providerSettings: { ...panel.providerSettings, slotDurationMinutes: duration } }); }}>{duration === 1440 ? "All Day" : duration === 240 ? "4 hr" : duration === 60 ? "1 hr" : `${duration} min`}</button>)}</div>
-      {!APPORTION_NEW_DURATION_MINUTES.some((duration) => duration === panel.providerSettings.slotDurationMinutes) ? <span className="muted-text">Current: {panel.providerSettings.slotDurationMinutes} min</span> : null}
-      <div className="business-choice-row business-mode-choices" role="group" aria-label="My booking mode">{[{ label: "Slot Based", queue: false }, { label: "Queue Based", queue: true }].map((mode) => <button className="business-choice-button" aria-pressed={panel.providerSettings.justAddToList === mode.queue} key={mode.label} type="button" onClick={() => { setProviderSettingsDirty(true); setPanel({ ...panel, providerSettings: { ...panel.providerSettings, justAddToList: mode.queue } }); }}>{mode.label}</button>)}</div>
+    {(ownerDelegated || !canCreateBusiness) && panel.memberships.length ? <fieldset disabled={busy} className="business-form-section">
+      <legend>My booking configuration</legend>
+      <BookingChoices label="My" settings={panel.providerSettings} onChange={(settings) => { setProviderSettingsDirty(true); setPanel({ ...panel, providerSettings: settings }); }} />
       {providerSettingsDirty ? <p className="muted-text">Changes apply to new bookings and reschedules. Existing appointments remain unchanged</p> : null}
       <button className="button-secondary" type="button" onClick={() => void save({ operation: "set-settings", settings: panel.providerSettings })}><Save size={16} /> Save my settings</button>
     </fieldset> : null}

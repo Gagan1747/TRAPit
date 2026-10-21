@@ -515,6 +515,13 @@ type UserDashboardResponse = {
   availablePolls: ScheduledPoll[];
   availableTests: Array<{
     branding?: WorkspaceBranding | null;
+    assessmentKind?: "standard" | "instant";
+    creatorDisplayName?: string | null;
+    creatorIdentifier?: string | null;
+    hasJoined?: boolean;
+    joinedCount?: number;
+    sharedCount?: number;
+    isCreator?: boolean;
     durationMinutes: number;
     groupNames: string[];
     hasAttempt: boolean;
@@ -543,6 +550,7 @@ type UserDashboardResponse = {
 };
 
 type AvailableGameSummary = {
+  creatorDisplayName?: string | null;
   acceptedCount: number;
   completedAt: string | null;
   countdownDeadline: string | null;
@@ -560,6 +568,7 @@ type AvailableGameSummary = {
   participantGroupId: string;
   participants: Array<{
     accepted: boolean;
+    submitted?: boolean;
     identifier: string;
     label: string;
   }>;
@@ -1907,13 +1916,14 @@ export function AdminQuestionWorkspace({
   const [editingScheduledTestId, setEditingScheduledTestId] = useState<string | null>(null);
   const [scheduleDurationMinutes, setScheduleDurationMinutes] = useState("30");
   const [scheduleFeedback, setScheduleFeedback] = useState<string | null>(null);
-  const [scheduleGenerateInviteLink, setScheduleGenerateInviteLink] = useState(false);
   const [isGameMode, setIsGameMode] = useState(false);
+  const [assessmentKind, setAssessmentKind] = useState<"standard" | "instant">("standard");
+  const [scheduleRepeats, setScheduleRepeats] = useState(false);
   const [overallGamePoints, setOverallGamePoints] = useState(0);
   const [scheduleParticipantGroupIds, setScheduleParticipantGroupIds] = useState<string[]>([]);
   const [scheduleParticipantIds, setScheduleParticipantIds] = useState<string[]>([]);
   const [schedulePoolId, setSchedulePoolId] = useState("");
-  const [scheduleQuestionCount, setScheduleQuestionCount] = useState("1");
+  const [scheduleQuestionCount, setScheduleQuestionCount] = useState("20");
   const [scheduleRepeatMode, setScheduleRepeatMode] = useState<TestRepeatMode>("none");
   const [scheduleStartsAtInput, setScheduleStartsAtInput] = useState(createDefaultScheduleTime());
   const [scheduleTitle, setScheduleTitle] = useState("");
@@ -2716,11 +2726,12 @@ export function AdminQuestionWorkspace({
     setEditingScheduledTestId(null);
     setSchedulePoolId("");
     setScheduleDurationMinutes("30");
-    setScheduleGenerateInviteLink(false);
     setIsGameMode(false);
+    setAssessmentKind("standard");
+    setScheduleRepeats(false);
     setScheduleParticipantGroupIds([]);
     setScheduleParticipantIds([]);
-    setScheduleQuestionCount("1");
+    setScheduleQuestionCount("20");
     setScheduleRepeatMode("none");
     setScheduleStartsAtInput(createDefaultScheduleTime());
     setScheduleTitle("");
@@ -2746,11 +2757,13 @@ export function AdminQuestionWorkspace({
   }
 
   function handleStartEditingScheduledTest(test: ScheduledTest) {
+    setIsGameMode(false);
+    setAssessmentKind(test.assessmentKind ?? "standard");
+    setScheduleRepeats(false);
     setEditingScheduledTestId(test.id);
     setSchedulePoolId(test.poolId);
     setScheduleQuestionCount(String(test.questionCount));
     setScheduleDurationMinutes(String(test.durationMinutes));
-    setScheduleGenerateInviteLink(Boolean(test.shareCode));
     setScheduleParticipantGroupIds([...test.participantGroupIds]);
     setScheduleParticipantIds([...test.participantIds]);
     setScheduleRepeatMode("none");
@@ -2761,11 +2774,13 @@ export function AdminQuestionWorkspace({
   }
 
   function handleStartEditingSelfTest(test: ScheduledTest) {
+    setIsGameMode(false);
+    setAssessmentKind(test.assessmentKind ?? "standard");
+    setScheduleRepeats(false);
     setEditingScheduledTestId(test.id);
     setSchedulePoolId(test.poolId);
     setScheduleQuestionCount(String(test.questionCount));
     setScheduleDurationMinutes(String(test.durationMinutes));
-    setScheduleGenerateInviteLink(false);
     setScheduleParticipantGroupIds([SELF_TEST_GROUP_OPTION_ID]);
     setScheduleParticipantIds([]);
     setScheduleRepeatMode("none");
@@ -3567,6 +3582,10 @@ export function AdminQuestionWorkspace({
       setPoolFeedback("Enter a pool name.");
       return;
     }
+    if (poolRenameName.trim().length > 30 && poolRenameName.trim() !== selectedQuestionBankPool.name) {
+      setPoolFeedback("Use a pool name of up to 30 characters.");
+      return;
+    }
 
     void mutateWorkspace(async () => {
       const payload = await readJson<PoolsResponse>(
@@ -3672,6 +3691,10 @@ export function AdminQuestionWorkspace({
   }
 
   function handleCommitImport() {
+    if (!authorPoolId && poolName.trim().length > 30) {
+      setImportFeedback("Use a pool name of up to 30 characters.");
+      return;
+    }
     if (!authorPoolId && !poolName.trim()) {
       setImportFeedback("Select a pool or enter a new pool name before importing questions.");
       return;
@@ -3733,6 +3756,10 @@ export function AdminQuestionWorkspace({
   function handleCreateGroup() {
     if (!groupName.trim()) {
       setGroupFeedback("Group or class name is required.");
+      return;
+    }
+    if (groupName.trim().length > 30) {
+      setGroupFeedback("Use a group name of up to 30 characters.");
       return;
     }
 
@@ -4572,6 +4599,10 @@ export function AdminQuestionWorkspace({
       setGroupFeedback("Group or class name is required.");
       return;
     }
+    if (editingGroupDraft.name.trim().length > 30 && editingGroupDraft.name.trim() !== participantGroups.find((group) => group.id === editingGroupId)?.name) {
+      setGroupFeedback("Use a group name of up to 30 characters.");
+      return;
+    }
 
     void mutateWorkspace(async () => {
       await readJson<ParticipantsResponse>(
@@ -4630,16 +4661,37 @@ export function AdminQuestionWorkspace({
 
   const isScheduleSelfTestSelected = scheduleParticipantGroupIds.includes(SELF_TEST_GROUP_OPTION_ID);
   const selectedScheduleGroupIds = scheduleParticipantGroupIds.filter((groupId) => groupId !== SELF_TEST_GROUP_OPTION_ID);
+  const ownedScheduleGroups = participantGroups.filter((group) => Boolean(currentAdminIdentifier && group.ownerIdentifier && participantIdentifiersMatch(group.ownerIdentifier, currentAdminIdentifier)));
+  const editingScheduledTest = scheduledTests.find((test) => test.id === editingScheduledTestId);
+  const scheduleGroupOptions = ownedScheduleGroups.filter((group) => group.participantIds.length > 0);
+  const selectedScheduleMemberIds = new Set(participantGroups.filter((group) => selectedScheduleGroupIds.includes(group.id)).flatMap((group) => group.participantIds));
+  const minimumScheduleMembers = isGameMode || assessmentKind === "instant" ? 4 : 1;
+  const hasLegacyScheduleAudience = Boolean(editingScheduledTest && (editingScheduledTest.participantIds.length || selectedScheduleGroupIds.some((id) => !ownedScheduleGroups.some((group) => group.id === id))));
+  const eligibleSchedulePools = pools.filter((pool) => pool.questionIds.length >= (isGameMode ? 20 : Number(scheduleQuestionCount)) || (editingScheduledTest && pool.id === schedulePoolId));
+  const canSubmitSchedule = Boolean(scheduleTitle.trim()
+    && (scheduleTitle.trim().length <= 30 || scheduleTitle.trim() === editingScheduledTest?.title)
+    && schedulePoolId
+    && (hasLegacyScheduleAudience || (selectedScheduleGroupIds.length > 0 && selectedScheduleMemberIds.size >= minimumScheduleMembers))
+    && (isGameMode || (Number(scheduleDurationMinutes) > 0 && Number(scheduleQuestionCount) > 0
+      && (assessmentKind === "instant" || Boolean(scheduleStartsAtInput)))));
 
   function handleScheduleTest() {
+    if (!scheduleTitle.trim() || (scheduleTitle.trim().length > 30 && scheduleTitle.trim() !== editingScheduledTest?.title)) {
+      setScheduleFeedback("Enter a name of up to 30 characters.");
+      return;
+    }
+    if (!hasLegacyScheduleAudience && (!selectedScheduleGroupIds.length || selectedScheduleGroupIds.some((id) => !ownedScheduleGroups.some((group) => group.id === id)) || selectedScheduleMemberIds.size < minimumScheduleMembers)) {
+      setScheduleFeedback(`Select your groups with at least ${minimumScheduleMembers} unique member${minimumScheduleMembers === 1 ? "" : "s"}.`);
+      return;
+    }
     if (!schedulePoolId) {
       setScheduleFeedback("Select a question pool first.");
       return;
     }
 
     if (isGameMode) {
-      if (selectedScheduleGroupIds.length !== 1 || isScheduleSelfTestSelected) {
-        setScheduleFeedback("Select exactly one group for the game.");
+      if ((pools.find((pool) => pool.id === schedulePoolId)?.questionIds.length ?? 0) < 20) {
+        setScheduleFeedback("Select a pool with at least 20 questions.");
         return;
       }
 
@@ -4654,7 +4706,7 @@ export function AdminQuestionWorkspace({
         const payload = await readJson<{ game: AvailableGameSummary }>(
           await fetch("/api/admin/games", {
             body: JSON.stringify({
-              participantGroupId: selectedScheduleGroupIds[0],
+              participantGroupIds: selectedScheduleGroupIds,
               poolId: schedulePoolId,
               title: scheduleTitle.trim(),
             }),
@@ -4695,14 +4747,13 @@ export function AdminQuestionWorkspace({
       setScheduleFeedback("Question count must be at least 1.");
       return;
     }
-
-    if (isScheduleSelfTestSelected && !currentAdminIdentifier) {
-      setScheduleFeedback("Your account needs a participant identifier before you can create a self test.");
+    if ((pools.find((pool) => pool.id === schedulePoolId)?.questionIds.length ?? 0) < questionCount) {
+      setScheduleFeedback("Select a pool with enough questions.");
       return;
     }
 
-    if (scheduleGenerateInviteLink && selectedScheduleGroupIds.length !== 1) {
-      setScheduleFeedback("Invite links require exactly one selected group.");
+    if (isScheduleSelfTestSelected && !currentAdminIdentifier) {
+      setScheduleFeedback("Your account needs a participant identifier before you can create a self test.");
       return;
     }
 
@@ -4711,7 +4762,7 @@ export function AdminQuestionWorkspace({
       return;
     }
 
-    const startsAt = new Date(scheduleStartsAtInput).toISOString();
+    const startsAt = assessmentKind === "instant" && !editingScheduledTestId ? new Date().toISOString() : new Date(scheduleStartsAtInput).toISOString();
     const scheduleStartInputs = getRecurringScheduleInputs(
       scheduleStartsAtInput,
       editingScheduledTestId ? "none" : scheduleRepeatMode,
@@ -4722,9 +4773,10 @@ export function AdminQuestionWorkspace({
       await readJson<ScheduledTestsResponse>(
         await fetch("/api/admin/tests", {
           body: JSON.stringify({
+            assessmentKind: editingScheduledTest?.assessmentKind ?? assessmentKind,
             branding: normalizeBrandingInput(workspaceBranding),
             durationMinutes,
-            generateInviteLink: false,
+            generateInviteLink: editingScheduledTest ? Boolean(editingScheduledTest.shareCode) : false,
             participantGroupIds: isScheduleSelfTestSelected ? [] : selectedScheduleGroupIds,
             participantIds: isScheduleSelfTestSelected && currentAdminIdentifier ? [currentAdminIdentifier] : scheduleParticipantIds,
             poolId: schedulePoolId,
@@ -5105,8 +5157,20 @@ export function AdminQuestionWorkspace({
         : groupIds.length
           ? groupIds.map((groupId) => participantGroups.find((group) => group.id === groupId)?.name ?? "Unknown group").join(", ")
           : "None";
+      const joinedCount = scheduledTest?.participantSessions?.length ?? participantTest?.joinedCount ?? 0;
+      const ownSession = scheduledTest?.participantSessions?.find((session) => participantIdentifiersMatch(session.identifier, currentAdminIdentifier ?? ""));
+      const hasJoined = Boolean(ownSession || participantTest?.hasJoined || participantTest?.hasAttempt || participantHistory?.status === "submitted");
+      const submitted = Boolean(ownSession?.submittedAt || participantTest?.hasAttempt || participantHistory?.status === "submitted");
+      const creatorIdentifier = scheduledTest?.creatorIdentifier ?? participantTest?.creatorIdentifier;
+      const canParticipate = test.hasParticipantScope || Boolean(scheduledTest?.resolvedParticipantIdentifiers.some((id) => participantIdentifiersMatch(id, currentAdminIdentifier ?? "")));
+      const isInstant = (scheduledTest?.assessmentKind ?? participantTest?.assessmentKind) === "instant";
 
       return {
+        creatorName: scheduledTest?.creatorDisplayName ?? participantTest?.creatorDisplayName ?? "Creator",
+        creatorIdentifier: creatorIdentifier ? formatPhoneNumberForDisplay(creatorIdentifier, { showFullPhoneNumber: true }) : undefined,
+        participation: useParticipantScope
+          ? <>{test.status === "completed" && !hasJoined ? "Absent" : hasParticipantResult && participantResult ? `Rank: ${participantResult.rank} / ${participantTest?.participantResultCount ?? 1}` : hasJoined ? "Joined" : "Not joined"}{hasParticipantResult && participantResult ? <span className="assessment-log-detail">Marks: {participantResult.marks}</span> : null}</>
+          : `${joinedCount} joined / ${scheduledTest?.resolvedParticipantIdentifiers.length ?? participantTest?.sharedCount ?? 0} shared`,
         groups,
         id: `test-${test.id}`,
         marksOrPoints: hasParticipantResult && participantResult
@@ -5124,13 +5188,17 @@ export function AdminQuestionWorkspace({
         scheduled: formatShortDateTime(test.startsAt),
         sortTime: new Date(test.startsAt).getTime(),
         status: test.status === "scheduled"
-          ? useParticipantScope
+          ? isInstant
+            ? <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Upcoming</a>
+            : useParticipantScope
             ? <span className="status-chip warning">Upcoming</span>
             : scheduledTest
               ? <button className="button-secondary small-button" type="button" onClick={() => scheduledTest.participantIds.length ? handleStartEditingSelfTest(scheduledTest) : handleStartEditingScheduledTest(scheduledTest)}>Upcoming</button>
               : <span className="status-chip warning">Upcoming</span>
           : test.status === "live"
-            ? useParticipantScope
+            ? submitted
+              ? <span className="status-chip success">Submitted</span>
+              : useParticipantScope || canParticipate || isInstant
               ? <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Live</a>
               : <span className="status-chip success">Live</span>
             : <a className="button-secondary small-button" href={`/test-results/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Results</a>,
@@ -5152,6 +5220,12 @@ export function AdminQuestionWorkspace({
       const duration = formatElapsedTime(20 * game.questionDurationMs);
 
       return {
+        creatorName: game.creatorDisplayName ?? participants.find((entry) => participantIdentifiersMatch(entry.identifier, game.creatorIdentifier))?.label ?? "Creator",
+        creatorIdentifier: formatPhoneNumberForDisplay(game.creatorIdentifier, { showFullPhoneNumber: true }),
+        participation: useParticipantScope
+          ? game.status === "completed" && !participant?.accepted ? "Absent"
+            : ownResult && game.status === "completed" ? `Rank: ${ownResult.rank} / ${game.leaderboard.length} · Points: ${ownResult.points}` : participant?.accepted ? "Joined" : "Not joined"
+          : `${game.acceptedCount} joined / ${game.participantCount} shared`,
         groups: game.groupName,
         id: `game-${game.id}`,
         marksOrPoints: useParticipantScope && game.status === "completed" && ownResult ? `${ownResult.points}` : "—",
@@ -5167,13 +5241,15 @@ export function AdminQuestionWorkspace({
         status: game.status === "upcoming"
           ? useParticipantScope
             ? participant?.accepted
-              ? <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Accept</a>
-              : <button className="button-secondary small-button" type="button" onClick={() => handleAcceptGame(game.id)}>Accept</button>
-            : <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Open</a>
+              ? <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Upcoming</a>
+              : <button className="button-secondary small-button" type="button" onClick={() => handleAcceptGame(game.id)}>Upcoming</button>
+            : <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Upcoming</a>
           : game.status === "completed"
             ? <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Results</a>
-            : <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Watch</a>,
-        test: "Game",
+            : useParticipantScope && participant?.submitted
+              ? <span className="status-chip success">Submitted</span>
+              : <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Live</a>,
+        test: game.title,
         time: duration,
       };
     }),
@@ -5413,7 +5489,8 @@ export function AdminQuestionWorkspace({
             setBusinessAppointmentNotesPrompt(event.target.value);
           }}
         />
-        <div className="business-choice-row business-mode-choices" role="group" aria-label="Booking mode">
+        <span className="field-label business-booking-type-heading">Booking type</span>
+        <div className="business-choice-row business-mode-choices" role="group" aria-label="Booking type">
           {[{ label: "Slot Based", value: "standard" }, { label: "Queue Based", value: "queue" }].map((mode) => <button aria-pressed={businessBookingBehaviorMode === mode.value} className="business-choice-button" key={mode.value} type="button" onClick={() => { markBrandingDraftDirty(); setBusinessBookingBehaviorMode(mode.value as "standard" | "queue"); }}>{mode.label}</button>)}
         </div>
       </div>
@@ -6022,7 +6099,7 @@ export function AdminQuestionWorkspace({
                     <div className="workspace-overflow-head apportion-drawer-header">
                       <div>
                         <p className="eyebrow">APPORTION</p>
-                        <h2 className="section-title" id="apportion-business-panel-title">{brandingInstituteName || "Business Panel"}</h2>
+                        <h2 className="section-title" id="apportion-business-panel-title">{businessAppointmentShareCode || workspaceBranding?.appointmentShareCode ? <a href={getApportionAccessUrl(businessAppointmentShareCode ?? workspaceBranding?.appointmentShareCode ?? "")} rel="noreferrer" target="_blank">{brandingInstituteName || "Business Panel"}</a> : brandingInstituteName || "Business Panel"}</h2>
                       </div>
                       {businessLinkActions}
                       <FloatingWindowCloseButton label="Close Business Panel" onClick={() => setIsApportionBusinessPanelOpen(false)} />
@@ -6393,6 +6470,7 @@ export function AdminQuestionWorkspace({
                   <input
                     id="pool-name-inline"
                     placeholder="Pool name"
+                    maxLength={30}
                     value={poolName}
                     onChange={(event) => setPoolName(event.target.value)}
                   />
@@ -6594,6 +6672,7 @@ export function AdminQuestionWorkspace({
                         <span>Pool name</span>
                         <input
                           id="pool-rename-name"
+                          maxLength={poolRenameName === selectedQuestionBankPool.name ? Math.max(30, poolRenameName.length) : 30}
                           value={poolRenameName}
                           onChange={(event) => setPoolRenameName(event.target.value)}
                         />
@@ -7013,6 +7092,7 @@ export function AdminQuestionWorkspace({
                 <input
                   id="group-name"
                   placeholder="Enter group name"
+                  maxLength={30}
                   value={groupName}
                   onChange={(event) => setGroupName(event.target.value)}
                 />
@@ -7148,6 +7228,7 @@ export function AdminQuestionWorkspace({
                           <label htmlFor={`edit-group-name-${group.id}`}>Group name</label>
                           <input
                             id={`edit-group-name-${group.id}`}
+                            maxLength={editingGroupDraft.name === group.name ? Math.max(30, group.name.length) : 30}
                             value={editingGroupDraft.name}
                             onChange={(event) =>
                               setEditingGroupDraft((currentDraft) =>
@@ -7354,10 +7435,11 @@ export function AdminQuestionWorkspace({
         <div className="apportion-modal-overlay" role="presentation" onClick={() => setOpenSection("history")}>
           <div aria-labelledby="schedule-test-drawer-title" className={`apportion-floating-drawer panel${isTestAddQuestionOpen ? " is-question-authoring" : ""}`} role="dialog" onClick={(event) => event.stopPropagation()}>
             <div className="workspace-overflow-head">
-              <h2 id="schedule-test-drawer-title">{isTestAddQuestionOpen ? "Add Question" : editingScheduledTestId ? "Edit Test" : "Schedule Test"}</h2>
+              <h2 id="schedule-test-drawer-title">{isTestAddQuestionOpen ? "Add Question" : editingScheduledTestId ? "Edit Test" : "Schedule Assessment"}</h2>
               <FloatingWindowCloseButton label="Close Schedule Test" onClick={() => setOpenSection("history")} />
             </div>
         <div className="form-stack">
+          {isTestAddQuestionOpen ? <button className="button-secondary small-button" type="button" onClick={() => handleMenuSectionSelection("question-bank")}>Question Pool</button> : null}
           <CollapsibleWorkspaceSection
             eyebrow=""
             hideToggle
@@ -7391,6 +7473,7 @@ export function AdminQuestionWorkspace({
                       <input
                         id="pool-name-inline"
                         placeholder="Pool name"
+                        maxLength={30}
                         value={poolName}
                         onChange={(event) => setPoolName(event.target.value)}
                       />
@@ -7529,6 +7612,7 @@ export function AdminQuestionWorkspace({
             <input
               id="schedule-title"
               placeholder="Weekly revision test"
+              maxLength={editingScheduledTest && scheduleTitle === editingScheduledTest.title ? Math.max(30, scheduleTitle.length) : 30}
               value={scheduleTitle}
               onChange={(event) => setScheduleTitle(event.target.value)}
             />
@@ -7536,29 +7620,30 @@ export function AdminQuestionWorkspace({
 
           {!editingScheduledTestId ? (
             <div className="field">
-              <label className="role-option" htmlFor="schedule-game-mode">
-                <input
-                  checked={isGameMode}
-                  id="schedule-game-mode"
-                  type="checkbox"
-                  onChange={(event) => {
-                    const enabled = event.target.checked;
-                    setIsGameMode(enabled);
-                    setScheduleQuestionCount(enabled ? "20" : "1");
+              <div aria-label="Assessment type" className="business-choice-row" role="group">
+                {(["instant", "rapid", "standard"] as const).map((mode) => <button
+                  aria-pressed={mode === "rapid" ? isGameMode : !isGameMode && assessmentKind === mode}
+                  className="business-choice-button"
+                  key={mode}
+                  type="button"
+                  onClick={() => {
+                    setIsGameMode(mode === "rapid");
+                    setAssessmentKind(mode === "instant" ? "instant" : "standard");
+                    setScheduleQuestionCount("20");
+                    setSchedulePoolId("");
                     setScheduleParticipantGroupIds([]);
                     setScheduleParticipantIds([]);
-                    setScheduleGenerateInviteLink(false);
                     setScheduleRepeatMode("none");
+                    setScheduleRepeats(false);
                   }}
-                />
-                <span>Start Games</span>
-              </label>
-              <p className="muted-text">Overall Points: <strong>{overallGamePoints}</strong></p>
+                >{mode === "instant" ? "Instant" : mode === "rapid" ? "Rapid" : "Test"}</button>)}
+              </div>
+              {isGameMode ? <p className="muted-text">Overall Points: <strong>{overallGamePoints}</strong></p> : null}
             </div>
           ) : null}
 
           {!isGameMode ? <><div className="field-row">
-            <div className="field">
+            {assessmentKind === "standard" ? <div className="field">
               <label htmlFor="schedule-starts-at">Test date and time</label>
               <input
                 id="schedule-starts-at"
@@ -7566,20 +7651,26 @@ export function AdminQuestionWorkspace({
                 value={scheduleStartsAtInput}
                 onChange={(event) => setScheduleStartsAtInput(event.target.value)}
               />
-            </div>
+            </div> : null}
             <div className="field">
               <label htmlFor="schedule-duration">Duration in minutes</label>
-              <input
+              <select className="select-field"
                 id="schedule-duration"
-                min={1}
-                type="number"
                 value={scheduleDurationMinutes}
                 onChange={(event) => setScheduleDurationMinutes(event.target.value)}
-              />
+              >
+                {editingScheduledTest && ![5, 10, 20, 30, 60].includes(editingScheduledTest.durationMinutes) ? <option value={editingScheduledTest.durationMinutes}>{editingScheduledTest.durationMinutes} minutes (existing)</option> : null}
+                {[5, 10, 20, 30, 60].map((duration) => <option key={duration} value={duration}>{duration} minutes</option>)}
+              </select>
             </div>
           </div>
 
-          <div className="field">
+          {assessmentKind === "standard" ? <div className="field">
+            {!editingScheduledTestId ? <><span className="field-label">Repeat</span><div aria-label="Repeat assessment" className="business-choice-row" role="group">
+              <button className="business-choice-button" aria-pressed={!scheduleRepeats} type="button" onClick={() => { setScheduleRepeats(false); setScheduleRepeatMode("none"); }}>No</button>
+              <button className="business-choice-button" aria-pressed={scheduleRepeats} type="button" onClick={() => { setScheduleRepeats(true); setScheduleRepeatMode("daily"); }}>Yes</button>
+            </div></> : null}
+            {scheduleRepeats ? <>
             <label htmlFor="schedule-repeat-mode">Repeat schedule</label>
             <select
               className="select-field"
@@ -7588,11 +7679,11 @@ export function AdminQuestionWorkspace({
               value={editingScheduledTestId ? "none" : scheduleRepeatMode}
               onChange={(event) => setScheduleRepeatMode(event.target.value as TestRepeatMode)}
             >
-              <option value="none">Do not repeat</option>
               <option value="daily">Every day - 1 test per day, 6 total</option>
               <option value="weekly">Every week - same weekday, 6 total</option>
               <option value="monthly">Every month - same date, 6 total</option>
             </select>
+            </> : null}
             {editingScheduledTestId ? (
               <p className="muted-text">Recurring schedules are created from new tests only. Edit each scheduled test separately.</p>
             ) : scheduleRepeatMode !== "none" ? (
@@ -7616,8 +7707,8 @@ export function AdminQuestionWorkspace({
                 </ol>
               </div>
             ) : null}
-          </div></> : (
-            <p className="muted-text">Games start when the creator chooses Start after at least 4 participants accept.</p>
+          </div> : <p className="muted-text">Join the lobby and choose Start after at least 4 participants join. A 60-second countdown runs before questions; the duration starts with the questions.</p>}</> : (
+            <p className="muted-text">Rapid uses 20 questions, at most 30 seconds per question, and starts after at least 4 participants accept.</p>
           )}
 
           <div className="field-row">
@@ -7630,7 +7721,7 @@ export function AdminQuestionWorkspace({
                 onChange={(event) => setSchedulePoolId(event.target.value)}
               >
                 <option value="">Select a pool</option>
-                {pools.map((pool) => (
+                {eligibleSchedulePools.map((pool) => (
                   <option key={pool.id} value={pool.id}>
                     {pool.name}
                   </option>
@@ -7639,14 +7730,15 @@ export function AdminQuestionWorkspace({
             </div>
             <div className="field">
               <label htmlFor="schedule-count">Number of questions</label>
-              <input
+              <select className="select-field"
                 disabled={isGameMode}
                 id="schedule-count"
-                min={1}
-                type="number"
                 value={isGameMode ? "20" : scheduleQuestionCount}
-                onChange={(event) => setScheduleQuestionCount(event.target.value)}
-              />
+                onChange={(event) => { setScheduleQuestionCount(event.target.value); setSchedulePoolId(""); }}
+              >
+                {editingScheduledTest && ![20, 40, 60, 100, 200].includes(editingScheduledTest.questionCount) ? <option value={editingScheduledTest.questionCount}>{editingScheduledTest.questionCount} (existing)</option> : null}
+                {[20, 40, 60, 100, 200].map((count) => <option key={count} value={count}>{count}</option>)}
+              </select>
             </div>
           </div>
 
@@ -7657,45 +7749,18 @@ export function AdminQuestionWorkspace({
           ) : null}
 
           <div className="field">
-            <label>Select groups or classes</label>
-            <div className="selection-grid">
-              {!isGameMode ? <label className="role-option" key="schedule-group-self-test">
-                <input
-                  checked={isScheduleSelfTestSelected}
-                  type="checkbox"
-                  onChange={(event) => {
-                    setScheduleParticipantGroupIds(event.target.checked ? [SELF_TEST_GROUP_OPTION_ID] : []);
-                    setScheduleGenerateInviteLink(false);
-                  }}
-                />
-                <span>Self Test</span>
-              </label> : null}
-              {participantGroups.map((group) => (
-                <label className="role-option" key={`schedule-group-${group.id}`}>
-                  <input
-                    checked={scheduleParticipantGroupIds.includes(group.id)}
-                    type="checkbox"
-                    onChange={() => {
-                      setScheduleParticipantGroupIds((current) =>
-                        isGameMode
-                          ? current.includes(group.id) ? [] : [group.id]
-                          : toggleArrayValue(
-                          current.filter((groupId) => groupId !== SELF_TEST_GROUP_OPTION_ID),
-                          group.id,
-                        ),
-                      );
-                    }}
-                  />
-                  <span>{group.name}</span>
-                </label>
-              ))}
-            </div>
+            <label htmlFor="schedule-groups">Select your groups or classes</label>
+            <select className="select-field" id="schedule-groups" multiple value={selectedScheduleGroupIds} onChange={(event) => setScheduleParticipantGroupIds(Array.from(event.target.selectedOptions, (option) => option.value))}>
+              {scheduleGroupOptions.map((group) => <option key={group.id} value={group.id}>{group.name} ({group.participantIds.length})</option>)}
+              {editingScheduledTest ? selectedScheduleGroupIds.filter((id) => !scheduleGroupOptions.some((group) => group.id === id)).map((id) => <option key={id} value={id}>{participantGroups.find((group) => group.id === id)?.name ?? "Existing group"}</option>) : null}
+            </select>
+            <p className="muted-text">{selectedScheduleMemberIds.size} unique members selected. Minimum {minimumScheduleMembers}. Select multiple groups with Ctrl or Command.</p>
             {isScheduleSelfTestSelected ? (
               <p className="muted-text">Self tests are assigned only to your signed-in account.</p>
             ) : null}
           </div>
 
-          {!isGameMode && !isScheduleSelfTestSelected ? (
+          {editingScheduledTest && !isGameMode && !isScheduleSelfTestSelected && scheduleParticipantIds.length > 0 ? (
             <ParticipantSearchPicker
               emptyMessage="No individual participants selected for this test yet."
               inputId="schedule-participant-search"
@@ -7712,8 +7777,8 @@ export function AdminQuestionWorkspace({
 
           {scheduleFeedback ? <p className="muted-text">{scheduleFeedback}</p> : null}
           <div className="inline-actions">
-            <button className="button" disabled={isMutating} type="button" onClick={handleScheduleTest}>
-              {isGameMode ? "Create game" : editingScheduledTestId ? "Update test" : scheduleRepeatMode === "none" ? "Schedule test" : "Schedule 6 tests"}
+            <button className="button" disabled={isMutating || !canSubmitSchedule} type="button" onClick={handleScheduleTest}>
+              {isGameMode ? "Start Games" : editingScheduledTestId ? "Update test" : assessmentKind === "instant" ? "Create Instant" : scheduleRepeatMode === "none" ? "Schedule test" : "Schedule 6 tests"}
             </button>
             {editingScheduledTestId ? (
               <button className="button-secondary" disabled={isMutating} type="button" onClick={resetScheduledTestForm}>

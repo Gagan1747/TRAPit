@@ -12,9 +12,9 @@ export async function POST(request: Request, context: { params: { gameId: string
   }
 
   try {
-    const game = await startGame(context.params.gameId, actor.identifier);
+    await startGame(context.params.gameId, actor.identifier);
     publishWorkspaceEvent("game");
-    return NextResponse.json({ game });
+    return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to start the game." },

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { createEmptyTestingWorkspaceState, normalizeWorkspaceBranding, type TestingWorkspaceState, type WorkspaceBranding } from "../src/quiz";
 import type { WorkspaceActor } from "../../../apps/web/lib/workspace-actor";
@@ -73,7 +72,7 @@ async function persisted() {
 }
 
 beforeAll(async () => {
-  temporaryDirectory = await mkdtemp(path.join(tmpdir(), "trapit-apportion-directory-"));
+  temporaryDirectory = await mkdtemp(path.join(process.cwd(), ".trapit-apportion-directory-"));
   storePath = path.join(temporaryDirectory, "testing-workspace.json");
   vi.stubEnv("TRAPIT_DATA_FILE", storePath);
   vi.stubEnv("TRAPIT_DATA_DIR", temporaryDirectory);
@@ -98,6 +97,23 @@ beforeEach(async () => {
 });
 
 describe("persistent Apportion directory", () => {
+  it("hides only the staff address without hours, without hiding owner or unassigned business-hour bookings", async () => {
+    const first = branding().appointmentLocations![0];
+    await seed({ [OWNER]: { ...branding(), appointmentLocations: [first, { ...first, id: "location-2", workingDays: "Tuesday" }] } });
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("staff", STAFF, true, ["location-1", "location-2"]) });
+    await directory.updateApportionPanel(actor(OWNER), { operation: "set-service", service: service("unassigned") });
+    await store.withSerializedTestingMutation((state) => {
+      const membership = state.apportionDirectory!.memberships.find((entry) => entry.providerIdentifier === STAFF && entry.locationId === "location-1")!;
+      Object.assign(membership, { workingDays: "", workingHours: "", workingHoursSecondWindow: "", dailyHours: [] });
+    });
+    const ownerServices = await directory.listApportionDirectLinkServices(OWNER);
+    expect(ownerServices.find((entry) => entry.id === "staff")?.locationIds).toEqual(["location-2"]);
+    expect(ownerServices.find((entry) => entry.id === "consultation")?.locationIds).toContain("location-1");
+    expect(ownerServices.find((entry) => entry.id === "unassigned")?.locationIds).toEqual(["location-1"]);
+    const staffServices = await directory.listApportionDirectLinkServices(STAFF);
+    expect(staffServices.map((entry) => entry.id)).toEqual(["staff"]);
+    expect(staffServices[0].locationIds).toEqual(["location-2"]);
+  });
   it("reads one workspace snapshot for a stable panel with no retry intents", async () => {
     const files = await import("node:fs/promises");
     const reads = vi.spyOn(files, "readFile");

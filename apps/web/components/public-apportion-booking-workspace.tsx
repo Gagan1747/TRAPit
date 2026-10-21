@@ -905,7 +905,6 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
     date.setDate(weekStartDate.getDate() + dayOffset);
     return date;
   });
-  const workingHoursText = [effectiveSelectedLocation?.workingHours, effectiveSelectedLocation?.workingHoursSecondWindow].filter(Boolean).join(" and ");
   const availableSlots = effectiveSelectedLocation ? buildSlotStartsForDate({
     selectedDateKey,
     slotDurationMinutes,
@@ -1257,9 +1256,6 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                       >
                         <small>{WEEKDAY_SHORT_NAMES[date.getDay()]}</small>
                         <strong>{date.getDate()}</strong>
-                        <small className="apportion-calendar-hours">{effectiveDateLocation
-                          ? [effectiveDateLocation.workingHours, effectiveDateLocation.workingHoursSecondWindow].filter(Boolean).join(" / ")
-                          : "Closed"}</small>
                         {isSameDay(date, new Date()) ? <small>Today</small> : null}
                       </button>
                     );
@@ -1269,7 +1265,6 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
             ) : null}
 
             <div className="form-stack apportion-booking-form">
-            {selectedLocation ? <p className="muted-text apportion-working-hours">Working hours: {workingHoursText || "Not provided"}</p> : null}
             {payload.business.justAddToList ? (
               <div className="field">
                 <p className="muted-text">Queue size: {queueCountForSelectedDate}</p>

@@ -12,7 +12,9 @@ export async function GET() {
   }
 
   const games = await listGamesForParticipant(actor.identifier);
-  return NextResponse.json({ games });
+  return NextResponse.json({ games: games.map(({ answers, presentedQuestions, ...game }) => ({
+    ...game, leaderboard: game.status === "completed" ? game.leaderboard : [],
+  })) });
 }
 
 export async function POST(request: Request) {
@@ -25,11 +27,12 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
       participantGroupId?: string;
+      participantGroupIds?: string[];
       poolId?: string;
       title?: string;
     };
 
-    if (!body.participantGroupId || !body.poolId) {
+    if ((!body.participantGroupId && !body.participantGroupIds?.length) || !body.poolId) {
       return NextResponse.json({ error: "Question pool and group are required." }, { status: 400 });
     }
 
@@ -38,12 +41,14 @@ export async function POST(request: Request) {
       actorLabel: actor.displayName,
       createdBy: actor.sub,
       participantGroupId: body.participantGroupId,
+      participantGroupIds: body.participantGroupIds,
       poolId: body.poolId,
       title: body.title,
     });
 
     publishWorkspaceEvent("game");
-    return NextResponse.json({ game });
+    const { answers, presentedQuestions, ...summary } = game;
+    return NextResponse.json({ game: summary });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to create the game." },

@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
 
 vi.mock("server-only", () => ({}));
@@ -14,7 +13,7 @@ function appointment(id: string, queueOrder: number, extra = {}) {
   return { id, ownerIdentifier: owner, requesterIdentifier: requester, requesterName: "Customer", startsAt: "2026-10-05T04:00:00.000Z", createdAt: "2026-10-04T04:00:00.000Z", currentStatus: "pending", locationId: "location-1", serviceId: "consultation", serviceDateKey: "2026-10-05", queueOrder, justAddToList: true, slotEndsAt: "2026-10-05T04:30:00.000Z", queueExpiresAt: "2026-10-05T18:30:00.000Z", ...extra };
 }
 beforeAll(async () => {
-  directory = await mkdtemp(path.join(tmpdir(), "trapit-lifecycle-"));
+  directory = await mkdtemp(path.join(process.cwd(), ".trapit-lifecycle-"));
   storePath = path.join(directory, "apportion-appointments.json");
   vi.stubEnv("TRAPIT_DATA_DIR", directory);
   store = await import("../../../apps/web/lib/apportion-store");

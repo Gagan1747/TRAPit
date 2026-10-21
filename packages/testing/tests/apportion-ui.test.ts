@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createElement } from "../../../apps/web/node_modules/react";
 import { renderToStaticMarkup } from "../../../apps/web/node_modules/react-dom/server";
 import { BusinessHoursGrid } from "../../../apps/web/components/business-hours-grid";
-import { ApportionAppointmentLog, type ApportionLogAppointment } from "../../../apps/web/components/apportion-appointment-log";
+import { ApportionAppointmentLog, getAppointmentFilterPairs, matchesAppointmentFilter, type ApportionLogAppointment } from "../../../apps/web/components/apportion-appointment-log";
 
 describe("Apportion UI contracts", () => {
   it("renders one reserved timeline and seven day buttons rather than checkboxes", () => {
@@ -54,15 +54,55 @@ describe("Apportion UI contracts", () => {
       onAction: async () => {}, onCancel: async () => {}, onRefresh: () => {}, isUpdating: false,
     }));
   }
-  it("uses service buttons through four business/service IDs and a dropdown beyond four", () => {
+  it("never derives filter options from booking history", () => {
     const entries = Array.from({ length: 5 }, (_, index) => ({ ...appointment(false), id: `entry-${index}`, serviceId: `service-${index}`, serviceName: `Service ${index}` }));
     const four = renderEntries(entries.slice(0, 4));
-    expect(four).toContain('aria-pressed="true"');
+    expect(four).not.toContain('aria-label="Filter Address');
     expect(four).not.toContain("<select");
     const five = renderEntries(entries);
-    expect(five).toContain('aria-label="Filter service"');
-    expect(five).toContain("<select");
-    expect(five).toContain(">All services</option>");
+    expect(five).not.toContain('aria-label="Filter Address');
+    expect(five).not.toContain("<select");
+    expect(five).not.toContain("All services");
+  });
+  it("builds address/service options from personal assignments or all delegated business assignments", () => {
+    const owner = "+919111111111";
+    const staff = "+919222222222";
+    const panel = { businesses: [{
+      role: "owner", bookableServiceIds: ["consultation", "therapy"],
+      business: { ownerIdentifier: owner, services: [
+        { id: "consultation", name: "Consultation", active: true, assignedIdentifier: owner, locationIds: ["one", "two"] },
+        { id: "therapy", name: "Therapy", active: true, assignedIdentifier: staff, locationIds: ["one"] },
+        { id: "inactive", name: "Inactive", active: false, assignedIdentifier: owner, locationIds: ["one"] },
+      ] },
+      branding: { instituteName: "Clinic", appointmentLocations: [{ id: "one", address: "First Street" }, { id: "two", address: "Second Street" }] },
+      memberships: [{ providerIdentifier: staff, locationId: "one" }],
+    }] } as unknown as Parameters<typeof getAppointmentFilterPairs>[0];
+    const ownPairs = getAppointmentFilterPairs(panel, owner);
+    expect(ownPairs.map((pair) => pair.locationId)).toEqual(["one", "two"]);
+    expect(ownPairs[0].label).toContain("Address #1 (First Street)");
+    panel.businesses[0].role = "staff";
+    expect(getAppointmentFilterPairs(panel, staff).map((pair) => pair.serviceId)).toEqual(["therapy"]);
+    panel.businesses[0].role = "admin";
+    const adminPairs = getAppointmentFilterPairs(panel, "+919333333333");
+    expect(adminPairs).toHaveLength(3);
+    expect(matchesAppointmentFilter({ ownerIdentifier: owner, locationId: "two" }, ownPairs[0])).toBe(false);
+    expect(matchesAppointmentFilter({ ownerIdentifier: "+919999999999", locationId: "one" }, ownPairs[0])).toBe(false);
+    expect(matchesAppointmentFilter({ ownerIdentifier: owner, locationId: "one" }, ownPairs[0])).toBe(true);
+    const log = [
+      { ...appointment(false), ownerIdentifier: owner, locationId: "one" },
+      { ...appointment(false), ownerIdentifier: owner, locationId: "two" },
+      { ...appointment(false), ownerIdentifier: "+919999999999", locationId: "one", scope: "requester" as const },
+    ];
+    expect(log.filter((entry) => matchesAppointmentFilter(entry, ownPairs[0]))).toEqual([log[0]]);
+    expect(log.filter((entry) => matchesAppointmentFilter(entry, undefined))).toEqual(log);
+  });
+  it("falls back to owner contact only on the provider side", () => {
+    const provider = renderEntries([{ ...appointment(false), scope: "requester", assignedStaffName: null, assignedStaffPhone: null, assignedStaffIdentifier: null }]);
+    expect(provider).toContain("<strong>Clinic</strong>");
+    expect(provider).toContain("+919111111111");
+    const customer = renderEntries([{ ...appointment(false), scope: "owner", assignedStaffName: "Owner", assignedStaffPhone: "+919111111111" }]);
+    expect(customer).toContain("<strong>Customer</strong>");
+    expect(customer).toContain("+919222222222");
   });
   it("renders snapshot hierarchy and assigned staff customer contact rather than business contact", () => {
     const html = renderEntries([{ ...appointment(false), scope: "requester", serviceName: "Therapy", assignedStaffName: "Booked Therapist", assignedStaffPhone: "+919555555555" }]);

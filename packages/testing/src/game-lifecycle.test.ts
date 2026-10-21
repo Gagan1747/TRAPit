@@ -10,6 +10,9 @@ import {
   getGameQuestionIndex,
   getGamePresentedQuestionIndex,
   getGameStatus,
+  getRapidGameDeadline,
+  getRapidParticipantQuestionIndex,
+  reconcileRapidGame,
   participantIdentifiersMatch,
   type ScheduledGame,
 } from "./quiz";
@@ -42,6 +45,87 @@ describe("versioned game lifecycle", () => {
     expect(participantIdentifiersMatch("+91 95823-72662", "9582372662")).toBe(true);
     expect(participantIdentifiersMatch("User@Example.com", "user@example.com")).toBe(true);
     expect(participantIdentifiersMatch("9582372662", "9582372663")).toBe(false);
+  });
+
+  describe("Rapid version 4 independent lifecycle", () => {
+    const launch = Date.parse("2026-09-04T10:01:00.000Z");
+    const iso = (milliseconds: number) => new Date(milliseconds).toISOString();
+    function rapid() {
+      return createGame({
+        rulesVersion: 4, countdownStartedAt: iso(launch - 60_000),
+        participants: ["a", "b", "c", "d", "e", "f"].map((name) => ({
+          identifier: `${name}@example.com`, label: name, acceptedAt: iso(launch - 70_000),
+          questionStartedAt: [],
+        })),
+      });
+    }
+
+    it("launches at exactly 60 seconds and closes exactly ten minutes later", () => {
+      const game = rapid();
+      expect(getGameStatus(game, launch - 1)).toBe("countdown");
+      reconcileRapidGame(game, launch);
+      expect(game.startedAt).toBe(iso(launch));
+      expect(getGameStatus(game, launch)).toBe("ongoing");
+      expect(getRapidGameDeadline(game)).toBe(launch + 600_000);
+      reconcileRapidGame(game, launch + 600_000);
+      expect(game.completedAt).toBe(iso(launch + 600_000));
+      expect(game.answers).toHaveLength(120);
+      expect(game.answers.every((answer) => answer.points === -5 && answer.kind === "timeout")).toBe(true);
+    });
+
+    it("keeps a fast answer on its question until the participant's persisted window ends", () => {
+      const game = rapid();
+      game.participants[0].questionStartedAt = [iso(launch)];
+      game.answers.push({
+        answeredAt: iso(launch + 100), elapsedMs: 100, isCorrect: true, kind: "submitted",
+        optionIndex: 0, participantIdentifier: game.participants[0].identifier, points: 0, questionIndex: 0,
+      });
+      reconcileRapidGame(game, launch + 100);
+      expect(getRapidParticipantQuestionIndex(game, game.participants[0], launch + 29_999)).toBe(0);
+      expect(getRapidParticipantQuestionIndex(game, game.participants[0], launch + 30_000)).toBe(1);
+      expect(getRapidParticipantQuestionIndex(game, game.participants[1], launch + 30_000)).toBe(0);
+      expect(game.completedAt).toBeNull();
+    });
+
+    it("does not reset a background participant or wait for the slowest", () => {
+      const game = rapid();
+      game.participants[0].questionStartedAt = [iso(launch)];
+      game.participants[1].questionStartedAt = [iso(launch + 10_000)];
+      reconcileRapidGame(game, launch + 35_000);
+      const restored = JSON.parse(JSON.stringify(game)) as ScheduledGame;
+      expect(getRapidParticipantQuestionIndex(restored, restored.participants[0], launch + 35_000)).toBe(1);
+      expect(getRapidParticipantQuestionIndex(restored, restored.participants[1], launch + 35_000)).toBe(0);
+      expect(restored.participants[0].questionStartedAt?.[0]).toBe(iso(launch));
+      reconcileRapidGame(restored, launch + 35_000);
+      expect(restored.answers).toHaveLength(1);
+    });
+
+    it("clips a late displayed question at the global deadline and resolves undisplayed questions once", () => {
+      const game = rapid();
+      game.participants[0].questionStartedAt = [iso(launch + 599_000)];
+      reconcileRapidGame(game, launch + 600_000);
+      expect(game.answers[0].elapsedMs).toBe(1000);
+      expect(game.answers[0].answeredAt).toBe(iso(launch + 600_000));
+      const count = game.answers.length;
+      reconcileRapidGame(game, launch + 900_000);
+      expect(game.answers).toHaveLength(count);
+      expect(game.completedAt).toBe(iso(launch + 600_000));
+    });
+
+    it("recomputes speed positions regardless of answer arrival and preserves shared overall ranks", () => {
+      const game = rapid();
+      game.participants.forEach((participant, index) => {
+        game.answers.push({
+          answeredAt: iso(launch + 10_000 + index), elapsedMs: (6 - index) * 1000,
+          isCorrect: true, kind: "submitted", optionIndex: 0, participantIdentifier: participant.identifier,
+          points: 0, questionIndex: 0,
+        });
+      });
+      reconcileRapidGame(game, launch + 20_000);
+      expect(game.answers.map((answer) => answer.points)).toEqual([0, 5, 5, 10, 30, 50]);
+      expect(buildGameLeaderboard(game).filter((entry) => entry.points === 5).map((entry) => entry.rank)).toEqual([4, 4]);
+      expect(game.completedAt).toBeNull();
+    });
   });
 
   it("counts equivalent phone formats as one participant identity", () => {

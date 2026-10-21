@@ -73,6 +73,7 @@ export async function POST(request: Request) {
   }
   try {
     const body = (await request.json()) as {
+      assessmentKind?: "standard" | "instant";
       branding?: WorkspaceBranding | null;
       durationMinutes?: number;
       generateInviteLink?: boolean;
@@ -86,6 +87,10 @@ export async function POST(request: Request) {
       title?: string;
     };
 
+    if (body.assessmentKind !== undefined && body.assessmentKind !== "standard" && body.assessmentKind !== "instant") {
+      return NextResponse.json({ error: "Choose a valid test type." }, { status: 400 });
+    }
+    if (body.assessmentKind === "instant") body.startsAt = new Date().toISOString();
     if (!body.poolId || !body.startsAt) {
       return NextResponse.json({ error: "Pool and start time are required." }, { status: 400 });
     }
@@ -103,6 +108,9 @@ export async function POST(request: Request) {
     }
 
     const repeatMode = normalizeRepeatMode(body.repeatMode);
+    if (body.assessmentKind === "instant" && repeatMode !== "none") {
+      return NextResponse.json({ error: "Instant Tests cannot repeat." }, { status: 400 });
+    }
     const startsAtValues = getStartsAtValues({
       recurrenceStartsAt: body.recurrenceStartsAt,
       repeatMode,
@@ -129,6 +137,7 @@ export async function POST(request: Request) {
 
     for (const [index, startsAt] of startsAtValues.entries()) {
       scheduledTests = await createScheduledTest({
+        assessmentKind: body.assessmentKind ?? "standard",
         actorIdentifier: actor.identifier,
         branding: body.branding ?? null,
         createdBy: actor.sub,

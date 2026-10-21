@@ -56,6 +56,13 @@ function createTest(): ScheduledTest {
 }
 
 describe("test marks and ranking", () => {
+  it("uses versioned correct marks without changing legacy four-mark results", () => {
+    const result = createResult({ attemptedCount: 3, correctCount: 2, incorrectCount: 1 });
+    expect(getTestMarks({ ...result, correctMarks: 1 })).toBe(0);
+    expect(getTestMarks({ ...result, correctMarks: 4 })).toBe(6);
+    expect(getTestMarks(result)).toBe(6);
+    expect(compareTestResults({ ...result, correctMarks: 1 }, { ...result, correctMarks: 4 })).toBeGreaterThan(0);
+  });
   it("awards four marks for correct answers and deducts one for incorrect and unanswered answers", () => {
     const result = createResult({ attemptedCount: 3, correctCount: 2, incorrectCount: 1 });
 

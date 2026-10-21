@@ -25,8 +25,10 @@ type TestResultsPayload = {
     correctCount: number;
     elapsedMs: number;
     incorrectCount: number;
+    isCurrentParticipant: boolean;
     marks: number;
     manualName: string;
+    maskedIdentifier: string;
     rank: number;
     totalCount: number;
     unansweredCount: number;
@@ -47,6 +49,7 @@ type TestResultsPayload = {
     poolName: string;
     startsAt: string;
     submittedCount: number;
+    sharedCount: number;
     testId: string;
     title: string;
   };
@@ -105,8 +108,11 @@ export function TestResultsWorkspace({ testId }: TestResultsWorkspaceProps) {
     return <p className="muted-text">Loading test results...</p>;
   }
 
+  return <TestResultsContent payload={payload} />;
+}
+
+export function TestResultsContent({ payload }: { payload: TestResultsPayload }) {
   const duration = `${payload.summary.durationMinutes} min`;
-  const participantResult = payload.participantResult;
 
   return (
     <div className="test-results-stack">
@@ -127,17 +133,10 @@ export function TestResultsWorkspace({ testId }: TestResultsWorkspaceProps) {
         </table>
       </div>
 
-      {participantResult ? (
-        <section className="test-results-personal-summary" aria-label="Your result">
-          <strong>Your result: {participantResult.marks} marks</strong>
-          <span>Rank {participantResult.rank} of {participantResult.rankedParticipantCount}</span>
-          <span>{formatElapsedTime(participantResult.elapsedMs)} / {duration}</span>
-        </section>
-      ) : null}
-
       <div className="test-results-layout">
         <section className="workspace-card test-results-question-panel">
-          <h2>Questions &amp; Options</h2>
+          <h2>Questions ({payload.questions.length})</h2>
+          <p className="muted-text">Responses {payload.questions.length}</p>
           <div className="test-results-question-list">
           {payload.questions.map((question, questionIndex) => (
             <article className="test-results-question" key={question.questionId}>
@@ -167,14 +166,15 @@ export function TestResultsWorkspace({ testId }: TestResultsWorkspaceProps) {
 
         <aside className="workspace-card game-leaderboard-panel test-results-leaderboard">
           <p className="eyebrow">Leaderboard</p>
-          <h2>Final standings</h2>
+          <h2>Final standings ({payload.summary.submittedCount}/{payload.summary.sharedCount})</h2>
           {payload.participants.length ? (
             <div className="game-leaderboard-list">
               {payload.participants.map((participant, index) => (
-                <div className="game-leaderboard-row test-results-leaderboard-row" key={`${participant.rank}-${participant.manualName}-${index}`}>
-                  <strong>#{participant.rank} {participant.manualName}</strong>
-                  <span>{participant.marks} marks</span>
-                  <span className="test-results-leaderboard-time">{formatElapsedTime(participant.elapsedMs)}</span>
+                <div className={`game-leaderboard-row test-results-leaderboard-row${participant.isCurrentParticipant ? " is-current-participant" : ""}`} aria-current={participant.isCurrentParticipant ? "true" : undefined} key={`${participant.rank}-${participant.manualName}-${index}`}>
+                  <strong>#{participant.rank} {participant.manualName}{participant.isCurrentParticipant ? " (You)" : ""}</strong>
+                  <span>{participant.maskedIdentifier}</span>
+                  <span>{participant.marks} marks<br /><span className="muted-text">Incorrect + unanswered: {participant.incorrectCount + participant.unansweredCount}</span></span>
+                  <span className="test-results-leaderboard-time">{formatElapsedTime(participant.elapsedMs)} ({duration})</span>
                 </div>
               ))}
             </div>

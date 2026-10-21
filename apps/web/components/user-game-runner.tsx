@@ -17,7 +17,10 @@ type GameState = {
   isAccepted: boolean;
   isCreator: boolean;
   isMissed: boolean;
-  leaderboard: GameLeaderboardEntry[];
+  leaderboard: Array<GameLeaderboardEntry & { isSelf?: boolean; maskedIdentifier?: string; correctCount?: number; incorrectUnansweredCount?: number; elapsedMs?: number }>;
+  rulesVersion?: number;
+  globalDeadline: string | null;
+  questionStartedAt: string | null;
   overallGamePoints: number;
   ownAnswers: GameAnswer[];
   participantCount: number;
@@ -30,6 +33,10 @@ type GameState = {
     groupName: string;
     poolName: string;
     startedAt: string | null;
+    completedAt: string | null;
+    durationMinutes: number;
+    submittedCount: number;
+    sharedCount: number;
   };
   reviewQuestions: Array<{
     answer: GameAnswer | null;
@@ -111,7 +118,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
       );
       clockOffsetRef.current = new Date(payload.serverNow).getTime() - Date.now();
       setGame(payload.game);
-      setParticipantName((currentName) => currentName || payload.game.displayName);
+      setParticipantName((currentName) => currentName || (payload.game.rulesVersion === 4 && !payload.game.isAccepted ? "" : payload.game.displayName));
       if (!options?.silent) {
         setFeedback(null);
       }
@@ -122,6 +129,17 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
       setIsLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (game?.rulesVersion !== 4 || (game.status !== "ongoing" && game.status !== "countdown")) return;
+    const interval = window.setInterval(() => void loadGame({ silent: true }), 2000);
+    const refresh = () => { if (!document.hidden) void loadGame({ silent: true }); };
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [game?.rulesVersion, game?.status, gameId, identifier]);
 
   useEffect(() => {
     async function initializeGame() {
@@ -190,7 +208,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
   }, [game?.currentQuestion?.id, game?.currentQuestionIndex, game?.questionDeadline, game?.status, game?.viewerMode, gameId]);
 
   useEffect(() => {
-    const activeDeadline = game?.countdownDeadline ?? game?.questionDeadline ?? game?.preparationDeadline;
+    const activeDeadline = game?.countdownDeadline ?? game?.questionDeadline ?? game?.preparationDeadline ?? game?.globalDeadline;
 
     if (!activeDeadline) {
       setRemainingMs(0);
@@ -213,7 +231,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
     tick();
     const intervalId = window.setInterval(tick, 250);
     return () => window.clearInterval(intervalId);
-  }, [game?.countdownDeadline, game?.preparationDeadline, game?.questionDeadline]);
+  }, [game?.countdownDeadline, game?.preparationDeadline, game?.questionDeadline, game?.globalDeadline]);
 
   async function runAction(action: "accept" | "start") {
     setIsMutating(true);
@@ -256,14 +274,21 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
     setOptimisticSubmittedQuestionIndex(submittedQuestionIndex);
     setIsMutating(true);
     try {
-      const payload = await readJson<{ answer: GameAnswer }>(
+      const payload = await readJson<{ answer: Partial<GameAnswer> }>(
         await fetch(`/api/user/games/${encodeURIComponent(gameId)}/answer${getQuery()}`, {
-          body: JSON.stringify({ optionIndex: selectedOptionIndex, questionIndex: submittedQuestionIndex }),
+          body: JSON.stringify({
+            optionIndex: selectedOptionIndex, questionIndex: submittedQuestionIndex,
+            elapsedMs: game.rulesVersion === 4 && game.questionStartedAt
+              ? Math.max(0, Math.floor(Date.now() + clockOffsetRef.current - Date.parse(game.questionStartedAt)))
+              : undefined,
+          }),
           headers: { "Content-Type": "application/json" },
           method: "POST",
         }),
       );
-      setFeedback(`Answered (${payload.answer.points >= 0 ? "+" : ""}${payload.answer.points})`);
+      setFeedback(game.rulesVersion === 4 || payload.answer.points === undefined
+        ? "Answer submitted."
+        : `Answered (${payload.answer.points >= 0 ? "+" : ""}${payload.answer.points})`);
       await loadGame({ silent: true });
     } catch (error) {
       setOptimisticSubmittedQuestionIndex((current) => current === submittedQuestionIndex ? null : current);
@@ -326,9 +351,9 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
             <div className="game-rules-list">
               <h2>Game rules</h2>
               <p>{game.rules.questionCount} questions, {game.rules.questionDurationMs / 1000} seconds each.</p>
-              <p>Correct answer points by order: {game.rules.correctPoints.join(", ")}.</p>
+              <p>Correct answer points by {game.rulesVersion === 4 ? "individual response time" : "order"}: {game.rules.correctPoints.join(", ")}.</p>
               <p>Incorrect or unanswered: {game.rules.incorrectPoints} points.</p>
-              <p>The next question starts early when every competitor answers.</p>
+              <p>{game.rulesVersion === 4 ? "Your 30-second timer starts when each question is displayed. Answers do not advance the timer early. The test closes 10 minutes after the 60-second launch countdown." : "The next question starts early when every competitor answers."}</p>
             </div>
             {game.isCreator && game.status === "upcoming" ? (
               <div className="form-stack">
@@ -393,6 +418,10 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
     return (
       <div className="game-page-stack">
         {userBanner}
+        {game.rulesVersion === 4 ? <p className="muted-text">
+          {game.resultMetadata.submittedCount}/{game.resultMetadata.sharedCount} submitted/shared · Duration {game.resultMetadata.durationMinutes} minutes
+          {game.resultMetadata.completedAt ? ` · Completed ${formatShortDateTime(game.resultMetadata.completedAt)}` : ""}
+        </p> : null}
         <div className="leaderboard-table-wrap test-results-summary-wrap">
           <table className="leaderboard-table test-results-summary-table">
             <thead><tr><th>Scheduled date</th><th>Question Pool</th><th>Groups</th><th>Test creator name</th></tr></thead>
@@ -406,7 +435,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
         </div>
         <div className="game-runner-layout">
           <section className="workspace-card game-question-panel">
-            <p className="eyebrow">{game.isMissed ? "Missed game" : "Completed game"}</p>
+            <p className="eyebrow">{game.isMissed ? game.rulesVersion === 4 ? "Absent" : "Missed game" : "Completed game"}</p>
             <h1>{game.title}</h1>
             {game.isMissed ? <p>You did not accept before the game started. Final results are available below.</p> : null}
             {game.reviewQuestions.length ? (
@@ -498,8 +527,8 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
               </div>
             )}
           </div>
-        ) : <p className="muted-text">Preparing the next question...</p>}
-          {feedback ? <p className="muted-text">{feedback}</p> : latestOwnAnswer?.kind === "timeout" ? <p className="muted-text">Previous question timed out ({latestOwnAnswer.points})</p> : null}
+        ) : <p className="muted-text">{game.rulesVersion === 4 ? "Waiting for all participants to finish or the 10-minute deadline. Results will appear automatically." : "Preparing the next question..."}</p>}
+          {feedback ? <p className="muted-text">{feedback}</p> : latestOwnAnswer?.kind === "timeout" ? <p className="muted-text">Previous question timed out{game.rulesVersion === 4 ? "." : ` (${latestOwnAnswer.points})`}</p> : null}
         </section>
         <GameLeaderboard game={game} />
       </div>
@@ -510,7 +539,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
 function GameLeaderboard({ game }: { game: GameState }) {
   return (
     <aside className="workspace-card game-leaderboard-panel">
-      <p className="eyebrow">Live leaderboard</p>
+      <p className="eyebrow">{game.status === "completed" ? "Final standings" : game.rulesVersion === 4 ? "Standings available after completion" : "Live leaderboard"}</p>
       <div className="game-leaderboard-list">
         {game.leaderboard.map((entry) => {
           const recentDelta = [...game.recentDeltas].reverse().find((delta) =>
@@ -518,9 +547,10 @@ function GameLeaderboard({ game }: { game: GameState }) {
             && Date.now() - new Date(delta.answeredAt).getTime() < 5000,
           );
           return (
-            <div className="game-leaderboard-row" key={entry.participantIdentifier}>
-              <strong>#{entry.rank} {entry.participantLabel}</strong>
+            <div className={`game-leaderboard-row${entry.isSelf ? " is-self" : ""}`} style={entry.isSelf ? { background: "var(--surface-soft, #eef6ff)", border: "2px solid currentColor" } : undefined} key={entry.participantIdentifier}>
+              <strong>#{entry.rank} {entry.participantLabel}{entry.isSelf ? " (You)" : ""}{entry.maskedIdentifier ? <small style={{ display: "block", fontSize: "0.75em", fontWeight: 400 }}>{entry.maskedIdentifier}</small> : null}</strong>
               <span>{entry.points} pts</span>
+              {game.rulesVersion === 4 ? <small>{entry.correctCount} correct · {entry.incorrectUnansweredCount} incorrect/unanswered · {Math.round((entry.elapsedMs ?? 0) / 1000)}s</small> : null}
               <span className="game-score-flash">
                 {recentDelta ? `Answered (${recentDelta.points >= 0 ? "+" : ""}${recentDelta.points})` : ""}
               </span>

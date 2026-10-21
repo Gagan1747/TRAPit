@@ -21,6 +21,13 @@ import { FloatingWindowCloseButton } from "./floating-window-close-button";
 import { BrowserPushPrompt } from "./browser-push-prompt";
 
 type AvailableTest = {
+  assessmentKind?: "standard" | "instant";
+  creatorDisplayName?: string | null;
+  creatorIdentifier?: string | null;
+  hasJoined?: boolean;
+  joinedCount?: number;
+  sharedCount?: number;
+  isCreator?: boolean;
   createdAt: string;
   durationMinutes: number;
   groupNames: string[];
@@ -53,13 +60,14 @@ type DashboardResponse = {
 };
 
 type AvailableGameSummary = {
+  creatorDisplayName?: string | null;
   acceptedCount: number;
   completedAt: string | null;
   countdownDeadline: string | null;
   createdAt: string;
   creatorIdentifier: string;
   creatorRole: "participant" | "spectator" | null;
-  displayStatus: "Completed" | "In Progress" | "Missed" | "Upcoming";
+  displayStatus: "Completed" | "In Progress" | "Missed" | "Upcoming" | "Results";
   id: string;
   groupName: string;
   isAccepted: boolean;
@@ -68,7 +76,7 @@ type AvailableGameSummary = {
   leaderboard: GameLeaderboardEntry[];
   participantCount: number;
   participantGroupId: string;
-  participants: Array<{ accepted: boolean; identifier: string; label: string }>;
+  participants: Array<{ accepted: boolean; identifier: string; label: string; submitted?: boolean }>;
   questionDurationMs: number;
   questionDeadline: string | null;
   startedAt: string | null;
@@ -218,6 +226,9 @@ export function RestrictedUserDashboardWorkspace({
       const duration = `${test.durationMinutes} min`;
 
       return {
+        creatorName: test.creatorDisplayName ?? "Creator",
+        creatorIdentifier: test.creatorIdentifier ? formatPhoneNumberForDisplay(test.creatorIdentifier, { showFullPhoneNumber: true }) : undefined,
+        participation: <>{test.status === "completed" && !test.hasJoined && !test.hasAttempt && historyEntry?.status !== "submitted" ? "Absent" : hasCompletedResult && result ? `Rank: ${result.rank} / ${test.participantResultCount ?? 1}` : test.hasJoined || test.hasAttempt || historyEntry?.status === "submitted" ? "Joined" : "Not joined"}{hasCompletedResult && result ? <span className="assessment-log-detail">Marks: {result.marks}</span> : null}</>,
         groups: test.groupNames.length ? test.groupNames.join(", ") : "None",
         id: `test-${test.id}`,
         marksOrPoints: hasCompletedResult && result
@@ -231,9 +242,13 @@ export function RestrictedUserDashboardWorkspace({
         scheduled: formatShortDateTime(test.startsAt),
         sortTime: new Date(test.startsAt).getTime(),
         status: test.status === "scheduled"
-          ? <span className="status-chip warning">Upcoming</span>
+          ? test.assessmentKind === "instant"
+            ? <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Upcoming</a>
+            : <span className="status-chip warning">Upcoming</span>
           : test.status === "live"
-            ? <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Live</a>
+            ? test.hasAttempt || historyEntry?.status === "submitted"
+              ? <span className="status-chip success">Submitted</span>
+              : <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Live</a>
             : <a className="button-secondary small-button" href={`/test-results/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Results</a>,
         test: test.title,
         time: hasCompletedResult && result ? `${formatElapsedTime(result.elapsedMs)} / ${duration}` : duration,
@@ -245,6 +260,9 @@ export function RestrictedUserDashboardWorkspace({
       const duration = formatElapsedTime(20 * game.questionDurationMs);
 
       return {
+        creatorName: game.creatorDisplayName ?? "Creator",
+        creatorIdentifier: formatPhoneNumberForDisplay(game.creatorIdentifier, { showFullPhoneNumber: true }),
+        participation: game.status === "completed" && !participant?.accepted ? "Absent" : ownResult && game.status === "completed" ? `Rank: ${ownResult.rank} / ${game.leaderboard.length} · Points: ${ownResult.points}` : participant?.accepted ? "Joined" : "Not joined",
         groups: game.groupName,
         id: `game-${game.id}`,
         marksOrPoints: game.status === "completed" && ownResult ? `${ownResult.points}` : "—",
@@ -257,12 +275,14 @@ export function RestrictedUserDashboardWorkspace({
         sortTime: new Date(game.startedAt ?? game.createdAt).getTime(),
         status: game.status === "upcoming"
           ? participant?.accepted
-            ? <span className="status-chip warning">Accepted</span>
-            : <button className="button-secondary small-button" type="button" onClick={() => handleAcceptGame(game.id)}>Accept</button>
+            ? <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Upcoming</a>
+            : <button className="button-secondary small-button" type="button" onClick={() => handleAcceptGame(game.id)}>Upcoming</button>
           : game.status === "completed"
             ? <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Results</a>
-            : <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Watch</a>,
-        test: "Game",
+            : participant?.submitted
+              ? <span className="status-chip success">Submitted</span>
+              : <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Live</a>,
+        test: game.title,
         time: duration,
       };
     }),

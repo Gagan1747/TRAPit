@@ -2245,13 +2245,38 @@ main {
 }
 
 .assessment-log-table {
-  min-width: 1120px;
+  min-width: 640px;
 }
 
 .assessment-log-table th:last-child,
 .assessment-log-table td:last-child {
-  min-width: 104px;
+  min-width: 150px;
   text-align: center;
+}
+
+.assessment-log-table th:first-child,
+.assessment-log-table td:first-child {
+  width: 54px;
+  text-align: center;
+}
+
+.assessment-log-detail {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+
+.assessment-log-table td {
+  vertical-align: top;
+}
+
+.test-results-leaderboard-row.is-current-participant {
+  background: rgba(54, 130, 246, 0.12);
+  box-shadow: inset 3px 0 0 var(--accent, #3682f6);
+}
+
+.business-booking-type-heading {
+  margin-top: 16px;
 }
 
 .test-results-page-shell {

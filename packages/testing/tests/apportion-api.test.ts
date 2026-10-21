@@ -75,6 +75,15 @@ beforeEach(() => {
 });
 
 describe("Apportion API role and service contracts", () => {
+  it("omits staff address options without configured working hours but retains owner addresses", async () => {
+    Object.assign(fixtures.context!.memberships[0], { workingDays: "", workingHours: "", workingHoursSecondWindow: "", dailyHours: [] });
+    const response = await publicApi.GET(new Request("https://trapit.in/api/apportion/CODE?compact=1"), { params: { shareCode: "CODE" } });
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    const contexts = payload.addressOptions.flatMap((option: { contexts: Array<{ serviceId: string }> }) => option.contexts);
+    expect(contexts.some((option: { serviceId: string }) => option.serviceId === "therapy")).toBe(false);
+    expect(contexts.some((option: { serviceId: string }) => option.serviceId === "consultation")).toBe(true);
+  });
   it("keeps compact booking metadata below 30 KB with four services and two addresses", async () => {
     const context = fixtures.context!;
     const image = `data:image/png;base64,${Buffer.alloc(800_000, 1).toString("base64")}`;

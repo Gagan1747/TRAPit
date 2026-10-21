@@ -70,13 +70,28 @@ export async function GET(request: Request, context: { params: { gameId: string 
     .filter((entry) => entry.acceptedAt)
     .sort((left, right) => new Date(left.acceptedAt as string).getTime() - new Date(right.acceptedAt as string).getTime());
   const poolName = workspace.pools.find((pool) => pool.id === game.poolId)?.name ?? "Unknown pool";
-  const groupName = workspace.participantGroups.find((group) => group.id === game.participantGroupId)?.name ?? "Unknown group";
+  const groupName = (game.participantGroupIds ?? [game.participantGroupId]).map((id) =>
+    workspace.participantGroups.find((group) => group.id === id)?.name ?? "Unknown group").join(", ");
   const creatorProfile = workspace.participants.find((profile) =>
     participantIdentifiersMatch(profile.identifier, game.creatorIdentifier),
   );
   const creatorParticipant = game.participants.find((entry) =>
     participantIdentifiersMatch(entry.identifier, game.creatorIdentifier),
   );
+  const rapid = game.rulesVersion === 4;
+  const completed = game.status === "completed";
+  const standings = game.leaderboard.map((entry) => {
+    const responses = game.answers.filter((answer) => participantIdentifiersMatch(answer.participantIdentifier, entry.participantIdentifier));
+    return {
+      ...entry,
+      isSelf: participantIdentifiersMatch(entry.participantIdentifier, actor.identifier),
+      maskedIdentifier: /^\+?[\d\s()-]+$/.test(entry.participantIdentifier)
+        ? `••••••${entry.participantIdentifier.replace(/\D/g, "").slice(-4)}` : "",
+      correctCount: responses.filter((answer) => answer.isCorrect).length,
+      incorrectUnansweredCount: responses.filter((answer) => !answer.isCorrect).length,
+      elapsedMs: responses.reduce((total, answer) => total + (answer.elapsedMs ?? 0), 0),
+    };
+  });
 
   return NextResponse.json({
     game: {
@@ -84,17 +99,25 @@ export async function GET(request: Request, context: { params: { gameId: string 
       canStart: isCreator && Boolean(game.creatorRole) && game.acceptedCount >= 4,
       countdownDeadline: game.countdownDeadline,
       creatorRole: game.creatorRole ?? null,
-      currentQuestion: question
+      currentQuestion: question && (!rapid || isAccepted)
         ? { id: question.id, options: question.options, prompt: question.prompt }
         : null,
       currentQuestionIndex: game.currentQuestionIndex,
       displayName: participant?.label ?? actor.identifier,
+      globalDeadline: game.globalDeadline,
+      questionStartedAt: game.participantQuestionStartedAt,
+      rulesVersion: game.rulesVersion,
       isAccepted,
       isCreator,
       isMissed,
-      leaderboard: game.leaderboard,
+      leaderboard: rapid
+        ? completed ? standings.filter((entry, index) => isCreator || index < 10 || entry.isSelf) : []
+        : game.leaderboard,
       overallGamePoints,
-      ownAnswers,
+      ownAnswers: rapid && !completed ? ownAnswers.map((answer) => ({
+        answeredAt: answer.answeredAt, kind: answer.kind, optionIndex: answer.optionIndex,
+        participantIdentifier: answer.participantIdentifier, questionIndex: answer.questionIndex,
+      })) : ownAnswers,
       participantCount: game.participants.length,
       participants: acceptedParticipants.map((entry) => ({
         acceptedAt: entry.acceptedAt,
@@ -110,8 +133,14 @@ export async function GET(request: Request, context: { params: { gameId: string 
         groupName,
         poolName,
         startedAt: game.startedAt,
+        completedAt: game.completedAt,
+        durationMinutes: 10,
+        submittedCount: acceptedParticipants.filter((entry) =>
+          game.answers.filter((answer) => participantIdentifiersMatch(answer.participantIdentifier, entry.identifier)).length === GAME_QUESTION_COUNT).length,
+        sharedCount: game.participants.filter((entry) =>
+          !participantIdentifiersMatch(entry.identifier, game.creatorIdentifier) || game.creatorRole === "participant").length,
       },
-      recentDeltas: game.answers.slice(-6).map((answer) => ({
+      recentDeltas: rapid ? [] : game.answers.slice(-6).map((answer) => ({
         answeredAt: answer.answeredAt,
         participantIdentifier: answer.participantIdentifier,
         points: answer.points,
@@ -120,7 +149,7 @@ export async function GET(request: Request, context: { params: { gameId: string 
       rules: {
         correctPoints: GAME_CORRECT_POINTS,
         incorrectPoints: GAME_INCORRECT_POINTS,
-        launchCountdownMs: game.rulesVersion === 2 ? GAME_LAUNCH_COUNTDOWN_MS : 0,
+        launchCountdownMs: game.rulesVersion === 2 || game.rulesVersion === 3 || rapid ? GAME_LAUNCH_COUNTDOWN_MS : 0,
         questionCount: GAME_QUESTION_COUNT,
         questionDurationMs: getGameQuestionDurationMs(game),
       },

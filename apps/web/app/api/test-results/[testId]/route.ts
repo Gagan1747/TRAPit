@@ -10,8 +10,7 @@ export async function GET(request: Request, context: { params: { testId: string 
     return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
-  const fallbackIdentifier = new URL(request.url).searchParams.get("participantId")?.trim() ?? "";
-  const participantIdentifier = actor.identifier?.trim() || fallbackIdentifier;
+  const participantIdentifier = actor.identifier?.trim() ?? "";
 
   try {
     const payload = await getTestResults({

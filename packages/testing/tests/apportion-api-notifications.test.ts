@@ -10,6 +10,8 @@ const fixtures = vi.hoisted(() => ({
   schedules: [] as Array<{ kind: "test" | "poll"; id: string; startsAt: string; endsAt: string; recipients: string[] }>,
   intents: [] as Array<{ key: string; instanceKey: string; recipientIdentifier: string; kind: "test" | "poll"; entityId: string; phase: "confirmed" | "30min" | "1min"; dueAt: string }>,
   remove: vi.fn(),
+  reconcileGames: vi.fn(),
+  reconcileTests: vi.fn(),
 }));
 vi.mock("server-only", () => ({}));
 vi.mock("next/server", () => ({ NextResponse: { json: (body: unknown, init?: ResponseInit) => new Response(JSON.stringify(body), { status: init?.status || 200 }) } }));
@@ -23,6 +25,8 @@ vi.mock("../../../apps/web/lib/apportion-directory", () => ({
   markApportionScheduleNotificationDelivered: fixtures.markSchedule,
 }));
 vi.mock("../../../apps/web/lib/testing-store", () => ({
+  reconcileExpiredGames: fixtures.reconcileGames,
+  reconcileExpiredTestSessions: fixtures.reconcileTests,
   listAvailableTestsForParticipant: async () => [], listAvailablePollsForParticipant: async () => [],
   listBrowserNotificationSchedules: async () => fixtures.schedules,
 }));
@@ -42,6 +46,8 @@ beforeEach(() => {
   fixtures.reconcile.mockReset().mockResolvedValue(undefined);
   fixtures.reconcileLeaves.mockReset().mockResolvedValue(undefined);
   fixtures.lifecycle.mockReset().mockResolvedValue(false);
+  fixtures.reconcileGames.mockReset().mockResolvedValue(false);
+  fixtures.reconcileTests.mockReset().mockResolvedValue(undefined);
   fixtures.readPending.mockReset().mockImplementation(async () => fixtures.pending);
   fixtures.readSchedule.mockReset().mockImplementation(async () => fixtures.schedulePending);
   fixtures.markSchedule.mockReset().mockResolvedValue(undefined);
@@ -61,6 +67,13 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("durable Apportion notification worker", () => {
+  it("reconciles closed Rapid and Standard/Instant sessions before processing notifications", async () => {
+    fixtures.reconcileGames.mockResolvedValue(true);
+    await worker.POST(request());
+    expect(fixtures.reconcileGames).toHaveBeenCalledOnce();
+    expect(fixtures.reconcileTests).toHaveBeenCalledOnce();
+    expect(fixtures.publish).toHaveBeenCalledWith("game");
+  });
   it("expires invitations through lifecycle before reading and delivering their shared outbox", async () => {
     const notices: typeof fixtures.pending = [];
     fixtures.lifecycle.mockImplementation(async () => {

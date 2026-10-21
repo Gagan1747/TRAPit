@@ -12,8 +12,11 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { formatShortDateTime } from "../lib/date-format";
+import { VersionedTestRunner } from "./versioned-test-runner";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
 type AvailableTest = {
+  rulesVersion?: 2;
   branding?: WorkspaceBranding | null;
   durationMinutes: number;
   hasAttempt: boolean;
@@ -152,7 +155,7 @@ export function UserTestRunner({
                   : null,
         );
         setStartedAt(
-          selectedTest && selectedTest.status === "live" && !selectedTest.hasAttempt
+          selectedTest && selectedTest.rulesVersion !== 2 && selectedTest.status === "live" && !selectedTest.hasAttempt
             ? new Date().toISOString()
             : null,
         );
@@ -300,6 +303,8 @@ export function UserTestRunner({
     );
   }
 
+  if (test?.rulesVersion === 2) return <VersionedTestRunner testId={testId} identifier={identifier} authConfigured={authConfigured} initialParticipantName={initialParticipantName} />;
+
   if (!test || test.status !== "live" || test.hasAttempt || result || !startedAt) {
     return (
       <div className="workspace-card-stack">
@@ -389,7 +394,7 @@ export function UserTestRunner({
           {feedback ? <p className="muted-text">{feedback}</p> : null}
         </article>
 
-        {activeQuestion ? (
+        {activeQuestion && participantName.trim() ? (
           <article className="question-card" key={activeQuestion.question.id}>
             <div className="question-head">
               <strong>Question {currentQuestionIndex + 1}</strong>
@@ -418,15 +423,16 @@ export function UserTestRunner({
               {currentQuestionIndex > 0 ? (
                 <button
                   className="button-secondary"
+                  aria-label="Previous question"
                   type="button"
                   onClick={goToPreviousQuestion}
                 >
-                  Previous question
+                  <ChevronLeft aria-hidden="true" />
                 </button>
               ) : null}
               {currentQuestionIndex < test.questions.length - 1 ? (
-                <button className="button-secondary" type="button" onClick={goToNextQuestion}>
-                  Next question
+                <button aria-label="Next question" className="button-secondary" type="button" onClick={goToNextQuestion}>
+                  <ChevronRight aria-hidden="true" />
                 </button>
               ) : (
                 <button className="button" disabled={isSubmitting} type="button" onClick={() => void submitTest()}>

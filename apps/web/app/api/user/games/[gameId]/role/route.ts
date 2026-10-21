@@ -19,14 +19,14 @@ export async function POST(request: Request, context: { params: { gameId: string
       return NextResponse.json({ error: "Choose Join Game or Watch Game." }, { status: 400 });
     }
 
-    const game = await setGameCreatorRole(
+    await setGameCreatorRole(
       context.params.gameId,
       actor.identifier,
       body.role,
       body.participantName,
     );
     publishWorkspaceEvent("game");
-    return NextResponse.json({ game });
+    return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to choose the creator role." },

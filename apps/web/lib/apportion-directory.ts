@@ -250,9 +250,11 @@ export async function listApportionDirectLinkServices(providerIdentifier: string
       if (!ownsBusiness && !matches(service.assignedIdentifier ?? "", providerIdentifier)) return [];
       const locationIds = service.locationIds.filter((locationId) =>
         branding.appointmentLocations?.some((location) => location.id === locationId)
-        && (ownsBusiness || values.memberships.some((membership) => membership.locationId === locationId
-          && matches(membership.ownerIdentifier, business.ownerIdentifier)
-          && matches(membership.providerIdentifier, providerIdentifier))),
+        && (!service.assignedIdentifier || matches(service.assignedIdentifier, business.ownerIdentifier)
+          || values.memberships.some((membership) => membership.locationId === locationId
+            && matches(membership.ownerIdentifier, business.ownerIdentifier)
+            && matches(membership.providerIdentifier, service.assignedIdentifier!)
+            && resolveApportionDailySchedule(membership).some((day) => day.workingHours || day.workingHoursSecondWindow))),
       );
       if (!locationIds.length) return [];
       return [{

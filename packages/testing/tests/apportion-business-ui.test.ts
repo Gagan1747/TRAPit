@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import { createElement } from "../../../apps/web/node_modules/react";
 import { renderToStaticMarkup } from "../../../apps/web/node_modules/react-dom/server";
 import { BusinessTimeRangeSelector } from "../../../apps/web/components/business-time-range-selector";
-import { BusinessAddresses, BusinessRoles, LinkedHours } from "../../../apps/web/components/apportion-role-panel";
+import { BusinessAddresses, BusinessRoles, BusinessBookingLink, LinkedHours } from "../../../apps/web/components/apportion-role-panel";
 import { normalizeWorkspaceBranding } from "../src/quiz";
 
 type Business = Parameters<typeof BusinessRoles>[0]["business"];
 const owner = "+919111111111";
 const branding = normalizeWorkspaceBranding({
-  instituteName: "Clinic", appointmentsPerSlot: 1, slotDurationMinutes: 10,
+  instituteName: "Clinic", appointmentShareCode: "OWNER-CODE", appointmentsPerSlot: 1, slotDurationMinutes: 10,
   appointmentLocations: [{ id: "location-1", name: "Main", address: "Main Street", workingDays: "Monday", workingHours: "9:00 AM - 5:00 PM", workingHoursSecondWindow: "" }],
 } as never)!;
 const business = (role: Business["role"], delegated: boolean): Business => ({
@@ -22,6 +22,13 @@ const business = (role: Business["role"], delegated: boolean): Business => ({
 } as Business);
 
 describe("business panel permission surfaces", () => {
+  it("uses the owner booking URL for delegated business hyperlinks and actions", () => {
+    const html = renderToStaticMarkup(createElement(BusinessBookingLink, { business: business("admin", true), actions: true }));
+    expect(html.match(/href="\/apportion\/OWNER-CODE"/g)).toHaveLength(2);
+    expect(html).toContain('aria-label="Copy booking link"');
+    expect(html).toContain('aria-label="Open booking page"');
+    expect(html).toContain('aria-label="QR code unavailable"');
+  });
   it("keeps delegated owner service and delegation without business-wide staff controls", () => {
     const html = renderToStaticMarkup(createElement(BusinessRoles, { business: business("owner", true), busy: false, save: async () => true }));
     expect(html).toContain("Owner service name");
@@ -48,6 +55,9 @@ describe("business panel permission surfaces", () => {
     expect(html).not.toContain("Remove Address");
     expect(html).not.toContain("Clear form");
     expect(html).toContain('readonly="" value="Clinic"');
+    expect(html).toContain('class="business-choice-row business-duration-choices"');
+    expect(html).toContain('class="field-label business-booking-type-heading">Booking type</span>');
+    expect(html).not.toContain("<select");
   });
   it("keeps staff service names readonly", () => {
     const html = renderToStaticMarkup(createElement(BusinessRoles, { business: business("staff", true), busy: false, save: async () => true }));

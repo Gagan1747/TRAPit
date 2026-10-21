@@ -12,7 +12,7 @@ export async function POST(request: Request, context: { params: { gameId: string
   }
 
   try {
-    const body = (await request.json()) as { optionIndex?: number; questionIndex?: number };
+    const body = (await request.json()) as { elapsedMs?: number; optionIndex?: number; questionIndex?: number };
 
     if (!Number.isInteger(body.optionIndex) || !Number.isInteger(body.questionIndex)) {
       return NextResponse.json({ error: "Question and answer are required." }, { status: 400 });
@@ -20,13 +20,18 @@ export async function POST(request: Request, context: { params: { gameId: string
 
     const result = await recordGameAnswer({
       gameId: context.params.gameId,
+      elapsedMs: body.elapsedMs,
       optionIndex: body.optionIndex as number,
       participantIdentifier: actor.identifier,
       questionIndex: body.questionIndex as number,
     });
 
     publishWorkspaceEvent("game");
-    return NextResponse.json(result);
+    return NextResponse.json({ answer: result.game.rulesVersion !== 4 ? result.answer : {
+      answeredAt: result.answer.answeredAt,
+      optionIndex: result.answer.optionIndex,
+      questionIndex: result.answer.questionIndex,
+    } });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to submit the answer." },

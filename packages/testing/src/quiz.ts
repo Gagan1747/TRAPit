@@ -64,6 +64,7 @@ export type QuestionDraft = {
 };
 
 export type TestResult = {
+  correctMarks?: number;
   attemptedCount: number;
   assignedParticipantCount?: number;
   correctCount: number;
@@ -267,6 +268,11 @@ export type ScheduledTestStatus = "scheduled" | "live" | "completed";
 export type ScheduledTestInviteJoinMode = "approval-required" | "automatic";
 
 export type ScheduledTest = {
+  assessmentKind?: "standard" | "instant";
+  rulesVersion?: 2;
+  countdownStartedAt?: string | null;
+  startedAt?: string | null;
+  participantSessions?: TestParticipantSession[];
   branding?: WorkspaceBranding | null;
   createdAt: string;
   createdBy: string | null;
@@ -288,6 +294,16 @@ export type ScheduledTest = {
   updatedAt: string;
 };
 
+export type TestParticipantSession = {
+  identifier: string;
+  participantName: string;
+  joinedAt: string;
+  startedAt: string | null;
+  answers: Record<string, number | undefined>;
+  revision: number;
+  submittedAt: string | null;
+};
+
 export type ScheduledGameStatus = "upcoming" | "countdown" | "ongoing" | "completed";
 
 export type GameCreatorRole = "participant" | "spectator";
@@ -298,10 +314,12 @@ export type GameParticipant = {
   acceptedAt: string | null;
   identifier: string;
   label: string;
+  questionStartedAt?: string[];
 };
 
 export type GameAnswer = {
   answeredAt: string;
+  elapsedMs?: number;
   kind?: GameAnswerKind;
   isCorrect: boolean;
   optionIndex: number | null;
@@ -329,6 +347,7 @@ export type ScheduledGame = {
   creatorIdentifier: string;
   id: string;
   participantGroupId: string;
+  participantGroupIds?: string[];
   participants: GameParticipant[];
   poolId: string;
   presentedQuestions?: GamePresentedQuestion[];
@@ -336,7 +355,7 @@ export type ScheduledGame = {
   questionReadyParticipantIdentifiers?: string[][];
   questionStartedAt?: string[];
   questionIds: string[];
-  rulesVersion?: 1 | 2 | 3;
+  rulesVersion?: 1 | 2 | 3 | 4;
   startedAt: string | null;
   title: string;
   updatedAt: string;
@@ -438,8 +457,61 @@ export function getGameQuestionPoints(correctPosition: number | null) {
   return GAME_CORRECT_POINTS[correctPosition] ?? 0;
 }
 
+export function getRapidGameDeadline(game: Pick<ScheduledGame, "countdownStartedAt">) {
+  return game.countdownStartedAt
+    ? Date.parse(game.countdownStartedAt) + GAME_LAUNCH_COUNTDOWN_MS + GAME_QUESTION_COUNT * GAME_QUESTION_DURATION_MS
+    : null;
+}
+
+export function getRapidParticipantQuestionIndex(game: ScheduledGame, participant: GameParticipant, nowMs = Date.now()) {
+  if (getGameStatus(game, nowMs) !== "ongoing" || !participant.acceptedAt) return null;
+  const starts = participant.questionStartedAt ?? [];
+  for (let index = 0; index < GAME_QUESTION_COUNT; index += 1) {
+    if (!starts[index] || nowMs < Date.parse(starts[index]) + GAME_QUESTION_DURATION_MS) return index;
+  }
+  return null;
+}
+
+export function reconcileRapidGame(game: ScheduledGame, nowMs = Date.now()) {
+  if (game.rulesVersion !== 4 || game.completedAt || !game.countdownStartedAt) return;
+  const launch = Date.parse(game.countdownStartedAt) + GAME_LAUNCH_COUNTDOWN_MS;
+  if (nowMs < launch) return;
+  const previous = JSON.stringify(game);
+  game.startedAt = new Date(launch).toISOString();
+  const globalDeadline = getRapidGameDeadline(game)!;
+  const participants = game.participants.filter((participant) => participant.acceptedAt);
+  for (const participant of participants) {
+    for (let index = 0; index < GAME_QUESTION_COUNT; index += 1) {
+      const start = participant.questionStartedAt?.[index];
+      const deadline = start ? Math.min(Date.parse(start) + GAME_QUESTION_DURATION_MS, globalDeadline) : globalDeadline;
+      if (nowMs < deadline || game.answers.some((answer) =>
+        answer.questionIndex === index && participantIdentifiersMatch(answer.participantIdentifier, participant.identifier))) continue;
+      game.answers.push({
+        answeredAt: new Date(deadline).toISOString(), elapsedMs: start ? deadline - Date.parse(start) : 0,
+        kind: "timeout", isCorrect: false, optionIndex: null, participantIdentifier: participant.identifier,
+        points: GAME_INCORRECT_POINTS, questionIndex: index, responsePosition: null,
+      });
+    }
+  }
+  for (let index = 0; index < GAME_QUESTION_COUNT; index += 1) {
+    const correct = game.answers.filter((answer) => answer.questionIndex === index && answer.isCorrect)
+      .sort((left, right) => (left.elapsedMs ?? 0) - (right.elapsedMs ?? 0)
+        || left.participantIdentifier.localeCompare(right.participantIdentifier));
+    correct.forEach((answer, position) => {
+      answer.responsePosition = position + 1;
+      answer.points = getGameQuestionPoints(position);
+    });
+  }
+  const allResolved = participants.length > 0 && participants.every((participant) =>
+    game.answers.filter((answer) => participantIdentifiersMatch(answer.participantIdentifier, participant.identifier)).length === GAME_QUESTION_COUNT
+    && Boolean(participant.questionStartedAt?.[GAME_QUESTION_COUNT - 1])
+    && nowMs >= Date.parse(participant.questionStartedAt![GAME_QUESTION_COUNT - 1]) + GAME_QUESTION_DURATION_MS);
+  if (nowMs >= globalDeadline || allResolved) game.completedAt = new Date(Math.min(nowMs, globalDeadline)).toISOString();
+  if (previous !== JSON.stringify(game)) game.updatedAt = new Date(nowMs).toISOString();
+}
+
 export function getGameQuestionDurationMs(game: Pick<ScheduledGame, "rulesVersion">) {
-  return game.rulesVersion === 2 || game.rulesVersion === 3
+  return game.rulesVersion === 2 || game.rulesVersion === 3 || game.rulesVersion === 4
     ? GAME_QUESTION_DURATION_MS
     : LEGACY_GAME_QUESTION_DURATION_MS;
 }
@@ -457,6 +529,13 @@ export function getGameStatus(
 ): ScheduledGameStatus {
   if (game.completedAt) {
     return "completed";
+  }
+
+  if (game.rulesVersion === 4) {
+    if (!game.countdownStartedAt) return "upcoming";
+    const launch = Date.parse(game.countdownStartedAt) + GAME_LAUNCH_COUNTDOWN_MS;
+    if (nowMs < launch) return "countdown";
+    return nowMs >= launch + GAME_QUESTION_COUNT * GAME_QUESTION_DURATION_MS ? "completed" : "ongoing";
   }
 
   if ((game.rulesVersion === 2 || game.rulesVersion === 3) && game.countdownStartedAt && !game.startedAt) {
@@ -570,11 +649,9 @@ export function buildGameLeaderboard(
       right.points - left.points
       || left.participantLabel.localeCompare(right.participantLabel),
     )
-    .map((entry, index, entries) => ({
+    .map((entry, _index, entries) => ({
       ...entry,
-      rank: index > 0 && entries[index - 1].points === entry.points
-        ? entries[index - 1].rank
-        : index + 1,
+      rank: entries.findIndex((candidate) => candidate.points === entry.points) + 1,
     }));
 }
 
@@ -1166,14 +1243,15 @@ export function createGroupJoinRequest(input: {
 }
 
 export function resolveScheduledTestStatus(
-  test: Pick<ScheduledTest, "durationMinutes" | "resolvedParticipantIdentifiers" | "startsAt">,
+  test: Pick<ScheduledTest, "durationMinutes" | "resolvedParticipantIdentifiers" | "startsAt" | "assessmentKind" | "rulesVersion" | "startedAt">,
   attempts: Array<Pick<TestAttempt, "testId" | "userId">>,
   testId: string,
 ): ScheduledTestStatus {
+  if (test.assessmentKind === "instant" && !test.startedAt) return "scheduled";
   const startsAtMs = new Date(test.startsAt).getTime();
   const endsAtMs = startsAtMs + test.durationMinutes * 60 * 1000;
 
-  if (startsAtMs > Date.now()) {
+  if (startsAtMs - (test.rulesVersion === 2 ? 60_000 : 0) > Date.now()) {
     return "scheduled";
   }
 
@@ -1265,14 +1343,14 @@ export function getUnansweredCount(
 }
 
 export function getTestMarks(
-  result: Pick<TestResult, "attemptedCount" | "correctCount" | "incorrectCount" | "totalCount">,
+  result: Pick<TestResult, "attemptedCount" | "correctCount" | "incorrectCount" | "totalCount" | "correctMarks">,
 ) {
-  return (result.correctCount * 4) - getIncorrectCount(result) - getUnansweredCount(result);
+  return (result.correctCount * (result.correctMarks ?? 4)) - getIncorrectCount(result) - getUnansweredCount(result);
 }
 
 export function compareTestResults(
-  left: Pick<TestResult, "attemptedCount" | "correctCount" | "elapsedMs" | "incorrectCount" | "totalCount">,
-  right: Pick<TestResult, "attemptedCount" | "correctCount" | "elapsedMs" | "incorrectCount" | "totalCount">,
+  left: Pick<TestResult, "attemptedCount" | "correctCount" | "elapsedMs" | "incorrectCount" | "totalCount" | "correctMarks">,
+  right: Pick<TestResult, "attemptedCount" | "correctCount" | "elapsedMs" | "incorrectCount" | "totalCount" | "correctMarks">,
 ) {
   const leftMarks = getTestMarks(left);
   const rightMarks = getTestMarks(right);
