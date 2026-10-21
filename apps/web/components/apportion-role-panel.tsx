@@ -1,8 +1,8 @@
 "use client";
 
 import { APPORTION_NEW_DURATION_MINUTES, getApportionServiceLimit, getApportionWeeklyIntervals, participantIdentifiersMatch, resolveApportionDailySchedule, type AppointmentLocation, type ApportionDailyHours, type ApportionProviderSettings, type ApportionService, type ApportionWeeklyInterval } from "@trapit/testing";
-import { Check, ChevronLeft, ChevronRight, Copy, ExternalLink, Plus, QrCode, Save, Search, Unlink } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ArrowLeft, ArrowRight, Check, ChevronLeft, ChevronRight, Copy, ExternalLink, Plus, QrCode, Save, Search, Unlink, X } from "lucide-react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import QRCode from "qrcode";
 import type { ApportionPanelInput, getApportionPanel } from "../lib/apportion-directory";
 import { buildApportionBookingPath } from "../lib/apportion-booking-path";
@@ -20,7 +20,7 @@ async function readResponse<T>(response: Response): Promise<T> {
 
 export function BusinessBookingLink({ business, actions = false }: { business: Business; actions?: boolean }) {
   const code = business.branding.appointmentShareCode;
-  const path = code ? buildApportionBookingPath(code) : "";
+  const path = code ? buildApportionBookingPath(code, undefined, business.branding.instituteName) : "";
   const [qr, setQr] = useState("");
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -102,6 +102,10 @@ function RegisteredPhone({ value, onChange, onResolved, disabled = false }: { va
 export function BusinessAddresses({ business, busy, save }: { business: Business; busy: boolean; save: SaveOperation }) {
   const [branding, setBranding] = useState(business.branding);
   const [error, setError] = useState<string | null>(null);
+  const [isLogoDragActive, setIsLogoDragActive] = useState(false);
+  const [leaveWeekOffset, setLeaveWeekOffset] = useState(0);
+  const logoInputRef = useRef<HTMLInputElement>(null);
+  const profileInputRef = useRef<HTMLInputElement>(null);
   const [activeDays, setActiveDays] = useState(() => Object.fromEntries((business.branding.appointmentLocations ?? []).map((location) => [
     location.id, resolveApportionDailySchedule(location).filter((entry) => entry.workingHours || entry.workingHoursSecondWindow).map((entry) => entry.weekday),
   ])));
@@ -119,6 +123,20 @@ export function BusinessAddresses({ business, busy, save }: { business: Business
       return { ...location, dailyHours, workingDays: active.map((entry) => SCHEDULE_WEEKDAYS[entry.weekday]).join(", "), workingHours: active[0]?.workingHours ?? "", workingHoursSecondWindow: active[0]?.workingHoursSecondWindow ?? "" };
     }) }));
   }
+  function handleImageFile(field: "imageDataUrl" | "profileImageDataUrl", file: File | null) {
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { setError("Choose an image smaller than 2 MB."); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") setBranding((current) => ({ ...current, [field]: reader.result as string }));
+    };
+    reader.readAsDataURL(file);
+  }
+  function handleLogoDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setIsLogoDragActive(false);
+    handleImageFile("imageDataUrl", event.dataTransfer.files?.[0] ?? null);
+  }
   async function saveHours() {
     const incomplete = (branding.appointmentLocations ?? []).some((location) => {
       const hours = resolveApportionDailySchedule(location);
@@ -131,10 +149,46 @@ export function BusinessAddresses({ business, busy, save }: { business: Business
     setError(null);
     await save({ operation: "business-branding", ownerIdentifier: business.business.ownerIdentifier, branding });
   }
+  const promotionalImages = branding.promotionalImageDataUrls ?? [];
+  const closedLeaveDateKeys = branding.appointmentDateOverrides?.closedDateKeys ?? [];
+  const businessWorkingWeekdays = new Set<number>(
+    (branding.appointmentLocations ?? []).flatMap((location) =>
+      resolveApportionDailySchedule(location)
+        .filter((entry) => entry.workingHours || entry.workingHoursSecondWindow)
+        .map((entry) => entry.weekday),
+    ),
+  );
+  const today = new Date(`${new Date(Date.now() + 330 * 60_000).toISOString().slice(0, 10)}T00:00:00Z`);
+  const maxLeaveDate = new Date(today);
+  maxLeaveDate.setUTCMonth(today.getUTCMonth() + 6);
+  const leaveWeekStart = new Date(today);
+  leaveWeekStart.setUTCDate(today.getUTCDate() - today.getUTCDay() + leaveWeekOffset * 7);
+  const leaveDates = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(leaveWeekStart);
+    date.setUTCDate(leaveWeekStart.getUTCDate() + index);
+    return date;
+  });
+  const leaveRangeLabel = `${leaveDates[0].toLocaleDateString(undefined, { day: "numeric", month: "short" })} - ${leaveDates[6].toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`;
+  const nextLeaveWeek = new Date(leaveWeekStart);
+  nextLeaveWeek.setUTCDate(leaveWeekStart.getUTCDate() + 7);
+  function toggleLeaveDate(key: string) {
+    const isClosed = closedLeaveDateKeys.includes(key);
+    setBranding((current) => ({
+      ...current,
+      appointmentDateOverrides: {
+        closedDateKeys: isClosed
+          ? (current.appointmentDateOverrides?.closedDateKeys ?? []).filter((entry) => entry !== key)
+          : Array.from(new Set([...(current.appointmentDateOverrides?.closedDateKeys ?? []), key])),
+        openedDateKeys: (current.appointmentDateOverrides?.openedDateKeys ?? []).filter((entry) => entry !== key),
+      },
+    }));
+  }
   return <section className="business-details-panel"><div className="business-details-form">
     <BusinessBookingLink business={business} actions={business.role === "admin"} />
     <section className="business-form-section"><h3>Address &amp; Operating Hours</h3>
-    <label>Business name<input readOnly value={branding.instituteName} /></label>
+    <div className="field business-field-card">
+      <label>Business name<input readOnly value={branding.instituteName} /></label>
+    </div>
     {(branding.appointmentLocations ?? []).map((location, index) => {
       const dailyHours = resolveApportionDailySchedule(location);
       return <fieldset className="field business-field-card" disabled={busy || business.role !== "admin"} key={location.id}>
@@ -155,35 +209,199 @@ export function BusinessAddresses({ business, busy, save }: { business: Business
     </section>
     <fieldset disabled={busy || business.role !== "admin"} className="business-form-section">
       <legend>Business-wide configuration</legend>
-      <BookingChoices label="Business" settings={{ appointmentsPerSlot: branding.appointmentsPerSlot ?? 1, slotDurationMinutes: branding.slotDurationMinutes ?? 10, justAddToList: branding.justAddToList ?? true }}
-        onChange={(settings) => setBranding((current) => ({ ...current, ...settings, showRemainingBookings: !settings.justAddToList }))} />
-      <label>Notes explanation text<input value={branding.appointmentNotesPrompt ?? ""} onChange={(event) => setBranding((current) => ({ ...current, appointmentNotesPrompt: event.target.value }))} /></label>
-      {(["imageDataUrl", "profileImageDataUrl"] as const).map((field) => <label key={field}>{field === "imageDataUrl" ? "Business logo" : "Profile image"}<input accept="image/*" type="file" onChange={(event) => {
-        const file = event.target.files?.[0];
-        if (!file) return;
-        if (file.size > 2 * 1024 * 1024) { setError("Choose an image smaller than 2 MB."); return; }
-        const reader = new FileReader();
-        reader.onload = () => {
-          if (typeof reader.result === "string") setBranding((current) => ({ ...current, [field]: reader.result as string }));
-        };
-        reader.readAsDataURL(file);
-      }} />{branding[field] ? <img alt={field === "imageDataUrl" ? "Business logo preview" : "Profile preview"} src={branding[field]!} width={80} /> : null}</label>)}
-      <label>Promotional images<input accept="image/*" multiple type="file" onChange={(event) => {
-        const files = Array.from(event.target.files ?? []);
-        if ((branding.promotionalImageDataUrls?.length ?? 0) + files.length > 4) { setError("Choose up to 4 promotional images."); return; }
-        if (files.some((file) => file.size > 2 * 1024 * 1024)) { setError("Choose images smaller than 2 MB."); return; }
-        for (const file of files) {
-          const reader = new FileReader();
-          reader.onload = () => { if (typeof reader.result === "string") setBranding((current) => ({ ...current, promotionalImageDataUrls: [...(current.promotionalImageDataUrls ?? []), reader.result as string].slice(0, 4) })); };
-          reader.readAsDataURL(file);
-        }
-      }} /></label>
-      {(branding.promotionalImageDataUrls ?? []).map((image, index) => <div key={index}><img alt={`Promotional preview ${index + 1}`} src={image} width={80} /><button className="button-secondary" type="button" onClick={() => setBranding((current) => ({ ...current, promotionalImageDataUrls: current.promotionalImageDataUrls?.filter((_, imageIndex) => imageIndex !== index) }))}>Remove promotional image {index + 1}</button></div>)}
-      <label>Business leave date<input type="date" onChange={(event) => {
-        const date = event.target.value;
-        if (date) setBranding((current) => ({ ...current, appointmentDateOverrides: { closedDateKeys: Array.from(new Set([...(current.appointmentDateOverrides?.closedDateKeys ?? []), date])), openedDateKeys: (current.appointmentDateOverrides?.openedDateKeys ?? []).filter((entry) => entry !== date) } }));
-      }} /></label>
-      {(branding.appointmentDateOverrides?.closedDateKeys ?? []).map((date) => <button className="button-secondary" key={date} type="button" onClick={() => setBranding((current) => ({ ...current, appointmentDateOverrides: { closedDateKeys: (current.appointmentDateOverrides?.closedDateKeys ?? []).filter((entry) => entry !== date), openedDateKeys: current.appointmentDateOverrides?.openedDateKeys ?? [] } }))}>Remove business leave {date}</button>)}
+      <div className="field business-field-card">
+        <span className="field-label">Slot configuration</span>
+        <span className="field-label">Appointments per slot</span>
+        <div className="business-choice-row" role="group" aria-label="Business appointments per slot">{[1, 2, 3, 4, 5, 6].map((capacity) => <button className="business-choice-button" aria-pressed={(branding.appointmentsPerSlot ?? 1) === capacity} key={capacity} type="button" onClick={() => setBranding((current) => ({ ...current, appointmentsPerSlot: capacity }))}>{capacity}</button>)}</div>
+        <span className="field-label">Slot duration</span>
+        <div className="business-choice-row business-duration-choices" role="group" aria-label="Business slot duration">{APPORTION_NEW_DURATION_MINUTES.map((duration) => <button className="business-choice-button" aria-pressed={(branding.slotDurationMinutes ?? 10) === duration} key={duration} type="button" onClick={() => setBranding((current) => ({ ...current, slotDurationMinutes: duration }))}>{duration === 1440 ? "All Day" : duration === 240 ? "4 hr" : duration === 60 ? "1 hr" : `${duration} min`}</button>)}</div>
+        {!APPORTION_NEW_DURATION_MINUTES.some((duration) => duration === (branding.slotDurationMinutes ?? 10)) ? <span className="muted-text">Current: {branding.slotDurationMinutes ?? 10} min</span> : null}
+        <label>Notes explanation text<input placeholder="Share a brief about appointment purpose" value={branding.appointmentNotesPrompt ?? ""} onChange={(event) => setBranding((current) => ({ ...current, appointmentNotesPrompt: event.target.value }))} /></label>
+        <span className="field-label business-booking-type-heading">Booking type</span>
+        <div className="business-choice-row business-mode-choices" role="group" aria-label="Business booking type">{[{ label: "Slot Based", queue: false }, { label: "Queue Based", queue: true }].map((mode) => <button className="business-choice-button" aria-pressed={(branding.justAddToList ?? true) === mode.queue} key={mode.label} type="button" onClick={() => setBranding((current) => ({ ...current, justAddToList: mode.queue, showRemainingBookings: !mode.queue }))}>{mode.label}</button>)}</div>
+      </div>
+
+      <div className="field business-field-card">
+        <span className="field-label">Business logo</span>
+        <div className="business-logo-row">
+          <div
+            className={`business-logo-dropzone${isLogoDragActive ? " is-dragging" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => logoInputRef.current?.click()}
+            onDragEnter={(event) => { event.preventDefault(); setIsLogoDragActive(true); }}
+            onDragLeave={() => setIsLogoDragActive(false)}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={handleLogoDrop}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                logoInputRef.current?.click();
+              }
+            }}
+          >
+            <span aria-hidden="true" className="business-upload-icon">Up</span>
+            <strong>Drag &amp; Drop your logo</strong>
+            <span>or Browse</span>
+          </div>
+          <input
+            accept="image/*"
+            aria-label="Business logo"
+            className="sr-only"
+            ref={logoInputRef}
+            type="file"
+            onChange={(event) => handleImageFile("imageDataUrl", event.target.files?.[0] ?? null)}
+          />
+          <div className="business-logo-preview is-circular" aria-label="Logo preview">
+            {branding.imageDataUrl ? (
+              <img alt="Business logo preview" src={branding.imageDataUrl} />
+            ) : (
+              <span>Logo</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="field business-field-card">
+        <span className="field-label">Profile image</span>
+        <div className="business-logo-row">
+          <button className="button-secondary" type="button" onClick={() => profileInputRef.current?.click()}>
+            Upload profile image
+          </button>
+          <input
+            accept="image/*"
+            aria-label="Profile image"
+            className="sr-only"
+            ref={profileInputRef}
+            type="file"
+            onChange={(event) => handleImageFile("profileImageDataUrl", event.target.files?.[0] ?? null)}
+          />
+          <div className="business-logo-preview is-circular" aria-label="Profile preview">
+            {branding.profileImageDataUrl ? (
+              <img alt="Profile preview" src={branding.profileImageDataUrl} />
+            ) : (
+              <span>Profile</span>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="field business-field-card">
+        <span className="field-label">Promotional images ({promotionalImages.length}/4)</span>
+        <label className="button-secondary promotional-image-upload">
+          Upload promotional images
+          <input
+            accept="image/*"
+            aria-label="Promotional images"
+            className="sr-only"
+            disabled={promotionalImages.length >= 4}
+            multiple
+            type="file"
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? []);
+              if (promotionalImages.length + files.length > 4) { setError("Choose up to 4 promotional images."); return; }
+              if (files.some((file) => file.size > 2 * 1024 * 1024)) { setError("Choose images smaller than 2 MB."); return; }
+              for (const file of files) {
+                const reader = new FileReader();
+                reader.onload = () => { if (typeof reader.result === "string") setBranding((current) => ({ ...current, promotionalImageDataUrls: [...(current.promotionalImageDataUrls ?? []), reader.result as string].slice(0, 4) })); };
+                reader.readAsDataURL(file);
+              }
+              event.target.value = "";
+            }}
+          />
+        </label>
+        {promotionalImages.length ? (
+          <div className="promotional-image-grid">
+            {promotionalImages.map((image, index) => (
+              <div className="promotional-image-preview" key={`${image.slice(0, 32)}-${index}`}>
+                <img alt={`Promotional preview ${index + 1}`} src={image} />
+                <div className="promotional-image-actions">
+                  <button
+                    aria-label={`Move promotional image ${index + 1} left`}
+                    className="button-secondary small-button icon-button"
+                    disabled={index === 0}
+                    title="Move left"
+                    type="button"
+                    onClick={() => setBranding((current) => {
+                      const next = [...(current.promotionalImageDataUrls ?? [])];
+                      [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                      return { ...current, promotionalImageDataUrls: next };
+                    })}
+                  >
+                    <ArrowLeft aria-hidden="true" size={16} />
+                  </button>
+                  <button
+                    aria-label={`Move promotional image ${index + 1} right`}
+                    className="button-secondary small-button icon-button"
+                    disabled={index === promotionalImages.length - 1}
+                    title="Move right"
+                    type="button"
+                    onClick={() => setBranding((current) => {
+                      const next = [...(current.promotionalImageDataUrls ?? [])];
+                      [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                      return { ...current, promotionalImageDataUrls: next };
+                    })}
+                  >
+                    <ArrowRight aria-hidden="true" size={16} />
+                  </button>
+                  <button
+                    aria-label={`Remove promotional image ${index + 1}`}
+                    className="button-secondary small-button icon-button"
+                    title="Remove image"
+                    type="button"
+                    onClick={() => setBranding((current) => ({ ...current, promotionalImageDataUrls: current.promotionalImageDataUrls?.filter((_, imageIndex) => imageIndex !== index) }))}
+                  >
+                    <X aria-hidden="true" size={16} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="field business-field-card">
+        <span className="field-label">Business leave date</span>
+        <div className="business-exception-calendar apportion-provider-leaves">
+          <div className="business-exception-calendar-head">
+            <button aria-label="Previous business leave week" className="button-secondary icon-button" disabled={leaveWeekOffset === 0 || busy} type="button" onClick={() => setLeaveWeekOffset((current) => Math.max(0, current - 1))}>
+              <ChevronLeft aria-hidden="true" size={18} />
+            </button>
+            <strong>{leaveRangeLabel}</strong>
+            <button aria-label="Next business leave week" className="button-secondary icon-button" disabled={nextLeaveWeek > maxLeaveDate || busy} type="button" onClick={() => setLeaveWeekOffset((current) => current + 1)}>
+              <ChevronRight aria-hidden="true" size={18} />
+            </button>
+          </div>
+          <div className="business-exception-grid">
+            {leaveDates.map((date) => {
+              const key = localDateKey(date);
+              const isScheduledDay = businessWorkingWeekdays.size === 0 || businessWorkingWeekdays.has(date.getUTCDay());
+              const isClosed = closedLeaveDateKeys.includes(key);
+              const isDisabled = busy || date < today || date > maxLeaveDate || !isScheduledDay;
+              return (
+                <button
+                  aria-label={`${date.toLocaleDateString()} ${isScheduledDay ? isClosed ? "leave" : "working" : "not scheduled"}`}
+                  aria-pressed={isScheduledDay && !isClosed}
+                  className={`business-exception-date${isScheduledDay && !isClosed ? " is-active" : " is-inactive"}${isClosed ? " is-closed" : ""}`}
+                  disabled={isDisabled}
+                  key={key}
+                  type="button"
+                  onClick={() => toggleLeaveDate(key)}
+                >
+                  <span>{SCHEDULE_WEEKDAYS[date.getUTCDay()].slice(0, 3)}</span>
+                  <strong>{date.getUTCDate()}</strong>
+                  {isClosed ? <small>Leave</small> : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <label className="sr-only">Business leave date<input type="date" onChange={(event) => {
+          const date = event.target.value;
+          if (date) toggleLeaveDate(date);
+        }} /></label>
+        {closedLeaveDateKeys.map((date) => <button className="button-secondary" key={date} type="button" onClick={() => toggleLeaveDate(date)}>Remove business leave {date}</button>)}
+      </div>
     </fieldset>
     {error ? <p role="alert">{error}</p> : null}
     {business.role === "admin" ? <button className="button-secondary" disabled={busy} type="button" onClick={() => void saveHours()}>Save business configuration</button> : null}
@@ -239,7 +457,7 @@ export function BusinessRoles({ business, save, busy }: { business: Business; sa
   useEffect(() => { setDelegate(business.business.adminDelegateIdentifier || ""); }, [business.business.adminDelegateIdentifier]);
   const canEdit = (business.role === "admin" || (business.role === "owner" && !business.business.adminDelegateIdentifier)) && getApportionServiceLimit(business.ownerCategory) > 0;
   return <section className="workspace-card-stack">
-    <BusinessBookingLink business={business} />
+    {business.role !== "admin" ? <BusinessBookingLink business={business} /> : null}
     {business.business.services.filter((service) => service.id === "consultation").map((service) => <ServiceRow key={service.id} business={business} service={service} index={0} busy={busy} save={save} />)}
     {business.role !== "staff" ? <fieldset disabled={busy || business.role !== "owner"} className="apportion-matrix-row">
       <div><strong>Delegate</strong><span>Admin</span></div>

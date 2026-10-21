@@ -22,9 +22,9 @@ const business = (role: Business["role"], delegated: boolean): Business => ({
 } as Business);
 
 describe("business panel permission surfaces", () => {
-  it("uses the owner booking URL for delegated business hyperlinks and actions", () => {
+  it("uses the owner booking URL with business name slug for delegated business hyperlinks and actions", () => {
     const html = renderToStaticMarkup(createElement(BusinessBookingLink, { business: business("admin", true), actions: true }));
-    expect(html.match(/href="\/apportion\/OWNER-CODE"/g)).toHaveLength(2);
+    expect(html.match(/href="\/apportion\/clinic-OWNER-CODE"/g)).toHaveLength(2);
     expect(html).toContain('aria-label="Copy booking link"');
     expect(html).toContain('aria-label="Open booking page"');
     expect(html).toContain('aria-label="QR code unavailable"');

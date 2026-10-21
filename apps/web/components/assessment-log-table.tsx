@@ -14,6 +14,7 @@ export type AssessmentLogRow = {
   sortTime: number;
   status: ReactNode;
   test: string;
+  testType?: "Instant" | "Rapid" | null;
   time: string;
   creatorName?: string;
   creatorIdentifier?: string;
@@ -51,7 +52,7 @@ export function AssessmentLogTable({ emptyMessage = "No tests or games match thi
           {visibleRows.map((row, index) => (
             <tr key={row.id}>
               <td>{currentPage * 6 + index + 1}</td>
-              <td><strong>{row.test}</strong><span className="assessment-log-detail">{row.groups}</span><span className="assessment-log-detail muted-text">{row.questionPool}</span></td>
+              <td><strong>{row.testType ? `${row.testType} ${row.test}` : row.test}</strong><span className="assessment-log-detail">{row.groups}</span><span className="assessment-log-detail muted-text">{row.questionPool}</span></td>
               <td><span>{row.scheduled}</span><span className="assessment-log-detail">{row.time}</span>{row.creatorName ? <span className="assessment-log-detail">{row.creatorName}</span> : null}{row.creatorIdentifier ? <span className="assessment-log-detail muted-text">{row.creatorIdentifier}</span> : null}</td>
               <td>{row.status}{row.participation !== undefined ? <span className="assessment-log-detail">{row.participation}</span> : <><span className="assessment-log-detail">Rank: {row.rank}</span><span className="assessment-log-detail">Marks/Points: {row.marksOrPoints}</span></>}</td>
             </tr>

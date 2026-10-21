@@ -23,7 +23,8 @@ describe("completed results presentation", () => {
     expect(html).toContain("Responses 1");
     expect(html).toContain("Final standings (12/14)");
     expect(html).toContain("+********1234");
-    expect(html).toContain("Incorrect + unanswered: 2");
+    expect(html).toContain("(+2 / -1)");
+    expect(html).toContain("(+1 / -2)");
     expect(html).toContain("(10 min)");
     expect(html).toMatch(/is-current-participant" aria-current="true"><strong>#12 Me \(You\)/);
     expect(html).not.toContain("Your result");

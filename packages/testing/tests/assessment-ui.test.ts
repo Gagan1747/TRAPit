@@ -63,12 +63,12 @@ describe("assessment scheduling contracts", () => {
     expect(source).toContain('setScheduleRepeats(true)');
   });
   it("uses owned multi-groups and their distinct union, while preserving legacy edits and links", () => {
-    expect(source).toContain('id="schedule-groups" multiple');
+    expect(source).toContain('id="schedule-groups"');
     expect(source).toContain('group.ownerIdentifier, currentAdminIdentifier');
     expect(source).toContain('const selectedScheduleMemberIds = new Set');
     expect(source).toContain('participantGroupIds: selectedScheduleGroupIds');
     expect(source).toContain('generateInviteLink: editingScheduledTest ? Boolean(editingScheduledTest.shareCode) : false');
-    expect(source).toContain('(existing)</option>');
+    expect(source).toContain('(existing)');
     expect(source).toContain('const eligibleSchedulePools = pools.filter');
   });
   it("keeps participant results behind completion and links Instant and eligible creators to the shared runner", () => {

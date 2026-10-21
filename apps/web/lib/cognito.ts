@@ -417,41 +417,63 @@ export async function getCognitoUserStatus(phoneNumber: string): Promise<string 
   return response.UserStatus ?? null;
 }
 
+let directoryUsersCache: { expiresAt: number; users: RegisteredDirectoryUser[] } | null = null;
+let directoryUsersInFlight: Promise<RegisteredDirectoryUser[]> | null = null;
+const DIRECTORY_USERS_CACHE_TTL_MS = 60_000;
+
 export async function listRegisteredDirectoryUsers(): Promise<RegisteredDirectoryUser[]> {
-  const config = getConfig();
-  const users: RegisteredDirectoryUser[] = [];
-  let paginationToken: string | undefined;
+  if (directoryUsersCache && Date.now() < directoryUsersCache.expiresAt) {
+    return directoryUsersCache.users;
+  }
 
-  do {
-    const response = await getAdminClient().send(
-      new ListUsersCommand({
-        Limit: 60,
-        PaginationToken: paginationToken,
-        UserPoolId: config.userPoolId,
-      }),
-    );
+  if (directoryUsersInFlight) {
+    return directoryUsersInFlight;
+  }
 
-    for (const user of response.Users ?? []) {
-      const identifier =
-        getAttributeValue(user.Attributes, "phone_number") || user.Username?.trim() || "";
+  directoryUsersInFlight = (async () => {
+    const config = getConfig();
+    const users: RegisteredDirectoryUser[] = [];
+    let paginationToken: string | undefined;
 
-      if (!identifier) {
-        continue;
+    do {
+      const response = await getAdminClient().send(
+        new ListUsersCommand({
+          Limit: 60,
+          PaginationToken: paginationToken,
+          UserPoolId: config.userPoolId,
+        }),
+      );
+
+      for (const user of response.Users ?? []) {
+        const identifier =
+          getAttributeValue(user.Attributes, "phone_number") || user.Username?.trim() || "";
+
+        if (!identifier) {
+          continue;
+        }
+
+        const label =
+          getAttributeValue(user.Attributes, "name") ||
+          getAttributeValue(user.Attributes, "preferred_username") ||
+          getAttributeValue(user.Attributes, "given_name") ||
+          identifier;
+
+        users.push({ identifier, label, sub: getAttributeValue(user.Attributes, "sub") || null });
       }
 
-      const label =
-        getAttributeValue(user.Attributes, "name") ||
-        getAttributeValue(user.Attributes, "preferred_username") ||
-        getAttributeValue(user.Attributes, "given_name") ||
-        identifier;
+      paginationToken = response.PaginationToken;
+    } while (paginationToken);
 
-      users.push({ identifier, label, sub: getAttributeValue(user.Attributes, "sub") || null });
-    }
+    directoryUsersCache = {
+      expiresAt: Date.now() + DIRECTORY_USERS_CACHE_TTL_MS,
+      users,
+    };
+    return users;
+  })().finally(() => {
+    directoryUsersInFlight = null;
+  });
 
-    paginationToken = response.PaginationToken;
-  } while (paginationToken);
-
-  return users;
+  return directoryUsersInFlight;
 }
 
 export function getCognitoErrorCode(error: unknown): string | null {

@@ -14,7 +14,7 @@ import {
   type AuthSession,
   type NormalUserCategory,
 } from "@trapit/auth";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
@@ -124,9 +124,14 @@ function normalizeState(parsed: Partial<UserCategoryState>): UserCategoryState {
   };
 }
 
+let cachedUserCategoryState: { path: string; rawContent: string; state: UserCategoryState } | null = null;
+
 async function writeState(state: UserCategoryState) {
-  await ensureStoreDirectory();
-  await writeFile(STORE_PATH, JSON.stringify(state, null, 2), "utf8");
+  const storePath = resolveStorePath();
+  await mkdir(path.dirname(storePath), { recursive: true });
+  const serialized = JSON.stringify(state, null, 2);
+  await writeFile(storePath, serialized, "utf8");
+  cachedUserCategoryState = { path: storePath, rawContent: serialized, state: structuredClone(state) };
 }
 
 function matchesUser(
@@ -188,13 +193,21 @@ function applyAssignmentExpiry(state: UserCategoryState) {
 }
 
 async function readState() {
+  const storePath = resolveStorePath();
   try {
-    const rawValue = await readFile(STORE_PATH, "utf8");
-    const state = normalizeState(JSON.parse(rawValue) as Partial<UserCategoryState>);
+    const rawValue = await readFile(storePath, "utf8");
+    let state: UserCategoryState;
+    if (cachedUserCategoryState && cachedUserCategoryState.path === storePath && cachedUserCategoryState.rawContent === rawValue) {
+      state = structuredClone(cachedUserCategoryState.state);
+    } else {
+      state = normalizeState(JSON.parse(rawValue) as Partial<UserCategoryState>);
+    }
     const didChange = applyAssignmentExpiry(state);
 
     if (didChange) {
       await writeState(state);
+    } else if (!cachedUserCategoryState || cachedUserCategoryState.path !== storePath || cachedUserCategoryState.rawContent !== rawValue) {
+      cachedUserCategoryState = { path: storePath, rawContent: rawValue, state: structuredClone(state) };
     }
 
     return state;

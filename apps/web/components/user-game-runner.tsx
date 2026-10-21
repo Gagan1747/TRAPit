@@ -1,9 +1,10 @@
 "use client";
 
-import type { GameAnswer, GameCreatorRole, GameLeaderboardEntry } from "@trapit/testing";
+import { formatElapsedTime, type GameAnswer, type GameCreatorRole, type GameLeaderboardEntry } from "@trapit/testing";
 import { useEffect, useRef, useState } from "react";
 
 import { formatShortDateTime } from "../lib/date-format";
+import { readJsonResponse } from "../lib/read-json-response";
 import { AnswerStatusIndicator } from "./answer-status-indicator";
 
 type GameState = {
@@ -68,13 +69,7 @@ type UserGameRunnerProps = {
 };
 
 async function readJson<T>(response: Response) {
-  const payload = (await response.json()) as T & { error?: string };
-
-  if (!response.ok) {
-    throw new Error(payload.error ?? "Request failed.");
-  }
-
-  return payload;
+  return readJsonResponse<T>(response);
 }
 
 function formatOrdinal(value: number) {
@@ -150,16 +145,24 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
   }, [gameId, autoAccept]);
 
   useEffect(() => {
-    const source = new EventSource("/api/internal/events");
+    let source: EventSource | null = null;
+    try {
+      source = new EventSource("/api/internal/events");
+      source.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data) as { scope?: string };
+          if (payload.scope === "all" || payload.scope === "game") {
+            void loadGame({ silent: true });
+          }
+        } catch {
+          // Ignore malformed event payloads
+        }
+      };
+    } catch {
+      // Ignore EventSource initialization failures
+    }
 
-    source.onmessage = (event) => {
-      const payload = JSON.parse(event.data) as { scope?: string };
-      if (payload.scope === "all" || payload.scope === "game") {
-        void loadGame({ silent: true });
-      }
-    };
-
-    return () => source.close();
+    return () => source?.close();
   }, [gameId, identifier]);
 
   useEffect(() => {
@@ -323,7 +326,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
   const userBanner = (
     <header className="game-user-banner">
       <div>
-        <span className="eyebrow">Player</span>
+        <span className="eyebrow">Participant</span>
         <strong>{game.displayName}</strong>
       </div>
       <div className="game-user-points">
@@ -353,7 +356,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
               <p>{game.rules.questionCount} questions, {game.rules.questionDurationMs / 1000} seconds each.</p>
               <p>Correct answer points by {game.rulesVersion === 4 ? "individual response time" : "order"}: {game.rules.correctPoints.join(", ")}.</p>
               <p>Incorrect or unanswered: {game.rules.incorrectPoints} points.</p>
-              <p>{game.rulesVersion === 4 ? "Your 30-second timer starts when each question is displayed. Answers do not advance the timer early. The test closes 10 minutes after the 60-second launch countdown." : "The next question starts early when every competitor answers."}</p>
+              <p>{game.rulesVersion === 4 ? "Your 30-second timer starts when each question is displayed. Submitting an answer advances immediately to the next question. The test closes 10 minutes after the 60-second launch countdown." : "The next question starts early when every competitor answers."}</p>
             </div>
             {game.isCreator && game.status === "upcoming" ? (
               <div className="form-stack">
@@ -418,10 +421,6 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
     return (
       <div className="game-page-stack">
         {userBanner}
-        {game.rulesVersion === 4 ? <p className="muted-text">
-          {game.resultMetadata.submittedCount}/{game.resultMetadata.sharedCount} submitted/shared · Duration {game.resultMetadata.durationMinutes} minutes
-          {game.resultMetadata.completedAt ? ` · Completed ${formatShortDateTime(game.resultMetadata.completedAt)}` : ""}
-        </p> : null}
         <div className="leaderboard-table-wrap test-results-summary-wrap">
           <table className="leaderboard-table test-results-summary-table">
             <thead><tr><th>Scheduled date</th><th>Question Pool</th><th>Groups</th><th>Test creator name</th></tr></thead>
@@ -436,15 +435,17 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
         <div className="game-runner-layout">
           <section className="workspace-card game-question-panel">
             <p className="eyebrow">{game.isMissed ? game.rulesVersion === 4 ? "Absent" : "Missed game" : "Completed game"}</p>
-            <h1>{game.title}</h1>
+            <h1>{game.title} ({game.rules.questionCount})</h1>
             {game.isMissed ? <p>You did not accept before the game started. Final results are available below.</p> : null}
             {game.reviewQuestions.length ? (
               <div className="review-list game-question-review-list">
-                {game.reviewQuestions.map((question) => (
+                {game.reviewQuestions.map((question) => {
+                  const pointsValue = question.answer ? question.answer.points : game.rules.incorrectPoints;
+                  return (
                   <article className="game-question-review" key={question.id}>
                     <div className="question-head">
                       <h2>{question.questionIndex + 1}. {question.prompt}</h2>
-                      {question.answer ? <strong>{question.answer.points >= 0 ? "+" : ""}{question.answer.points}</strong> : null}
+                      <strong>{pointsValue >= 0 ? "+" : ""}{pointsValue}</strong>
                     </div>
                     <div className="game-review-options">
                       {question.options.map((option, optionIndex) => {
@@ -466,7 +467,8 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
                           : "No response"}
                     </p>
                   </article>
-                ))}
+                  );
+                })}
               </div>
             ) : <p className="muted-text">Spectator view: no personal responses were recorded.</p>}
           </section>
@@ -481,6 +483,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
     (answer) => answer.questionIndex === game.currentQuestionIndex,
   );
   const isSubmitted = hasAnswered || optimisticSubmittedQuestionIndex === game.currentQuestionIndex;
+  const isLastQuestion = game.currentQuestionIndex === game.rules.questionCount - 1;
   const latestOwnAnswer = game.ownAnswers[game.ownAnswers.length - 1];
 
   return (
@@ -490,8 +493,8 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
         <section className="workspace-card game-question-panel">
         <div className="question-head">
           <div>
-            <p className="eyebrow">Question {(game.currentQuestionIndex ?? 0) + 1} of 20</p>
-            <h1>{game.title}</h1>
+            <p className="eyebrow">Question {(game.currentQuestionIndex ?? 0) + 1} of {game.rules.questionCount}</p>
+            <h1>{game.title} ({game.rules.questionCount})</h1>
           </div>
         </div>
         {game.currentQuestion ? (
@@ -517,7 +520,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
                   {game.questionDeadline ? `${Math.ceil(remainingMs / 1000)}s` : "Preparing timer..."}
                 </strong>
                 <button className="button game-submit-button" disabled={selectedOptionIndex === null || isSubmitted || isMutating || !game.questionDeadline} type="button" onClick={() => void submitAnswer()}>
-                  {isSubmitted ? "Submitted" : "Submit"}
+                  {isSubmitted ? "Submitted" : isLastQuestion ? "Submit Test" : "Submit"}
                 </button>
               </div>
             ) : (
@@ -537,23 +540,41 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
 }
 
 function GameLeaderboard({ game }: { game: GameState }) {
+  const durationLabel = `${game.resultMetadata.durationMinutes} min`;
   return (
-    <aside className="workspace-card game-leaderboard-panel">
-      <p className="eyebrow">{game.status === "completed" ? "Final standings" : game.rulesVersion === 4 ? "Standings available after completion" : "Live leaderboard"}</p>
+    <aside className="workspace-card game-leaderboard-panel test-results-leaderboard">
+      <p className="eyebrow">Leaderboard</p>
+      <h2>
+        {game.status === "completed"
+          ? `Final standings (${game.resultMetadata.submittedCount}/${game.resultMetadata.sharedCount})`
+          : "Live leaderboard"}
+      </h2>
       <div className="game-leaderboard-list">
         {game.leaderboard.map((entry) => {
           const recentDelta = [...game.recentDeltas].reverse().find((delta) =>
             delta.participantIdentifier === entry.participantIdentifier
             && Date.now() - new Date(delta.answeredAt).getTime() < 5000,
           );
+          const correctCount = entry.correctCount ?? 0;
+          const incorrectUnansweredCount = entry.incorrectUnansweredCount ?? 0;
           return (
-            <div className={`game-leaderboard-row${entry.isSelf ? " is-self" : ""}`} style={entry.isSelf ? { background: "var(--surface-soft, #eef6ff)", border: "2px solid currentColor" } : undefined} key={entry.participantIdentifier}>
-              <strong>#{entry.rank} {entry.participantLabel}{entry.isSelf ? " (You)" : ""}{entry.maskedIdentifier ? <small style={{ display: "block", fontSize: "0.75em", fontWeight: 400 }}>{entry.maskedIdentifier}</small> : null}</strong>
-              <span>{entry.points} pts</span>
-              {game.rulesVersion === 4 ? <small>{entry.correctCount} correct · {entry.incorrectUnansweredCount} incorrect/unanswered · {Math.round((entry.elapsedMs ?? 0) / 1000)}s</small> : null}
-              <span className="game-score-flash">
-                {recentDelta ? `Answered (${recentDelta.points >= 0 ? "+" : ""}${recentDelta.points})` : ""}
+            <div className={`game-leaderboard-row test-results-leaderboard-row${entry.isSelf ? " is-self is-current-participant" : ""}`} aria-current={entry.isSelf ? "true" : undefined} style={entry.isSelf ? { background: "var(--surface-soft, #eef6ff)", border: "2px solid currentColor" } : undefined} key={entry.participantIdentifier}>
+              <strong>#{entry.rank} {entry.participantLabel}{entry.isSelf ? " (You)" : ""}</strong>
+              <span>
+                {entry.maskedIdentifier || "—"}
+                <br />
+                <span className="test-results-leaderboard-time">{formatElapsedTime(entry.elapsedMs ?? 0)} ({durationLabel})</span>
               </span>
+              <span>
+                {entry.points} pts
+                <br />
+                <span className="muted-text">(+{correctCount} / -{incorrectUnansweredCount})</span>
+              </span>
+              {recentDelta ? (
+                <span className="game-score-flash">
+                  {`Answered (${recentDelta.points >= 0 ? "+" : ""}${recentDelta.points})`}
+                </span>
+              ) : null}
             </div>
           );
         })}

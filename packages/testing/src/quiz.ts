@@ -300,6 +300,8 @@ export type TestParticipantSession = {
   joinedAt: string;
   startedAt: string | null;
   answers: Record<string, number | undefined>;
+  elapsedMs?: number;
+  updatedAt?: string;
   revision: number;
   submittedAt: string | null;
 };
@@ -466,7 +468,13 @@ export function getRapidGameDeadline(game: Pick<ScheduledGame, "countdownStarted
 export function getRapidParticipantQuestionIndex(game: ScheduledGame, participant: GameParticipant, nowMs = Date.now()) {
   if (getGameStatus(game, nowMs) !== "ongoing" || !participant.acceptedAt) return null;
   const starts = participant.questionStartedAt ?? [];
+  const answeredIndices = new Set(
+    game.answers
+      .filter((answer) => participantIdentifiersMatch(answer.participantIdentifier, participant.identifier))
+      .map((answer) => answer.questionIndex),
+  );
   for (let index = 0; index < GAME_QUESTION_COUNT; index += 1) {
+    if (answeredIndices.has(index)) continue;
     if (!starts[index] || nowMs < Date.parse(starts[index]) + GAME_QUESTION_DURATION_MS) return index;
   }
   return null;
@@ -503,9 +511,7 @@ export function reconcileRapidGame(game: ScheduledGame, nowMs = Date.now()) {
     });
   }
   const allResolved = participants.length > 0 && participants.every((participant) =>
-    game.answers.filter((answer) => participantIdentifiersMatch(answer.participantIdentifier, participant.identifier)).length === GAME_QUESTION_COUNT
-    && Boolean(participant.questionStartedAt?.[GAME_QUESTION_COUNT - 1])
-    && nowMs >= Date.parse(participant.questionStartedAt![GAME_QUESTION_COUNT - 1]) + GAME_QUESTION_DURATION_MS);
+    game.answers.filter((answer) => participantIdentifiersMatch(answer.participantIdentifier, participant.identifier)).length === GAME_QUESTION_COUNT);
   if (nowMs >= globalDeadline || allResolved) game.completedAt = new Date(Math.min(nowMs, globalDeadline)).toISOString();
   if (previous !== JSON.stringify(game)) game.updatedAt = new Date(nowMs).toISOString();
 }

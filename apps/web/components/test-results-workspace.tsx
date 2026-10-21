@@ -7,10 +7,13 @@ import { useEffect, useState } from "react";
 import { formatShortDateTime } from "../lib/date-format";
 
 type TestResultsPayload = {
+  assessmentKind?: "standard" | "instant";
   branding: WorkspaceBranding | null;
+  correctMarks?: number;
   groupNames: string[];
   hasCreatorScope: boolean;
   hasParticipantScope: boolean;
+  overallMarks?: number;
   participantResult: {
     correctCount: number;
     elapsedMs: number;
@@ -36,6 +39,7 @@ type TestResultsPayload = {
   poolName: string;
   questions: Array<{
     correctOptionIndex: number;
+    marks?: number | null;
     optionSelectionCounts: number[];
     options: string[];
     prompt: string;
@@ -113,12 +117,25 @@ export function TestResultsWorkspace({ testId }: TestResultsWorkspaceProps) {
 
 export function TestResultsContent({ payload }: { payload: TestResultsPayload }) {
   const duration = `${payload.summary.durationMinutes} min`;
+  const correctMarks = payload.correctMarks ?? (payload.assessmentKind === "instant" ? 4 : 1);
+  const overallMarks = payload.overallMarks ?? payload.participantResult?.marks ?? 0;
 
   return (
-    <div className="test-results-stack">
+    <div className="test-results-stack game-page-stack">
+      <header className="game-user-banner">
+        <div>
+          <span className="eyebrow">Participant</span>
+          <strong>{payload.summary.participantName || payload.participantResult?.participantName || "—"}</strong>
+        </div>
+        <div className="game-user-points">
+          <span className="eyebrow">Overall marks</span>
+          <strong>{overallMarks}</strong>
+        </div>
+      </header>
+
       <header className="test-results-header">
         {payload.branding?.instituteName?.trim() ? <p className="eyebrow">{payload.branding.instituteName}</p> : null}
-        <h1>{payload.summary.title}</h1>
+        <h1>{payload.summary.title} ({payload.questions.length})</h1>
       </header>
 
       <div className="leaderboard-table-wrap test-results-summary-wrap">
@@ -138,9 +155,21 @@ export function TestResultsContent({ payload }: { payload: TestResultsPayload })
           <h2>Questions ({payload.questions.length})</h2>
           <p className="muted-text">Responses {payload.questions.length}</p>
           <div className="test-results-question-list">
-          {payload.questions.map((question, questionIndex) => (
+          {payload.questions.map((question, questionIndex) => {
+            const questionMarks = payload.hasParticipantScope
+              ? (question.marks !== undefined && question.marks !== null
+                  ? question.marks
+                  : question.selectedOptionIndex === question.correctOptionIndex
+                    ? correctMarks
+                    : -1)
+              : null;
+
+            return (
             <article className="test-results-question" key={question.questionId}>
-              <h3>{questionIndex + 1}. {question.prompt}</h3>
+              <div className="question-head">
+                <h3>{questionIndex + 1}. {question.prompt}</h3>
+                {questionMarks !== null ? <strong>{questionMarks >= 0 ? `+${questionMarks}` : questionMarks}</strong> : null}
+              </div>
               <div className="test-results-options">
                 {question.options.map((option, optionIndex) => {
                   const isCorrect = optionIndex === question.correctOptionIndex;
@@ -160,7 +189,8 @@ export function TestResultsContent({ payload }: { payload: TestResultsPayload })
                 })}
               </div>
             </article>
-          ))}
+            );
+          })}
           </div>
         </section>
 
@@ -172,9 +202,16 @@ export function TestResultsContent({ payload }: { payload: TestResultsPayload })
               {payload.participants.map((participant, index) => (
                 <div className={`game-leaderboard-row test-results-leaderboard-row${participant.isCurrentParticipant ? " is-current-participant" : ""}`} aria-current={participant.isCurrentParticipant ? "true" : undefined} key={`${participant.rank}-${participant.manualName}-${index}`}>
                   <strong>#{participant.rank} {participant.manualName}{participant.isCurrentParticipant ? " (You)" : ""}</strong>
-                  <span>{participant.maskedIdentifier}</span>
-                  <span>{participant.marks} marks<br /><span className="muted-text">Incorrect + unanswered: {participant.incorrectCount + participant.unansweredCount}</span></span>
-                  <span className="test-results-leaderboard-time">{formatElapsedTime(participant.elapsedMs)} ({duration})</span>
+                  <span>
+                    {participant.maskedIdentifier}
+                    <br />
+                    <span className="test-results-leaderboard-time">{formatElapsedTime(participant.elapsedMs)} ({duration})</span>
+                  </span>
+                  <span>
+                    {participant.marks} marks
+                    <br />
+                    <span className="muted-text">(+{participant.correctCount} / -{participant.incorrectCount + participant.unansweredCount})</span>
+                  </span>
                 </div>
               ))}
             </div>

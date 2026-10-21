@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowRight, Search } from "lucide-react";
 
+import { buildApportionBookingPath } from "../lib/apportion-booking-path";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { FloatingWindowCloseButton } from "./floating-window-close-button";
 
@@ -70,7 +71,7 @@ export function ApportionBusinessSearch({ businesses, onClose }: { businesses: B
           <ul className="apportion-business-search-results">
             {results.map((business) => (
               <li key={`${business.ownerIdentifier}::${business.appointmentShareCode}`}>
-                <a href={`/apportion/${encodeURIComponent(business.appointmentShareCode)}`} target="_blank" rel="noopener noreferrer">
+                <a href={buildApportionBookingPath(business.appointmentShareCode, undefined, business.name)} target="_blank" rel="noopener noreferrer">
                   <span><strong>{business.name}</strong><span>{formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true })}</span></span>
                   <ArrowRight aria-hidden="true" size={20} />
                 </a>

@@ -73,7 +73,7 @@ describe("versioned game lifecycle", () => {
       expect(game.answers.every((answer) => answer.points === -5 && answer.kind === "timeout")).toBe(true);
     });
 
-    it("keeps a fast answer on its question until the participant's persisted window ends", () => {
+    it("advances immediately when a participant submits an answer and keeps independent progression", () => {
       const game = rapid();
       game.participants[0].questionStartedAt = [iso(launch)];
       game.answers.push({
@@ -81,7 +81,7 @@ describe("versioned game lifecycle", () => {
         optionIndex: 0, participantIdentifier: game.participants[0].identifier, points: 0, questionIndex: 0,
       });
       reconcileRapidGame(game, launch + 100);
-      expect(getRapidParticipantQuestionIndex(game, game.participants[0], launch + 29_999)).toBe(0);
+      expect(getRapidParticipantQuestionIndex(game, game.participants[0], launch + 100)).toBe(1);
       expect(getRapidParticipantQuestionIndex(game, game.participants[0], launch + 30_000)).toBe(1);
       expect(getRapidParticipantQuestionIndex(game, game.participants[1], launch + 30_000)).toBe(0);
       expect(game.completedAt).toBeNull();

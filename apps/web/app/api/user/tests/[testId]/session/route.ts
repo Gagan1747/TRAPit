@@ -21,9 +21,11 @@ export async function POST(request: Request, context: { params: { testId: string
     if (!body || typeof body !== "object") throw new Error("A participant session is required.");
     const participantName = "participantName" in body ? body.participantName : undefined;
     const answers = "answers" in body ? body.answers : undefined;
+    const elapsedMs = "elapsedMs" in body ? body.elapsedMs : undefined;
     const revision = "revision" in body ? body.revision : undefined;
     if (participantName !== undefined && typeof participantName !== "string") throw new Error("Enter a valid participant name.");
     if (revision !== undefined && typeof revision !== "number") throw new Error("Invalid answer revision.");
+    if (elapsedMs !== undefined && (typeof elapsedMs !== "number" || !Number.isFinite(elapsedMs) || elapsedMs < 0)) throw new Error("Invalid elapsed time.");
     let validatedAnswers: Record<string, number | undefined> | undefined;
     if (answers !== undefined) {
       if (!answers || typeof answers !== "object" || Array.isArray(answers)) throw new Error("Invalid answers.");
@@ -38,6 +40,7 @@ export async function POST(request: Request, context: { params: { testId: string
       identifier: actor.identifier,
       participantName,
       answers: validatedAnswers,
+      elapsedMs,
       revision,
     }));
   } catch (error) {

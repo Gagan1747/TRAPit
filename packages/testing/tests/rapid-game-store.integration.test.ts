@@ -139,7 +139,7 @@ describe("serialized Rapid store lifecycle", () => {
     ]);
     expect(answers[0].answer).toEqual(answers[1].answer);
     expect((await persisted()).games[0].answers).toHaveLength(1);
-    expect(answers[0].game.currentQuestionIndex).toBe(0);
+    expect(answers[0].game.currentQuestionIndex).toBe(1);
     await expect(store.recordGameAnswer({ ...input, optionIndex: (correct + 1) % 4 })).rejects.toThrow("already resolved");
     vi.setSystemTime(initialTime + 90_000);
     const next = (await store.getGameForParticipant(game.id, players[0]))!;
@@ -174,7 +174,7 @@ describe("serialized Rapid store lifecycle", () => {
       gameId: game.id, participantIdentifier: players[0], questionIndex: 0, optionIndex: correct, elapsedMs: 1000,
     });
     expect(first.answer.elapsedMs).toBe(1000);
-    expect(first.game.questionDeadline).toBe(new Date(initialTime + 90_000).toISOString());
+    expect(first.game.currentQuestionIndex).toBe(1);
     vi.setSystemTime(initialTime + 70_000);
     const laterArrival = await store.recordGameAnswer({
       gameId: game.id, participantIdentifier: players[1], questionIndex: 0, optionIndex: correct, elapsedMs: 500,
@@ -220,7 +220,8 @@ describe("serialized Rapid store lifecycle", () => {
     const response = await route.GET(new Request("http://localhost/api/user/games/game"), { params: { gameId: game.id } });
     const body = await response.json();
     expect(body.game.currentQuestion.correctOptionIndex).toBeUndefined();
-    expect(body.game.leaderboard).toEqual([]);
+    expect(body.game.leaderboard.length).toBeGreaterThan(0);
+    expect(body.game.leaderboard.every((entry: Record<string, unknown>) => entry.answers === undefined)).toBe(true);
     expect(body.game.recentDeltas).toEqual([]);
     expect(body.game.reviewQuestions).toEqual([]);
     expect(body.game.ownAnswers).toHaveLength(1);

@@ -34,6 +34,8 @@ import {
   getGameStatus,
   getIncorrectCount,
   getScheduledTestEndTime,
+  getTestMarks,
+  getUnansweredCount,
   normalizeWorkspaceBranding,
   migrateApportionDirectory,
   matchApportionIdentity,
@@ -76,7 +78,7 @@ import {
   validatePollQuestionDraft,
   validateQuestionDraft,
 } from "@trapit/testing";
-import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -746,18 +748,32 @@ export function mutateWorkspaceBrandingState(
 
 export async function getWorkspaceBrandingByAppointmentShareCode(shareCode: string) {
   const state = await readStore();
-  const normalizedShareCode = shareCode.trim().toLowerCase();
+  const normalizedShareCode = decodeURIComponent(shareCode).trim().toLowerCase();
 
   if (!normalizedShareCode) {
     return null;
   }
 
+  const matchesShareCode = (candidate: string | null | undefined, businessName?: string | null) => {
+    const clean = candidate?.trim().toLowerCase() ?? "";
+    if (!clean) return false;
+    if (clean === normalizedShareCode || normalizedShareCode.endsWith(`-${clean}`)) {
+      return true;
+    }
+    const slug = (businessName ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return Boolean(slug && normalizedShareCode === `${slug}-${clean}`);
+  };
+
   const entry = Object.entries(state.workspaceBrandingByActor).find(([, branding]) =>
-    branding.appointmentShareCode?.trim().toLowerCase() === normalizedShareCode,
+    matchesShareCode(branding.appointmentShareCode, branding.instituteName),
   );
 
-  const mappedEntry = Object.entries(state.workspaceAppointmentShareCodesByActor).find(([, shareCode]) =>
-    shareCode.trim().toLowerCase() === normalizedShareCode,
+  const mappedEntry = Object.entries(state.workspaceAppointmentShareCodesByActor).find(([actorKey, code]) =>
+    matchesShareCode(code, state.workspaceBrandingByActor[actorKey]?.instituteName),
   );
 
   if (!entry && !mappedEntry) {
@@ -1242,14 +1258,22 @@ function hydrateScheduledTests(state: TestingWorkspaceState) {
   }));
 }
 
+let cachedTestingStore: { mtimeMs: number; path: string; rawContent: string; state: TestingWorkspaceState } | null = null;
+
 async function readStore(): Promise<TestingWorkspaceState> {
-  await ensureStoreDirectory();
+  const storePath = resolveStorePath();
+  await mkdir(path.dirname(storePath), { recursive: true });
 
   try {
-    const content = await readFile(STORE_PATH, "utf8");
-    const parsed = JSON.parse(content) as Partial<TestingWorkspaceState>;
+    const content = await readFile(storePath, "utf8");
+    if (cachedTestingStore && cachedTestingStore.path === storePath && cachedTestingStore.rawContent === content) {
+      return structuredClone(cachedTestingStore.state);
+    }
 
-    return normalizeState(parsed);
+    const parsed = JSON.parse(content) as Partial<TestingWorkspaceState>;
+    const normalized = normalizeState(parsed);
+    cachedTestingStore = { mtimeMs: Date.now(), path: storePath, rawContent: content, state: normalized };
+    return structuredClone(normalized);
   } catch (error) {
     if (!isMissingStoreFileError(error)) {
       throw error;
@@ -1268,10 +1292,11 @@ function writeStore(state: TestingWorkspaceState, changedFields?: Set<keyof Test
 }
 
 async function persistStore(state: TestingWorkspaceState, changedFields?: Set<keyof TestingWorkspaceState>) {
-  await ensureStoreDirectory();
+  const storePath = resolveStorePath();
+  await mkdir(path.dirname(storePath), { recursive: true });
 
     try {
-      const currentContent = await readFile(STORE_PATH, "utf8");
+      const currentContent = await readFile(storePath, "utf8");
       const currentState = normalizeState(JSON.parse(currentContent) as Partial<TestingWorkspaceState>);
       if (changedFields) {
         state = { ...currentState, ...Object.fromEntries([...changedFields].map((field) => [field, state[field]])) };
@@ -1295,12 +1320,13 @@ async function persistStore(state: TestingWorkspaceState, changedFields?: Set<ke
       }
     }
 
-  const temporaryStorePath = `${STORE_PATH}.${process.pid}.${Date.now()}.tmp`;
+  const temporaryStorePath = `${storePath}.${process.pid}.${Date.now()}.tmp`;
+  const serialized = JSON.stringify(state, null, 2);
 
-  await writeFile(temporaryStorePath, JSON.stringify(state, null, 2), "utf8");
+  await writeFile(temporaryStorePath, serialized, "utf8");
   for (let attempt = 0; ; attempt += 1) {
     try {
-      await rename(temporaryStorePath, STORE_PATH);
+      await rename(temporaryStorePath, storePath);
       break;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -1308,6 +1334,7 @@ async function persistStore(state: TestingWorkspaceState, changedFields?: Set<ke
       await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
     }
   }
+  cachedTestingStore = { mtimeMs: Date.now(), path: storePath, rawContent: serialized, state: structuredClone(state) };
 }
 
 export async function readApportionWorkspaceState() {
@@ -4174,6 +4201,10 @@ function finalizeTestSession(state: TestingWorkspaceState, test: ScheduledTest, 
   if (previous) return previous;
   const questions = test.questionIds.map((id) => state.questions.find((entry) => entry.id === id)).filter((entry): entry is PersistentQuestion => Boolean(entry));
   const effectiveStart = Math.max(Date.parse(test.startsAt), Date.parse(session.startedAt ?? test.startsAt));
+  const scored = scoreObjectiveTest(questions, session.answers, effectiveStart, Date.parse(completedAt));
+  if (typeof session.elapsedMs === "number" && Number.isFinite(session.elapsedMs) && session.elapsedMs >= 0) {
+    scored.elapsedMs = Math.min(scored.elapsedMs, Math.floor(session.elapsedMs));
+  }
   const attempt: TestAttempt = {
     id: createEntityId("attempt"),
     testId: test.id,
@@ -4183,7 +4214,7 @@ function finalizeTestSession(state: TestingWorkspaceState, test: ScheduledTest, 
     startedAt: new Date(effectiveStart).toISOString(),
     completedAt,
     result: {
-      ...scoreObjectiveTest(questions, session.answers, effectiveStart, Date.parse(completedAt)),
+      ...scored,
       correctMarks: test.assessmentKind === "instant" ? 4 : 1,
     },
   };
@@ -4209,11 +4240,84 @@ export async function reconcileExpiredTestSessions() {
   });
 }
 
+function getCumulativeTestMarks(state: TestingWorkspaceState, identifier: string) {
+  const completedTestIds = new Set(
+    hydrateScheduledTests(state)
+      .filter((test) => test.status === "completed")
+      .map((test) => test.id),
+  );
+  return state.attempts
+    .filter((attempt) => completedTestIds.has(attempt.testId) && identifiersMatch(attempt.userId, identifier))
+    .reduce((total, attempt) => total + getTestMarks(attempt.result), 0);
+}
+
+function buildLiveInstantLeaderboard(state: TestingWorkspaceState, test: ScheduledTest, viewerIdentifier: string, isCreator: boolean) {
+  if (test.assessmentKind !== "instant") return [];
+  const questions = test.questionIds
+    .map((id) => state.questions.find((entry) => entry.id === id))
+    .filter((entry): entry is PersistentQuestion => Boolean(entry));
+  const sessions = test.participantSessions ?? [];
+  const startMs = Date.parse(test.startsAt);
+  const scoredSessions = sessions.map((session) => {
+    const answeredQuestions = questions.filter((q) => typeof session.answers[q.id] === "number");
+    const correctCount = answeredQuestions.filter((q) => session.answers[q.id] === q.correctOptionIndex).length;
+    const incorrectCount = answeredQuestions.length - correctCount;
+    const unansweredCount = session.submittedAt ? Math.max(0, questions.length - answeredQuestions.length) : 0;
+    const penaltyCount = incorrectCount + unansweredCount;
+    const marks = (correctCount * 4) - penaltyCount;
+    const fallbackElapsed = session.updatedAt && Number.isFinite(startMs)
+      ? Math.max(0, Date.parse(session.updatedAt) - Math.max(startMs, Date.parse(session.startedAt ?? test.startsAt)))
+      : 0;
+    const elapsedMs = typeof session.elapsedMs === "number" && Number.isFinite(session.elapsedMs)
+      ? Math.max(0, Math.floor(session.elapsedMs))
+      : fallbackElapsed;
+    return {
+      identifier: session.identifier,
+      participantName: session.participantName || session.identifier,
+      maskedIdentifier: formatPhoneNumberForDisplay(session.identifier),
+      correctCount,
+      incorrectUnansweredCount: penaltyCount,
+      marks,
+      elapsedMs,
+      isSelf: identifiersMatch(session.identifier, viewerIdentifier),
+    };
+  }).sort((left, right) =>
+    right.marks - left.marks
+    || left.incorrectUnansweredCount - right.incorrectUnansweredCount
+    || left.elapsedMs - right.elapsedMs
+    || left.participantName.localeCompare(right.participantName),
+  );
+
+  const ranked = scoredSessions.map((entry, index, list) => {
+    const prev = list[index - 1];
+    const rank = index === 0
+      ? 1
+      : prev && prev.marks === entry.marks && prev.incorrectUnansweredCount === entry.incorrectUnansweredCount && prev.elapsedMs === entry.elapsedMs
+        ? (list.slice(0, index).find((item) => item.marks === entry.marks && item.incorrectUnansweredCount === entry.incorrectUnansweredCount && item.elapsedMs === entry.elapsedMs) ? index : index + 1)
+        : index + 1;
+    return { ...entry, rank };
+  });
+  for (let i = 1; i < ranked.length; i += 1) {
+    const prev = ranked[i - 1];
+    const curr = ranked[i];
+    if (prev.marks === curr.marks && prev.incorrectUnansweredCount === curr.incorrectUnansweredCount && prev.elapsedMs === curr.elapsedMs) {
+      curr.rank = prev.rank;
+    } else {
+      curr.rank = i + 1;
+    }
+  }
+
+  return ranked
+    .filter((entry, index) => isCreator || index < 10 || entry.isSelf)
+    .map(({ identifier: _id, ...rest }) => rest);
+}
+
 function testSessionPayload(state: TestingWorkspaceState, test: ScheduledTest, identifier: string) {
   const session = test.participantSessions?.find((entry) => identifiersMatch(entry.identifier, identifier)) ?? null;
   const now = Date.now();
   const status = resolveScheduledTestStatus(test, state.attempts, test.id);
   const canReadQuestions = Boolean(session && !session.submittedAt && status === "live" && now >= Date.parse(test.startsAt));
+  const isCreator = Boolean(test.creatorIdentifier && identifiersMatch(test.creatorIdentifier, identifier));
   return {
     test: {
       id: test.id,
@@ -4235,7 +4339,9 @@ function testSessionPayload(state: TestingWorkspaceState, test: ScheduledTest, i
     },
     session,
     acceptedCount: test.participantSessions?.length ?? 0,
-    isCreator: Boolean(test.creatorIdentifier && identifiersMatch(test.creatorIdentifier, identifier)),
+    isCreator,
+    overallMarks: getCumulativeTestMarks(state, identifier),
+    leaderboard: buildLiveInstantLeaderboard(state, test, identifier, isCreator),
   };
 }
 
@@ -4253,6 +4359,7 @@ export async function saveTestParticipantSession(input: {
   identifier: string;
   participantName?: string;
   answers?: Record<string, number | undefined>;
+  elapsedMs?: number;
   revision?: number;
 }) {
   return withSerializedTestingMutation((state) => {
@@ -4293,6 +4400,12 @@ export async function saveTestParticipantSession(input: {
       if (typeof revision === "number" && revision > session.revision) {
         session.answers = { ...input.answers };
         session.revision = revision;
+        session.updatedAt = new Date(now).toISOString();
+        const effectiveStart = Math.max(startsAt, Date.parse(session.startedAt ?? test.startsAt));
+        const serverElapsed = Math.max(0, now - effectiveStart);
+        session.elapsedMs = typeof input.elapsedMs === "number" && Number.isFinite(input.elapsedMs) && input.elapsedMs >= 0
+          ? Math.min(serverElapsed, Math.floor(input.elapsedMs))
+          : serverElapsed;
       } else if (!isDeepStrictEqual(session.answers, input.answers)) {
         throw new Error("A newer answer revision was already saved. Refresh this test before continuing.");
       }
@@ -4806,12 +4919,20 @@ export async function getTestResults(input: {
     [],
     scheduledTest.participantGroupIds,
   )).length;
+  const assessmentKind = scheduledTest.assessmentKind ?? "standard";
+  const correctMarks = scheduledTest.rulesVersion === 2
+    ? (assessmentKind === "instant" ? 4 : 1)
+    : (attempts[0]?.result.correctMarks ?? 4);
+  const overallMarks = getCumulativeTestMarks(state, normalizedParticipantIdentifier);
 
   return {
+    assessmentKind,
     branding: scheduledTest.branding ?? null,
+    correctMarks,
     groupNames,
     hasCreatorScope,
     hasParticipantScope,
+    overallMarks,
     participantResult: participantEntry
       ? {
           completedAt: participantEntry.completedAt,
@@ -4854,13 +4975,21 @@ export async function getTestResults(input: {
           }
         }
 
+        const selectedOptionIndex = hasParticipantScope ? participantAttempt?.answers[question.id] ?? null : null;
+        const questionMarks = hasParticipantScope
+          ? selectedOptionIndex === question.correctOptionIndex
+            ? correctMarks
+            : -1
+          : null;
+
         return {
           correctOptionIndex: question.correctOptionIndex,
+          marks: questionMarks,
           optionSelectionCounts,
           options: question.options,
           prompt: question.prompt,
           questionId: question.id,
-          selectedOptionIndex: hasParticipantScope ? participantAttempt?.answers[question.id] ?? null : null,
+          selectedOptionIndex,
         };
       }),
     summary: {
@@ -5405,6 +5534,9 @@ export async function recordGameQuestionReady(input: {
       if (starts[input.questionIndex]) return hydrateGame(game, nowMs, participant.identifier);
       const index = getRapidParticipantQuestionIndex(game, participant, nowMs);
       if (!Number.isInteger(input.questionIndex) || index === null || index !== input.questionIndex) {
+        if (Number.isInteger(input.questionIndex) && input.questionIndex >= 0 && index !== null && input.questionIndex < index) {
+          return hydrateGame(game, nowMs, participant.identifier);
+        }
         throw new Error("This question is not available.");
       }
       starts[index] = new Date(nowMs).toISOString();
@@ -5413,7 +5545,7 @@ export async function recordGameQuestionReady(input: {
     }
     const presentedQuestionIndex = getGamePresentedQuestionIndex(game);
     if (presentedQuestionIndex === null || presentedQuestionIndex !== input.questionIndex) {
-      throw new Error("This question is no longer preparing.");
+      return hydrateGame(game);
     }
 
     const readyByQuestion = game.questionReadyParticipantIdentifiers

@@ -431,14 +431,20 @@ export function UserTestRunner({
                 </button>
               ) : null}
               {currentQuestionIndex < test.questions.length - 1 ? (
-                <button aria-label="Next question" className="button-secondary" type="button" onClick={goToNextQuestion}>
+                <button
+                  aria-label="Next question"
+                  className="button-secondary"
+                  disabled={typeof answers[activeQuestion.question.id] !== "number"}
+                  type="button"
+                  onClick={goToNextQuestion}
+                >
                   <ChevronRight aria-hidden="true" />
                 </button>
-              ) : (
+              ) : typeof answers[activeQuestion.question.id] === "number" ? (
                 <button className="button" disabled={isSubmitting} type="button" onClick={() => void submitTest()}>
-                  {isSubmitting ? "Submitting..." : "Submit test"}
+                  {isSubmitting ? "Submitting..." : "Submit Test"}
                 </button>
-              )}
+              ) : null}
             </div>
           </article>
         ) : null}

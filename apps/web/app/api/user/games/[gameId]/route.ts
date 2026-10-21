@@ -111,7 +111,7 @@ export async function GET(request: Request, context: { params: { gameId: string 
       isCreator,
       isMissed,
       leaderboard: rapid
-        ? completed ? standings.filter((entry, index) => isCreator || index < 10 || entry.isSelf) : []
+        ? standings.filter((entry, index) => isCreator || index < 10 || entry.isSelf)
         : game.leaderboard,
       overallGamePoints,
       ownAnswers: rapid && !completed ? ownAnswers.map((answer) => ({

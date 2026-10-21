@@ -22,6 +22,8 @@ import { BrowserPushPrompt } from "./browser-push-prompt";
 
 type AvailableTest = {
   assessmentKind?: "standard" | "instant";
+  countdownStartedAt?: string | null;
+  startedAt?: string | null;
   creatorDisplayName?: string | null;
   creatorIdentifier?: string | null;
   hasJoined?: boolean;
@@ -224,6 +226,8 @@ export function RestrictedUserDashboardWorkspace({
       const result = test.participantResult;
       const hasCompletedResult = test.status === "completed" && historyEntry?.status !== "missed" && Boolean(result);
       const duration = `${test.durationMinutes} min`;
+      const isInstant = test.assessmentKind === "instant";
+      const instantStarted = Boolean(test.startedAt ?? test.countdownStartedAt);
 
       return {
         creatorName: test.creatorDisplayName ?? "Creator",
@@ -242,15 +246,18 @@ export function RestrictedUserDashboardWorkspace({
         scheduled: formatShortDateTime(test.startsAt),
         sortTime: new Date(test.startsAt).getTime(),
         status: test.status === "scheduled"
-          ? test.assessmentKind === "instant"
-            ? <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Upcoming</a>
+          ? isInstant
+            ? <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">{instantStarted ? "Live" : "Accept"}</a>
             : <span className="status-chip warning">Upcoming</span>
           : test.status === "live"
             ? test.hasAttempt || historyEntry?.status === "submitted"
               ? <span className="status-chip success">Submitted</span>
-              : <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Live</a>
+              : isInstant && !instantStarted
+                ? <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Accept</a>
+                : <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Live</a>
             : <a className="button-secondary small-button" href={`/test-results/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">Results</a>,
         test: test.title,
+        testType: isInstant ? ("Instant" as const) : null,
         time: hasCompletedResult && result ? `${formatElapsedTime(result.elapsedMs)} / ${duration}` : duration,
       };
     }),
@@ -262,7 +269,7 @@ export function RestrictedUserDashboardWorkspace({
       return {
         creatorName: game.creatorDisplayName ?? "Creator",
         creatorIdentifier: formatPhoneNumberForDisplay(game.creatorIdentifier, { showFullPhoneNumber: true }),
-        participation: game.status === "completed" && !participant?.accepted ? "Absent" : ownResult && game.status === "completed" ? `Rank: ${ownResult.rank} / ${game.leaderboard.length} · Points: ${ownResult.points}` : participant?.accepted ? "Joined" : "Not joined",
+        participation: <>{game.status === "completed" && !participant?.accepted ? "Absent" : ownResult && game.status === "completed" ? `Rank: ${ownResult.rank} / ${game.leaderboard.length}` : participant?.accepted ? "Joined" : "Not joined"}{ownResult && game.status === "completed" ? <span className="assessment-log-detail">Points: {ownResult.points}</span> : null}</>,
         groups: game.groupName,
         id: `game-${game.id}`,
         marksOrPoints: game.status === "completed" && ownResult ? `${ownResult.points}` : "—",
@@ -275,14 +282,15 @@ export function RestrictedUserDashboardWorkspace({
         sortTime: new Date(game.startedAt ?? game.createdAt).getTime(),
         status: game.status === "upcoming"
           ? participant?.accepted
-            ? <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Upcoming</a>
-            : <button className="button-secondary small-button" type="button" onClick={() => handleAcceptGame(game.id)}>Upcoming</button>
+            ? <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Accept</a>
+            : <button className="button-secondary small-button" type="button" onClick={() => handleAcceptGame(game.id)}>Accept</button>
           : game.status === "completed"
             ? <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Results</a>
             : participant?.submitted
               ? <span className="status-chip success">Submitted</span>
               : <a className="button-secondary small-button" href={`/user/game/${encodeURIComponent(game.id)}`} rel="noreferrer" target="_blank">Live</a>,
         test: game.title,
+        testType: "Rapid" as const,
         time: duration,
       };
     }),

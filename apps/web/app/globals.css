@@ -2600,7 +2600,10 @@ main {
   }
 }
 
-.date-time-input {
+.date-time-input,
+input[type="datetime-local"],
+input[type="date"],
+input[type="time"] {
   width: 100%;
   min-height: 44px;
   padding: 10px 12px;
@@ -2608,7 +2611,88 @@ main {
   border-radius: 12px;
   background: #fff;
   color: var(--ink);
+  color-scheme: light;
   font: inherit;
+  position: relative;
+}
+
+.date-time-input::-webkit-calendar-picker-indicator,
+input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  display: inline-block;
+  opacity: 1;
+  visibility: visible;
+  cursor: pointer;
+  margin-left: auto;
+  padding: 4px;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.schedule-groups-dropdown {
+  position: relative;
+  width: 100%;
+}
+
+.schedule-groups-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.schedule-groups-summary::-webkit-details-marker {
+  display: none;
+}
+
+.schedule-groups-summary::after {
+  content: "▾";
+  margin-left: 8px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.schedule-groups-dropdown[open] .schedule-groups-summary::after {
+  content: "▴";
+}
+
+.schedule-groups-dropdown-menu {
+  margin-top: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface-strong);
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+  box-shadow: 0 12px 28px rgba(28, 20, 15, 0.1);
+}
+
+.schedule-groups-dropdown-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.schedule-groups-dropdown-option:hover {
+  background: rgba(127, 99, 201, 0.08);
+}
+
+.schedule-groups-dropdown-option input[type="checkbox"] {
+  min-height: 18px;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
 }
 
 .apportion-link-actions {
