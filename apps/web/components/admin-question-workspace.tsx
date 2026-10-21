@@ -2016,25 +2016,33 @@ export function AdminQuestionWorkspace({
     }
 
     try {
-      const [brandingPayload, apportionPayload] =
-        await Promise.all([
+      const [brandingResult, apportionResult] =
+        await Promise.allSettled([
           fetch("/api/admin/branding").then(readJson<BrandingResponse>),
           fetch("/api/user/apportion").then(readJson<ApportionDashboardResponse>),
         ]);
 
-      setWorkspaceBranding(brandingPayload.branding);
-      setBusinessAppointmentShareCode(apportionPayload.appointmentShareCode ?? brandingPayload.branding?.appointmentShareCode ?? null);
-      setAvailableApportionBusinesses(apportionPayload.availableBusinesses ?? []);
-      if (!isBrandingDraftDirtyRef.current) {
-        syncBrandingDraft(brandingPayload.branding);
+      if (brandingResult.status === "fulfilled") {
+        setWorkspaceBranding(brandingResult.value.branding);
+        if (!isBrandingDraftDirtyRef.current) {
+          syncBrandingDraft(brandingResult.value.branding);
+        }
       }
-      setOwnerApportionAppointments(apportionPayload.ownerAppointments);
-      setApportionInvitations(apportionPayload.invitations ?? []);
-      setAppointmentOperatingHoursById(apportionPayload.appointmentOperatingHoursById ?? {});
-      setOwnerOperatingHoursByIdentifier(
-        normalizeOwnerOperatingHoursByIdentifier(apportionPayload.ownerOperatingHoursByIdentifier),
-      );
-      setRequesterApportionAppointments(apportionPayload.requesterAppointments);
+      if (apportionResult.status === "fulfilled") {
+        const apportionPayload = apportionResult.value;
+        const fallbackCode = brandingResult.status === "fulfilled" ? brandingResult.value.branding?.appointmentShareCode ?? null : null;
+        setBusinessAppointmentShareCode(apportionPayload.appointmentShareCode ?? fallbackCode);
+        setAvailableApportionBusinesses(apportionPayload.availableBusinesses ?? []);
+        setOwnerApportionAppointments(apportionPayload.ownerAppointments);
+        setApportionInvitations(apportionPayload.invitations ?? []);
+        setAppointmentOperatingHoursById(apportionPayload.appointmentOperatingHoursById ?? {});
+        setOwnerOperatingHoursByIdentifier(
+          normalizeOwnerOperatingHoursByIdentifier(apportionPayload.ownerOperatingHoursByIdentifier),
+        );
+        setRequesterApportionAppointments(apportionPayload.requesterAppointments);
+      } else if (brandingResult.status === "fulfilled") {
+        setBusinessAppointmentShareCode(brandingResult.value.branding?.appointmentShareCode ?? null);
+      }
 
       if (!options?.silent) {
         setIsLoading(false);

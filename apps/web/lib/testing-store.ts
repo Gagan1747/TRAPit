@@ -636,10 +636,11 @@ export async function listWorkspaceAppointmentBusinesses(query?: string) {
 
   return Object.entries(state.workspaceBrandingByActor)
     .map(([ownerIdentifier, branding]) => {
+      if (!branding) return null;
       const appointmentShareCode = branding.appointmentShareCode?.trim()
         || state.workspaceAppointmentShareCodesByActor[ownerIdentifier]?.trim()
         || "";
-      const name = branding.instituteName.trim();
+      const name = branding.instituteName?.trim() ?? "";
       const address = branding.address?.trim() ?? "";
 
       if (!appointmentShareCode || !isAppointmentBusinessProfileComplete(branding)) {
@@ -647,8 +648,8 @@ export async function listWorkspaceAppointmentBusinesses(query?: string) {
       }
       const business = Object.values(state.apportionDirectory?.businesses ?? {}).find((entry) => matchApportionIdentity(entry.ownerIdentifier, ownerIdentifier));
       if (text && !name.toLowerCase().includes(text)
-        && !business?.services.some((service) => (service.name ?? "").toLowerCase().includes(text))
-        && !(fullPhone && (matchApportionIdentity(ownerIdentifier, phone) || business?.services.some((service) => service.assignedIdentifier && matchApportionIdentity(service.assignedIdentifier, phone))))) return null;
+        && !business?.services?.some((service) => (service?.name ?? "").toLowerCase().includes(text))
+        && !(fullPhone && (matchApportionIdentity(ownerIdentifier, phone) || business?.services?.some((service) => service?.assignedIdentifier && matchApportionIdentity(service.assignedIdentifier, phone))))) return null;
 
       return {
         address,

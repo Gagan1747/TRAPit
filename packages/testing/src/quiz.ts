@@ -966,6 +966,7 @@ export function normalizeWorkspaceBranding(
   const imageDataUrl = branding.imageDataUrl?.trim() ?? null;
   const profileImageDataUrl = branding.profileImageDataUrl?.trim() ?? null;
   const promotionalImageDataUrls = (branding.promotionalImageDataUrls ?? [])
+    .filter((value): value is string => typeof value === "string")
     .map((value) => value.trim())
     .filter(Boolean)
     .slice(0, 4);
@@ -975,10 +976,14 @@ export function normalizeWorkspaceBranding(
   const appointmentShareCode = branding.appointmentShareCode?.trim() || null;
   const validDateKey = /^\d{4}-\d{2}-\d{2}$/;
   const closedDateKeys = Array.from(new Set(
-    (branding.appointmentDateOverrides?.closedDateKeys ?? []).map((value) => value.trim()).filter((value) => validDateKey.test(value)),
+    (branding.appointmentDateOverrides?.closedDateKeys ?? [])
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter((value) => validDateKey.test(value)),
   ));
   const openedDateKeys = Array.from(new Set(
     (branding.appointmentDateOverrides?.openedDateKeys ?? [])
+      .filter((value): value is string => typeof value === "string")
       .map((value) => value.trim())
       .filter((value) => validDateKey.test(value) && !closedDateKeys.includes(value)),
   ));
