@@ -10,8 +10,7 @@ import { NextResponse } from "next/server";
 
 import {
   getGameForParticipant,
-  getOverallGamePoints,
-  getWorkspaceData,
+  getGameRouteMetadata,
 } from "../../../../../lib/testing-store";
 import { getUserActor } from "../../../../../lib/user-api";
 
@@ -28,15 +27,13 @@ export async function GET(request: Request, context: { params: { gameId: string 
     return NextResponse.json({ error: "Game not found." }, { status: 404 });
   }
 
-  const [workspace, overallGamePoints] = await Promise.all([
-    getWorkspaceData(),
-    getOverallGamePoints(actor.identifier),
-  ]);
+  const metadata = await getGameRouteMetadata(game, actor.identifier);
+  const overallGamePoints = metadata.overallGamePoints;
   const currentQuestionIndex = game.currentQuestionIndex;
   const question = currentQuestionIndex === null
     ? null
     : game.presentedQuestions?.[currentQuestionIndex]
-      ?? workspace.questions.find((entry) => entry.id === game.questionIds[currentQuestionIndex]);
+      ?? metadata.fallbackQuestions.get(game.questionIds[currentQuestionIndex]);
   const participant = game.participants.find((entry) =>
     participantIdentifiersMatch(entry.identifier, actor.identifier),
   );
@@ -51,7 +48,7 @@ export async function GET(request: Request, context: { params: { gameId: string 
   const reviewQuestions = game.status === "completed"
     ? game.questionIds.map((questionId, questionIndex) => {
       const reviewQuestion = game.presentedQuestions?.[questionIndex]
-        ?? workspace.questions.find((entry) => entry.id === questionId);
+        ?? metadata.fallbackQuestions.get(questionId);
         const answer = ownAnswers.find((entry) => entry.questionIndex === questionIndex) ?? null;
 
         return reviewQuestion
@@ -69,12 +66,8 @@ export async function GET(request: Request, context: { params: { gameId: string 
   const acceptedParticipants = game.participants
     .filter((entry) => entry.acceptedAt)
     .sort((left, right) => new Date(left.acceptedAt as string).getTime() - new Date(right.acceptedAt as string).getTime());
-  const poolName = workspace.pools.find((pool) => pool.id === game.poolId)?.name ?? "Unknown pool";
-  const groupName = (game.participantGroupIds ?? [game.participantGroupId]).map((id) =>
-    workspace.participantGroups.find((group) => group.id === id)?.name ?? "Unknown group").join(", ");
-  const creatorProfile = workspace.participants.find((profile) =>
-    participantIdentifiersMatch(profile.identifier, game.creatorIdentifier),
-  );
+  const poolName = metadata.poolName;
+  const groupName = metadata.groupName;
   const creatorParticipant = game.participants.find((entry) =>
     participantIdentifiersMatch(entry.identifier, game.creatorIdentifier),
   );
@@ -127,7 +120,7 @@ export async function GET(request: Request, context: { params: { gameId: string 
       preparationDeadline: game.preparationDeadline,
       questionDeadline: game.questionDeadline,
       resultMetadata: {
-        creatorName: creatorProfile?.label?.trim()
+        creatorName: metadata.creatorProfileLabel
           || creatorParticipant?.label?.trim()
           || game.creatorIdentifier,
         groupName,

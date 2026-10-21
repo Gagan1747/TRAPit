@@ -618,7 +618,7 @@ export async function getOrCreateWorkspaceAppointmentShareCode(actorKey?: string
 }
 
 export async function getWorkspaceBranding(actorKey?: string | null) {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const normalizedActorKey = resolveBrandingActorKey(state, actorKey);
 
   if (!normalizedActorKey) {
@@ -629,7 +629,7 @@ export async function getWorkspaceBranding(actorKey?: string | null) {
 }
 
 export async function listWorkspaceAppointmentBusinesses(query?: string) {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const text = query?.trim().toLowerCase() ?? "";
   const phone = text.replace(/[\s()-]/g, "");
   const fullPhone = /^(?:\+[1-9]\d{7,14}|\d{10})$/.test(phone);
@@ -747,7 +747,7 @@ export function mutateWorkspaceBrandingState(
 }
 
 export async function getWorkspaceBrandingByAppointmentShareCode(shareCode: string) {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const normalizedShareCode = decodeURIComponent(shareCode).trim().toLowerCase();
 
   if (!normalizedShareCode) {
@@ -1260,20 +1260,24 @@ function hydrateScheduledTests(state: TestingWorkspaceState) {
 
 let cachedTestingStore: { mtimeMs: number; path: string; rawContent: string; state: TestingWorkspaceState } | null = null;
 
-async function readStore(): Promise<TestingWorkspaceState> {
+function readStoreSnapshot(): Promise<TestingWorkspaceState> {
+  return readStore(false);
+}
+
+async function readStore(clone = true): Promise<TestingWorkspaceState> {
   const storePath = resolveStorePath();
   await mkdir(path.dirname(storePath), { recursive: true });
 
   try {
     const content = await readFile(storePath, "utf8");
     if (cachedTestingStore && cachedTestingStore.path === storePath && cachedTestingStore.rawContent === content) {
-      return structuredClone(cachedTestingStore.state);
+      return clone ? structuredClone(cachedTestingStore.state) : cachedTestingStore.state;
     }
 
     const parsed = JSON.parse(content) as Partial<TestingWorkspaceState>;
     const normalized = normalizeState(parsed);
     cachedTestingStore = { mtimeMs: Date.now(), path: storePath, rawContent: content, state: normalized };
-    return structuredClone(normalized);
+    return clone ? structuredClone(normalized) : normalized;
   } catch (error) {
     if (!isMissingStoreFileError(error)) {
       throw error;
@@ -1338,7 +1342,7 @@ async function persistStore(state: TestingWorkspaceState, changedFields?: Set<ke
 }
 
 export async function readApportionWorkspaceState() {
-  return readStore();
+  return readStoreSnapshot();
 }
 
 export async function backupApportionDelegationStore(state: TestingWorkspaceState, version = 1) {
@@ -1357,11 +1361,11 @@ export function withSerializedTestingMutation<T>(
   mutate: (state: TestingWorkspaceState) => Promise<T> | T,
 ): Promise<T> {
   const operation = workspaceQueue.mutations.then(async () => {
-    const state = await readStore();
-    const originalState = structuredClone(state);
+    const baselineState = await readStoreSnapshot();
+    const state = structuredClone(baselineState);
     const result = await mutate(state);
-    const changedFields = new Set((Array.from(new Set([...Object.keys(originalState), ...Object.keys(state)])) as Array<keyof TestingWorkspaceState>)
-      .filter((field) => !isDeepStrictEqual(state[field], originalState[field])));
+    const changedFields = new Set((Array.from(new Set([...Object.keys(baselineState), ...Object.keys(state)])) as Array<keyof TestingWorkspaceState>)
+      .filter((field) => !isDeepStrictEqual(state[field], baselineState[field])));
     if (changedFields.size) await writeStore(state, changedFields);
     return result;
   });
@@ -1407,7 +1411,7 @@ export async function listQuestions(
   actorId: string | null = null,
   actorIdentifier: string | null = null,
 ) {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   return filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier);
 }
 
@@ -2039,7 +2043,7 @@ async function updateScheduledPollWithoutNotifications(input: CreateScheduledPol
 }
 
 export async function listPools() {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   return filterPoolsForActor(state.pools, getQuestionMap(state), null);
 }
 
@@ -2047,7 +2051,7 @@ export async function listPoolsForActor(
   actorId: string | null = null,
   actorIdentifier: string | null = null,
 ) {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   return filterPoolsForActor(state.pools, getQuestionMap(state), actorId, actorIdentifier);
 }
 
@@ -2172,7 +2176,7 @@ export async function deletePool(input: {
 }
 
 export async function listParticipants() {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   return state.participants;
 }
 
@@ -2283,7 +2287,7 @@ export async function syncParticipants(
 }
 
 export async function listParticipantGroups() {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   return state.participantGroups;
 }
 
@@ -2484,7 +2488,7 @@ export async function listGroupJoinRequestsForAdmin(adminIdentifier: string) {
 }
 
 export async function listGroupJoinRequestsForUser(requesterId: string) {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const normalizedRequesterId = normalizeParticipantIdentifier(requesterId);
 
   return state.groupJoinRequests.filter((request) =>
@@ -3128,7 +3132,7 @@ async function updateScheduledTestWithoutNotifications(input: {
 }
 
 export async function listHistory(actorId: string | null = null) {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const scheduledTests = filterScheduledTestsForActor(hydrateScheduledTests(state), actorId).filter(
     (scheduledTest) => scheduledTest.status === "completed",
   );
@@ -3139,7 +3143,7 @@ export async function listHistory(actorId: string | null = null) {
 }
 
 export async function listLeaderboards(actorId: string | null = null) {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const scheduledTests = filterScheduledTestsForActor(hydrateScheduledTests(state), actorId).filter(
     (scheduledTest) => scheduledTest.status === "completed",
   );
@@ -3153,7 +3157,7 @@ export async function listStateSummary(input?: {
   actorIdentifier?: string | null;
   actorSub?: string | null;
 }) {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const actorSub = input?.actorSub ?? null;
   const actorIdentifier = input?.actorIdentifier ?? null;
   const questionMap = getQuestionMap(state);
@@ -3177,7 +3181,7 @@ export async function listStateSummary(input?: {
 }
 
 export async function listUserHistory(identifier: string) {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const normalizedIdentifier = normalizeParticipantIdentifier(identifier);
   const scheduledTests = hydrateScheduledTests(state);
   const completedScheduledTests = scheduledTests.filter((scheduledTest) => scheduledTest.status === "completed");
@@ -3218,7 +3222,7 @@ export async function listUserHistory(identifier: string) {
 export async function listAvailableTestsForParticipant(
   identifier: string,
 ): Promise<AvailableUserTest[]> {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const normalizedIdentifier = normalizeParticipantIdentifier(identifier);
   const scheduledTests = hydrateScheduledTests(state).filter((scheduledTest) =>
     Boolean(scheduledTest.creatorIdentifier && identifiersMatch(scheduledTest.creatorIdentifier, normalizedIdentifier))
@@ -3314,7 +3318,7 @@ export async function listAvailableTestsForParticipant(
 }
 
 export async function listBrowserNotificationSchedules(): Promise<BrowserSchedule[]> {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   // Do not silently use stale file data when the configured DynamoDB backend is unavailable.
   const polls = isDynamoDbPollStoreEnabled()
     ? await listAllScheduledPollsFromBackend()
@@ -3343,7 +3347,7 @@ async function recoverBrowserSchedulingNotifications() {
 }
 
 export async function listAvailablePollsForParticipant(identifier: string): Promise<ScheduledPoll[]> {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const normalizedIdentifier = normalizeParticipantIdentifier(identifier);
   const pollStatusPriority: Record<ScheduledPoll["status"], number> = {
     live: 0,
@@ -4234,7 +4238,20 @@ function finalizeExpiredTestSessions(state: TestingWorkspaceState, now: number) 
   }
 }
 
+function hasExpiredTestSessionsToFinalize(state: TestingWorkspaceState, now: number) {
+  return state.scheduledTests.some((test) => {
+    if (test.rulesVersion !== 2 || (test.assessmentKind === "instant" && !test.startedAt)) return false;
+    const end = getScheduledTestEndTime(test);
+    if (now < Date.parse(end)) return false;
+    return (test.participantSessions ?? []).some((session) => !session.submittedAt);
+  });
+}
+
 export async function reconcileExpiredTestSessions() {
+  const snapshot = await readStoreSnapshot();
+  if (!hasExpiredTestSessionsToFinalize(snapshot, Date.now())) {
+    return;
+  }
   return withSerializedTestingMutation((state) => {
     finalizeExpiredTestSessions(state, Date.now());
   });
@@ -4346,6 +4363,13 @@ function testSessionPayload(state: TestingWorkspaceState, test: ScheduledTest, i
 }
 
 export async function getTestParticipantSession(testId: string, identifier: string) {
+  const snapshot = await readStoreSnapshot();
+  const now = Date.now();
+  if (!hasExpiredTestSessionsToFinalize(snapshot, now)) {
+    const test = findVersionedTest(snapshot, testId);
+    if (!canAccessTest(snapshot, test, identifier)) throw new Error("You are not assigned to this test.");
+    return testSessionPayload(snapshot, test, identifier);
+  }
   return withSerializedTestingMutation((state) => {
     finalizeExpiredTestSessions(state, Date.now());
     const test = findVersionedTest(state, testId);
@@ -4874,7 +4898,7 @@ export async function getTestResults(input: {
   testId: string;
 }) {
   await reconcileExpiredTestSessions();
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const scheduledTest = getCompletedScheduledTest(state, input.testId);
   const normalizedParticipantIdentifier = normalizeParticipantIdentifier(input.participantIdentifier);
   const participantAttempt = state.attempts.find(
@@ -5077,7 +5101,7 @@ export async function updateCompletedTestQuestion(input: {
 }
 
 export async function getWorkspaceData() {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const scheduledTests = hydrateScheduledTests(state);
   const completedScheduledTests = scheduledTests.filter((scheduledTest) => scheduledTest.status === "completed");
   const completedScheduledTestIds = new Set(completedScheduledTests.map((scheduledTest) => scheduledTest.id));
@@ -5475,23 +5499,73 @@ export async function createScheduledGame(input: {
   });
 }
 
+function gameNeedsLifecycleWrite(state: TestingWorkspaceState, game: ScheduledGame, now: Date) {
+  if (game.completedAt) return false;
+  if (game.rulesVersion === 4) {
+    if (!game.countdownStartedAt) {
+      const groups = state.participantGroups.filter((group) =>
+        (game.participantGroupIds ?? [game.participantGroupId]).includes(group.id)
+        && isGroupOwnedBy(group, game.creatorIdentifier));
+      const memberIds = new Set(groups.flatMap((group) => group.participantIds));
+      const profiles = state.participants.filter((profile) => memberIds.has(profile.id));
+      const identifiers = dedupeParticipantIdentifiers([...profiles.map((profile) => profile.identifier), game.creatorIdentifier]);
+      return identifiers.length !== game.participants.length
+        || identifiers.some((id) => !findGameParticipant(game, id));
+    }
+    const nowMs = now.getTime();
+    const launch = Date.parse(game.countdownStartedAt) + GAME_LAUNCH_COUNTDOWN_MS;
+    if (nowMs < launch) return false;
+    if (!game.startedAt) return true;
+    const globalDeadline = getRapidGameDeadline(game)!;
+    if (nowMs >= globalDeadline) return true;
+    const participants = game.participants.filter((participant) => participant.acceptedAt);
+    for (const participant of participants) {
+      for (let index = 0; index < GAME_QUESTION_COUNT; index += 1) {
+        const start = participant.questionStartedAt?.[index];
+        const deadline = start ? Math.min(Date.parse(start) + GAME_QUESTION_DURATION_MS, globalDeadline) : globalDeadline;
+        if (nowMs >= deadline && !game.answers.some((answer) =>
+          answer.questionIndex === index && identifiersMatch(answer.participantIdentifier, participant.identifier))) {
+          return true;
+        }
+      }
+    }
+    const allResolved = participants.length > 0 && participants.every((participant) =>
+      game.answers.filter((answer) => identifiersMatch(answer.participantIdentifier, participant.identifier)).length === GAME_QUESTION_COUNT);
+    return allResolved;
+  }
+  return true;
+}
+
 export async function listGamesForParticipant(participantIdentifier: string) {
+  const normalizedIdentifier = normalizeParticipantIdentifier(participantIdentifier);
+  const snapshot = await readStoreSnapshot();
+  const now = new Date();
+  const relevantGames = snapshot.games.filter((game) => findGameParticipant(game, normalizedIdentifier));
+  if (!relevantGames.some((game) => gameNeedsLifecycleWrite(snapshot, game, now))) {
+    return relevantGames.map((game) => hydrateGame(game, now.getTime(), normalizedIdentifier));
+  }
+
   return withSerializedGameMutation((state) => {
-    const normalizedIdentifier = normalizeParticipantIdentifier(participantIdentifier);
-    const now = new Date();
+    const mutationNow = new Date();
 
     for (const game of state.games) {
+      if (!findGameParticipant(game, normalizedIdentifier)) continue;
       refreshRapidInvitations(state, game);
-      advanceGameLifecycle(game, now);
+      advanceGameLifecycle(game, mutationNow);
     }
 
     return state.games
       .filter((game) => findGameParticipant(game, normalizedIdentifier))
-      .map((game) => hydrateGame(game, now.getTime(), normalizedIdentifier));
+      .map((game) => hydrateGame(game, mutationNow.getTime(), normalizedIdentifier));
   });
 }
 
 export async function reconcileExpiredGames() {
+  const snapshot = await readStoreSnapshot();
+  const checkNow = new Date();
+  if (!snapshot.games.some((game) => game.rulesVersion === 4 && !game.completedAt && gameNeedsLifecycleWrite(snapshot, game, checkNow))) {
+    return false;
+  }
   return withSerializedGameMutation((state) => {
     const now = new Date();
     let changed = false;
@@ -5506,8 +5580,26 @@ export async function reconcileExpiredGames() {
 }
 
 export async function getGameForParticipant(gameId: string, participantIdentifier: string) {
-  const games = await listGamesForParticipant(participantIdentifier);
-  return games.find((game) => game.id === gameId) ?? null;
+  const normalizedIdentifier = normalizeParticipantIdentifier(participantIdentifier);
+  const snapshot = await readStoreSnapshot();
+  const targetGame = snapshot.games.find((entry) => entry.id === gameId);
+  if (!targetGame || !findGameParticipant(targetGame, normalizedIdentifier)) {
+    const needsRefresh = targetGame && !targetGame.countdownStartedAt && targetGame.rulesVersion === 4;
+    if (!needsRefresh) return null;
+  }
+  const now = new Date();
+  if (targetGame && findGameParticipant(targetGame, normalizedIdentifier) && !gameNeedsLifecycleWrite(snapshot, targetGame, now)) {
+    return hydrateGame(targetGame, now.getTime(), normalizedIdentifier);
+  }
+  return withSerializedGameMutation((state) => {
+    const game = state.games.find((entry) => entry.id === gameId);
+    if (!game) return null;
+    const mutationNow = new Date();
+    refreshRapidInvitations(state, game);
+    advanceGameLifecycle(game, mutationNow);
+    if (!findGameParticipant(game, normalizedIdentifier)) return null;
+    return hydrateGame(game, mutationNow.getTime(), normalizedIdentifier);
+  });
 }
 
 export async function recordGameQuestionReady(input: {
@@ -5786,17 +5878,48 @@ export async function recordGameAnswer(input: {
 }
 
 export async function getOverallGamePoints(participantIdentifier: string) {
-  const games = await listGamesForParticipant(participantIdentifier);
-
-  return games
-    .filter((game) => game.status === "completed")
+  const snapshot = await readStoreSnapshot();
+  const nowMs = Date.now();
+  return snapshot.games
+    .filter((game) => findGameParticipant(game, participantIdentifier) && getGameStatus(game, nowMs) === "completed")
     .reduce((total, game) => {
-      const entry = game.leaderboard.find((candidate) =>
+      const entry = buildGameLeaderboard(game).find((candidate) =>
         identifiersMatch(candidate.participantIdentifier, participantIdentifier),
       );
-
       return total + (entry?.points ?? 0);
     }, 0);
+}
+
+export async function getGameRouteMetadata(game: ScheduledGame, viewerIdentifier: string) {
+  const snapshot = await readStoreSnapshot();
+  const nowMs = Date.now();
+  const overallGamePoints = snapshot.games
+    .filter((entry) => findGameParticipant(entry, viewerIdentifier) && getGameStatus(entry, nowMs) === "completed")
+    .reduce((total, entry) => {
+      const row = buildGameLeaderboard(entry).find((candidate) =>
+        identifiersMatch(candidate.participantIdentifier, viewerIdentifier),
+      );
+      return total + (row?.points ?? 0);
+    }, 0);
+  const poolName = snapshot.pools.find((pool) => pool.id === game.poolId)?.name ?? "Unknown pool";
+  const groupName = (game.participantGroupIds ?? [game.participantGroupId]).map((id) =>
+    snapshot.participantGroups.find((group) => group.id === id)?.name ?? "Unknown group").join(", ");
+  const creatorProfile = snapshot.participants.find((profile) =>
+    identifiersMatch(profile.identifier, game.creatorIdentifier),
+  );
+  const fallbackQuestions = new Map(
+    game.questionIds.flatMap((id) => {
+      const q = snapshot.questions.find((entry) => entry.id === id);
+      return q ? [[id, q] as const] : [];
+    }),
+  );
+  return {
+    creatorProfileLabel: creatorProfile?.label?.trim() || null,
+    fallbackQuestions,
+    groupName,
+    overallGamePoints,
+    poolName,
+  };
 }
 
 function resolveBrandingActorKey(state: TestingWorkspaceState, actorKey?: string | null) {
