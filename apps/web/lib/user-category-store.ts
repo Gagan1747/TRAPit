@@ -17,7 +17,7 @@ import {
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
+const DEFAULT_PRODUCTION_DATA_DIR = ["", "var", "lib", "trapit"].join(path.sep);
 
 type UserCategoryAssignmentStatus = "active" | "expired" | "replaced";
 type UserCategoryRequestStatus = "accepted" | "pending" | "rejected";
@@ -127,11 +127,10 @@ function normalizeState(parsed: Partial<UserCategoryState>): UserCategoryState {
 let cachedUserCategoryState: { path: string; rawContent: string; state: UserCategoryState } | null = null;
 
 async function writeState(state: UserCategoryState) {
-  const storePath = resolveStorePath();
-  await mkdir(path.dirname(storePath), { recursive: true });
+  await mkdir(path.dirname(STORE_PATH), { recursive: true });
   const serialized = JSON.stringify(state, null, 2);
-  await writeFile(storePath, serialized, "utf8");
-  cachedUserCategoryState = { path: storePath, rawContent: serialized, state: structuredClone(state) };
+  await writeFile(STORE_PATH, serialized, "utf8");
+  cachedUserCategoryState = { path: STORE_PATH, rawContent: serialized, state: structuredClone(state) };
 }
 
 function matchesUser(
@@ -193,11 +192,10 @@ function applyAssignmentExpiry(state: UserCategoryState) {
 }
 
 async function readState() {
-  const storePath = resolveStorePath();
   try {
-    const rawValue = await readFile(storePath, "utf8");
+    const rawValue = await readFile(STORE_PATH, "utf8");
     let state: UserCategoryState;
-    if (cachedUserCategoryState && cachedUserCategoryState.path === storePath && cachedUserCategoryState.rawContent === rawValue) {
+    if (cachedUserCategoryState && cachedUserCategoryState.path === STORE_PATH && cachedUserCategoryState.rawContent === rawValue) {
       state = structuredClone(cachedUserCategoryState.state);
     } else {
       state = normalizeState(JSON.parse(rawValue) as Partial<UserCategoryState>);
@@ -206,8 +204,8 @@ async function readState() {
 
     if (didChange) {
       await writeState(state);
-    } else if (!cachedUserCategoryState || cachedUserCategoryState.path !== storePath || cachedUserCategoryState.rawContent !== rawValue) {
-      cachedUserCategoryState = { path: storePath, rawContent: rawValue, state: structuredClone(state) };
+    } else if (!cachedUserCategoryState || cachedUserCategoryState.path !== STORE_PATH || cachedUserCategoryState.rawContent !== rawValue) {
+      cachedUserCategoryState = { path: STORE_PATH, rawContent: rawValue, state: structuredClone(state) };
     }
 
     return state;

@@ -101,7 +101,7 @@ import {
   updateScheduledPollInBackend,
 } from "./poll-store";
 
-const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
+const DEFAULT_PRODUCTION_DATA_DIR = ["", "var", "lib", "trapit"].join(path.sep);
 const TEST_REVIEW_EDIT_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 function resolveStorePath() {
@@ -647,7 +647,7 @@ export async function listWorkspaceAppointmentBusinesses(query?: string) {
       }
       const business = Object.values(state.apportionDirectory?.businesses ?? {}).find((entry) => matchApportionIdentity(entry.ownerIdentifier, ownerIdentifier));
       if (text && !name.toLowerCase().includes(text)
-        && !business?.services.some((service) => service.name.toLowerCase().includes(text))
+        && !business?.services.some((service) => (service.name ?? "").toLowerCase().includes(text))
         && !(fullPhone && (matchApportionIdentity(ownerIdentifier, phone) || business?.services.some((service) => service.assignedIdentifier && matchApportionIdentity(service.assignedIdentifier, phone))))) return null;
 
       return {
@@ -1265,18 +1265,17 @@ function readStoreSnapshot(): Promise<TestingWorkspaceState> {
 }
 
 async function readStore(clone = true): Promise<TestingWorkspaceState> {
-  const storePath = resolveStorePath();
-  await mkdir(path.dirname(storePath), { recursive: true });
+  await mkdir(path.dirname(STORE_PATH), { recursive: true });
 
   try {
-    const content = await readFile(storePath, "utf8");
-    if (cachedTestingStore && cachedTestingStore.path === storePath && cachedTestingStore.rawContent === content) {
+    const content = await readFile(STORE_PATH, "utf8");
+    if (cachedTestingStore && cachedTestingStore.path === STORE_PATH && cachedTestingStore.rawContent === content) {
       return clone ? structuredClone(cachedTestingStore.state) : cachedTestingStore.state;
     }
 
     const parsed = JSON.parse(content) as Partial<TestingWorkspaceState>;
     const normalized = normalizeState(parsed);
-    cachedTestingStore = { mtimeMs: Date.now(), path: storePath, rawContent: content, state: normalized };
+    cachedTestingStore = { mtimeMs: Date.now(), path: STORE_PATH, rawContent: content, state: normalized };
     return clone ? structuredClone(normalized) : normalized;
   } catch (error) {
     if (!isMissingStoreFileError(error)) {
@@ -1296,11 +1295,10 @@ function writeStore(state: TestingWorkspaceState, changedFields?: Set<keyof Test
 }
 
 async function persistStore(state: TestingWorkspaceState, changedFields?: Set<keyof TestingWorkspaceState>) {
-  const storePath = resolveStorePath();
-  await mkdir(path.dirname(storePath), { recursive: true });
+  await mkdir(path.dirname(STORE_PATH), { recursive: true });
 
     try {
-      const currentContent = await readFile(storePath, "utf8");
+      const currentContent = await readFile(STORE_PATH, "utf8");
       const currentState = normalizeState(JSON.parse(currentContent) as Partial<TestingWorkspaceState>);
       if (changedFields) {
         state = { ...currentState, ...Object.fromEntries([...changedFields].map((field) => [field, state[field]])) };
@@ -1324,13 +1322,13 @@ async function persistStore(state: TestingWorkspaceState, changedFields?: Set<ke
       }
     }
 
-  const temporaryStorePath = `${storePath}.${process.pid}.${Date.now()}.tmp`;
+  const temporaryStorePath = `${STORE_PATH}.${process.pid}.${Date.now()}.tmp`;
   const serialized = JSON.stringify(state, null, 2);
 
   await writeFile(temporaryStorePath, serialized, "utf8");
   for (let attempt = 0; ; attempt += 1) {
     try {
-      await rename(temporaryStorePath, storePath);
+      await rename(temporaryStorePath, STORE_PATH);
       break;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
@@ -1338,7 +1336,7 @@ async function persistStore(state: TestingWorkspaceState, changedFields?: Set<ke
       await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
     }
   }
-  cachedTestingStore = { mtimeMs: Date.now(), path: storePath, rawContent: serialized, state: structuredClone(state) };
+  cachedTestingStore = { mtimeMs: Date.now(), path: STORE_PATH, rawContent: serialized, state: structuredClone(state) };
 }
 
 export async function readApportionWorkspaceState() {

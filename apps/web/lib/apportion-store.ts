@@ -7,7 +7,7 @@ import path from "node:path";
 import { getApportionBusinessContext, getApportionBusinessContexts, resolveApportionProviderContact, type ApportionBusinessContext } from "./apportion-directory";
 import { getApportionLifecycleBoundaries, getApportionSlotExpiry, resolveAppointmentLocationSchedule, validateAppointmentLocationSlot } from "./appointment-locations";
 
-const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
+const DEFAULT_PRODUCTION_DATA_DIR = ["", "var", "lib", "trapit"].join(path.sep);
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
 export type ApportionAppointment = {
@@ -796,13 +796,12 @@ async function ensureStoreDirectory() {
 let cachedApportionStore: { path: string; rawContent: string; state: ApportionState } | null = null;
 
 async function readState(applyLifecycle = true): Promise<ApportionState> {
-  const storePath = resolveStorePath();
   try {
-    const rawValue = await readFile(storePath, "utf8");
+    const rawValue = await readFile(STORE_PATH, "utf8");
     let state: ApportionState;
     let changed = false;
 
-    if (cachedApportionStore && cachedApportionStore.path === storePath && cachedApportionStore.rawContent === rawValue) {
+    if (cachedApportionStore && cachedApportionStore.path === STORE_PATH && cachedApportionStore.rawContent === rawValue) {
       state = structuredClone(cachedApportionStore.state);
     } else {
       const parsed = JSON.parse(rawValue) as Partial<ApportionState>;
@@ -820,8 +819,8 @@ async function readState(applyLifecycle = true): Promise<ApportionState> {
     if (JSON.stringify(state.browserNotificationIntents ?? []) !== beforeBrowser) changed = true;
     if (changed) {
       await writeState(state);
-    } else if (!cachedApportionStore || cachedApportionStore.path !== storePath || cachedApportionStore.rawContent !== rawValue) {
-      cachedApportionStore = { path: storePath, rawContent: rawValue, state: structuredClone(state) };
+    } else if (!cachedApportionStore || cachedApportionStore.path !== STORE_PATH || cachedApportionStore.rawContent !== rawValue) {
+      cachedApportionStore = { path: STORE_PATH, rawContent: rawValue, state: structuredClone(state) };
     }
 
     return state;
@@ -837,15 +836,14 @@ async function readState(applyLifecycle = true): Promise<ApportionState> {
 }
 
 async function writeState(state: ApportionState) {
-  const storePath = resolveStorePath();
   reconcileBrowserAppointmentIntents(state);
-  await mkdir(path.dirname(storePath), { recursive: true });
-  const temporaryPath = `${storePath}.${createEntityId("write")}.tmp`;
+  await mkdir(path.dirname(STORE_PATH), { recursive: true });
+  const temporaryPath = `${STORE_PATH}.${createEntityId("write")}.tmp`;
   const serialized = JSON.stringify(state, null, 2);
   try {
     await writeFile(temporaryPath, serialized, "utf8");
-    await rename(temporaryPath, storePath);
-    cachedApportionStore = { path: storePath, rawContent: serialized, state: structuredClone(state) };
+    await rename(temporaryPath, STORE_PATH);
+    cachedApportionStore = { path: STORE_PATH, rawContent: serialized, state: structuredClone(state) };
   } finally {
     await rm(temporaryPath, { force: true });
   }
