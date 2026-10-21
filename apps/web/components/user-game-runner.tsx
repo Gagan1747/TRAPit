@@ -191,12 +191,18 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
     const firstFrame = window.requestAnimationFrame(() => {
       secondFrame = window.requestAnimationFrame(async () => {
         try {
-          await readJson(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/ready${getQuery()}`, {
+          const payload = await readJson<{ game?: GameState; serverNow?: string }>(await fetch(`/api/user/games/${encodeURIComponent(gameId)}/ready${getQuery()}`, {
             body: JSON.stringify({ questionIndex: game.currentQuestionIndex }),
             headers: { "Content-Type": "application/json" },
             method: "POST",
           }));
-          await loadGame({ silent: true });
+          if (payload.game && payload.serverNow) {
+            clockOffsetRef.current = new Date(payload.serverNow).getTime() - Date.now();
+            setGame(payload.game);
+            deadlineRefreshRef.current = false;
+          } else {
+            await loadGame({ silent: true });
+          }
         } catch (error) {
           readyQuestionRef.current = null;
           setFeedback(error instanceof Error ? error.message : "Unable to start the question timer.");
@@ -277,7 +283,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
     setOptimisticSubmittedQuestionIndex(submittedQuestionIndex);
     setIsMutating(true);
     try {
-      const payload = await readJson<{ answer: Partial<GameAnswer> }>(
+      const payload = await readJson<{ answer: Partial<GameAnswer>; game?: GameState; serverNow?: string }>(
         await fetch(`/api/user/games/${encodeURIComponent(gameId)}/answer${getQuery()}`, {
           body: JSON.stringify({
             optionIndex: selectedOptionIndex, questionIndex: submittedQuestionIndex,
@@ -292,7 +298,13 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
       setFeedback(game.rulesVersion === 4 || payload.answer.points === undefined
         ? "Answer submitted."
         : `Answered (${payload.answer.points >= 0 ? "+" : ""}${payload.answer.points})`);
-      await loadGame({ silent: true });
+      if (payload.game && payload.serverNow) {
+        clockOffsetRef.current = new Date(payload.serverNow).getTime() - Date.now();
+        setGame(payload.game);
+        deadlineRefreshRef.current = false;
+      } else {
+        await loadGame({ silent: true });
+      }
     } catch (error) {
       setOptimisticSubmittedQuestionIndex((current) => current === submittedQuestionIndex ? null : current);
       setFeedback(error instanceof Error ? error.message : "Unable to submit the answer.");

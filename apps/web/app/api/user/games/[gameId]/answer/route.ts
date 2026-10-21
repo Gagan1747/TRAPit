@@ -26,12 +26,19 @@ export async function POST(request: Request, context: { params: { gameId: string
       questionIndex: body.questionIndex as number,
     });
 
+    const { getGamePayloadForViewer } = await import("../../../../../../lib/testing-store");
+    const gamePayload = await getGamePayloadForViewer(context.params.gameId, actor.identifier);
+
     publishWorkspaceEvent("game");
-    return NextResponse.json({ answer: result.game.rulesVersion !== 4 ? result.answer : {
-      answeredAt: result.answer.answeredAt,
-      optionIndex: result.answer.optionIndex,
-      questionIndex: result.answer.questionIndex,
-    } });
+    return NextResponse.json({
+      answer: result.game.rulesVersion !== 4 ? result.answer : {
+        answeredAt: result.answer.answeredAt,
+        optionIndex: result.answer.optionIndex,
+        questionIndex: result.answer.questionIndex,
+      },
+      game: gamePayload,
+      serverNow: new Date().toISOString(),
+    });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to submit the answer." },

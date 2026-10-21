@@ -17,13 +17,15 @@ export async function POST(request: Request, context: { params: { gameId: string
       return NextResponse.json({ error: "Question is required." }, { status: 400 });
     }
 
-    await recordGameQuestionReady({
+    const result = await recordGameQuestionReady({
       gameId: context.params.gameId,
       participantIdentifier: actor.identifier,
       questionIndex: body.questionIndex as number,
     });
+    const { getGamePayloadForViewer } = await import("../../../../../../lib/testing-store");
+    const gamePayload = await getGamePayloadForViewer(context.params.gameId, actor.identifier);
     publishWorkspaceEvent("game");
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, game: gamePayload, serverNow: new Date().toISOString() });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to mark the question ready." },

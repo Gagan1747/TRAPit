@@ -18,11 +18,13 @@ import {
   createPersistentPollQuestion,
   createPersistentQuestion,
   dedupeParticipantIdentifiers,
+  GAME_CORRECT_POINTS,
   GAME_INCORRECT_POINTS,
   GAME_LAUNCH_COUNTDOWN_MS,
   GAME_QUESTION_COUNT,
   GAME_QUESTION_DURATION_MS,
   GAME_QUESTION_READY_FALLBACK_MS,
+  getGameQuestionDurationMs,
   getGameQuestionDeadline,
   getGameQuestionIndex,
   getGamePresentedQuestionIndex,
@@ -1259,7 +1261,7 @@ function hydrateScheduledTests(state: TestingWorkspaceState) {
   }));
 }
 
-let cachedTestingStore: { mtimeMs: number; path: string; rawContent: string; state: TestingWorkspaceState } | null = null;
+let cachedTestingStore: { mtimeMs: number; path: string; rawContent?: string; state: TestingWorkspaceState } | null = null;
 
 function readStoreSnapshot(): Promise<TestingWorkspaceState> {
   return readStore(false);
@@ -1269,14 +1271,30 @@ async function readStore(clone = true): Promise<TestingWorkspaceState> {
   await mkdir(path.dirname(STORE_PATH), { recursive: true });
 
   try {
+    const fileStat = await stat(STORE_PATH);
+    if (
+      process.env.NODE_ENV === "production"
+      && cachedTestingStore
+      && cachedTestingStore.path === STORE_PATH
+      && cachedTestingStore.mtimeMs === fileStat.mtimeMs
+    ) {
+      return clone ? structuredClone(cachedTestingStore.state) : cachedTestingStore.state;
+    }
+
     const content = await readFile(STORE_PATH, "utf8");
     if (cachedTestingStore && cachedTestingStore.path === STORE_PATH && cachedTestingStore.rawContent === content) {
+      cachedTestingStore.mtimeMs = fileStat.mtimeMs;
       return clone ? structuredClone(cachedTestingStore.state) : cachedTestingStore.state;
     }
 
     const parsed = JSON.parse(content) as Partial<TestingWorkspaceState>;
     const normalized = normalizeState(parsed);
-    cachedTestingStore = { mtimeMs: Date.now(), path: STORE_PATH, rawContent: content, state: normalized };
+    cachedTestingStore = {
+      mtimeMs: fileStat.mtimeMs,
+      path: STORE_PATH,
+      rawContent: process.env.NODE_ENV === "production" ? undefined : content,
+      state: normalized,
+    };
     return clone ? structuredClone(normalized) : normalized;
   } catch (error) {
     if (!isMissingStoreFileError(error)) {
@@ -1299,8 +1317,17 @@ async function persistStore(state: TestingWorkspaceState, changedFields?: Set<ke
   await mkdir(path.dirname(STORE_PATH), { recursive: true });
 
     try {
-      const currentContent = await readFile(STORE_PATH, "utf8");
-      const currentState = normalizeState(JSON.parse(currentContent) as Partial<TestingWorkspaceState>);
+      let currentState: TestingWorkspaceState | null = null;
+      if (process.env.NODE_ENV === "production" && cachedTestingStore && cachedTestingStore.path === STORE_PATH) {
+        const fileStat = await stat(STORE_PATH).catch(() => null);
+        if (fileStat && fileStat.mtimeMs === cachedTestingStore.mtimeMs) {
+          currentState = cachedTestingStore.state;
+        }
+      }
+      if (!currentState) {
+        const currentContent = await readFile(STORE_PATH, "utf8");
+        currentState = normalizeState(JSON.parse(currentContent) as Partial<TestingWorkspaceState>);
+      }
       if (changedFields) {
         state = { ...currentState, ...Object.fromEntries([...changedFields].map((field) => [field, state[field]])) };
       } else {
@@ -1324,7 +1351,7 @@ async function persistStore(state: TestingWorkspaceState, changedFields?: Set<ke
     }
 
   const temporaryStorePath = `${STORE_PATH}.${process.pid}.${Date.now()}.tmp`;
-  const serialized = JSON.stringify(state, null, 2);
+  const serialized = JSON.stringify(state);
 
   await writeFile(temporaryStorePath, serialized, "utf8");
   for (let attempt = 0; ; attempt += 1) {
@@ -1337,7 +1364,13 @@ async function persistStore(state: TestingWorkspaceState, changedFields?: Set<ke
       await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
     }
   }
-  cachedTestingStore = { mtimeMs: Date.now(), path: STORE_PATH, rawContent: serialized, state: structuredClone(state) };
+  const newStat = await stat(STORE_PATH).catch(() => null);
+  cachedTestingStore = {
+    mtimeMs: newStat?.mtimeMs ?? Date.now(),
+    path: STORE_PATH,
+    rawContent: process.env.NODE_ENV === "production" ? undefined : serialized,
+    state,
+  };
 }
 
 export async function readApportionWorkspaceState() {
@@ -1373,7 +1406,23 @@ export function withSerializedTestingMutation<T>(
   return operation;
 }
 
-const withSerializedGameMutation = withSerializedTestingMutation;
+function withSerializedGameMutation<T>(
+  mutate: (state: TestingWorkspaceState) => Promise<T> | T,
+): Promise<T> {
+  const operation = workspaceQueue.mutations.then(async () => {
+    const baselineState = await readStoreSnapshot();
+    const originalGames = structuredClone(baselineState.games);
+    const state = { ...baselineState, games: structuredClone(baselineState.games) };
+    const result = await mutate(state);
+    if (!isDeepStrictEqual(state.games, originalGames)) {
+      await writeStore(state, new Set<keyof TestingWorkspaceState>(["games"]));
+    }
+    return result;
+  });
+
+  workspaceQueue.mutations = operation.then(() => undefined, () => undefined);
+  return operation;
+}
 
 async function assignUnownedGroupsToOwner(ownerIdentifier: string) {
   const state = await readStore();
@@ -5827,6 +5876,14 @@ export async function recordGameAnswer(input: {
       };
       game.answers.push(answer);
       reconcileRapidGame(game, now.getTime());
+      const nextIndex = getRapidParticipantQuestionIndex(game, participant, now.getTime());
+      if (nextIndex !== null) {
+        const starts = participant.questionStartedAt ?? (participant.questionStartedAt = []);
+        if (!starts[nextIndex]) {
+          starts[nextIndex] = now.toISOString();
+          game.updatedAt = starts[nextIndex];
+        }
+      }
       return { answer, game: hydrateGame(game, now.getTime(), participant.identifier) };
     }
 
@@ -5918,6 +5975,133 @@ export async function getGameRouteMetadata(game: ScheduledGame, viewerIdentifier
     groupName,
     overallGamePoints,
     poolName,
+  };
+}
+
+export async function getGamePayloadForViewer(gameId: string, viewerIdentifier: string) {
+  const game = await getGameForParticipant(gameId, viewerIdentifier);
+  if (!game) return null;
+  const metadata = await getGameRouteMetadata(game, viewerIdentifier);
+  const overallGamePoints = metadata.overallGamePoints;
+  const currentQuestionIndex = game.currentQuestionIndex;
+  const question = currentQuestionIndex === null
+    ? null
+    : game.presentedQuestions?.[currentQuestionIndex]
+      ?? metadata.fallbackQuestions.get(game.questionIds[currentQuestionIndex]);
+  const participant = game.participants.find((entry) =>
+    identifiersMatch(entry.identifier, viewerIdentifier),
+  );
+  const ownAnswers = game.answers.filter((answer) =>
+    identifiersMatch(answer.participantIdentifier, viewerIdentifier),
+  );
+  const isAccepted = Boolean(participant?.acceptedAt);
+  const isCreator = identifiersMatch(game.creatorIdentifier, viewerIdentifier);
+  const isMissed = game.status === "completed"
+    && !isAccepted
+    && !(isCreator && game.creatorRole === "spectator");
+  const reviewQuestions = game.status === "completed"
+    ? game.questionIds.map((questionId, questionIndex) => {
+      const reviewQuestion = game.presentedQuestions?.[questionIndex]
+        ?? metadata.fallbackQuestions.get(questionId);
+        const answer = ownAnswers.find((entry) => entry.questionIndex === questionIndex) ?? null;
+
+        return reviewQuestion
+          ? {
+              answer,
+              correctOptionIndex: reviewQuestion.correctOptionIndex,
+              id: reviewQuestion.id,
+              options: reviewQuestion.options,
+              prompt: reviewQuestion.prompt,
+              questionIndex,
+            }
+          : null;
+      }).filter((entry) => entry !== null)
+    : [];
+  const acceptedParticipants = game.participants
+    .filter((entry) => entry.acceptedAt)
+    .sort((left, right) => new Date(left.acceptedAt as string).getTime() - new Date(right.acceptedAt as string).getTime());
+  const poolName = metadata.poolName;
+  const groupName = metadata.groupName;
+  const creatorParticipant = game.participants.find((entry) =>
+    identifiersMatch(entry.identifier, game.creatorIdentifier),
+  );
+  const rapid = game.rulesVersion === 4;
+  const completed = game.status === "completed";
+  const standings = game.leaderboard.map((entry) => {
+    const responses = game.answers.filter((answer) => identifiersMatch(answer.participantIdentifier, entry.participantIdentifier));
+    return {
+      ...entry,
+      isSelf: identifiersMatch(entry.participantIdentifier, viewerIdentifier),
+      maskedIdentifier: /^\+?[\d\s()-]+$/.test(entry.participantIdentifier)
+        ? `••••••${entry.participantIdentifier.replace(/\D/g, "").slice(-4)}` : "",
+      correctCount: responses.filter((answer) => answer.isCorrect).length,
+      incorrectUnansweredCount: responses.filter((answer) => !answer.isCorrect).length,
+      elapsedMs: responses.reduce((total, answer) => total + (answer.elapsedMs ?? 0), 0),
+    };
+  });
+
+  return {
+    acceptedCount: game.acceptedCount,
+    canStart: isCreator && Boolean(game.creatorRole) && game.acceptedCount >= 4,
+    countdownDeadline: game.countdownDeadline,
+    creatorRole: game.creatorRole ?? null,
+    currentQuestion: question && (!rapid || isAccepted)
+      ? { id: question.id, options: question.options, prompt: question.prompt }
+      : null,
+    currentQuestionIndex: game.currentQuestionIndex,
+    displayName: participant?.label ?? viewerIdentifier,
+    globalDeadline: game.globalDeadline,
+    questionStartedAt: game.participantQuestionStartedAt,
+    rulesVersion: game.rulesVersion,
+    isAccepted,
+    isCreator,
+    isMissed,
+    leaderboard: rapid
+      ? standings.filter((entry, index) => isCreator || index < 10 || entry.isSelf)
+      : game.leaderboard,
+    overallGamePoints,
+    ownAnswers: rapid && !completed ? ownAnswers.map((answer) => ({
+      answeredAt: answer.answeredAt, kind: answer.kind, optionIndex: answer.optionIndex,
+      participantIdentifier: answer.participantIdentifier, questionIndex: answer.questionIndex,
+    })) : ownAnswers,
+    participantCount: game.participants.length,
+    participants: acceptedParticipants.map((entry) => ({
+      acceptedAt: entry.acceptedAt,
+      identifier: entry.identifier,
+      label: entry.label,
+    })),
+    preparationDeadline: game.preparationDeadline,
+    questionDeadline: game.questionDeadline,
+    resultMetadata: {
+      creatorName: metadata.creatorProfileLabel
+        || creatorParticipant?.label?.trim()
+        || game.creatorIdentifier,
+      groupName,
+      poolName,
+      startedAt: game.startedAt,
+      completedAt: game.completedAt,
+      durationMinutes: 10,
+      submittedCount: acceptedParticipants.filter((entry) =>
+        game.answers.filter((answer) => identifiersMatch(answer.participantIdentifier, entry.identifier)).length === GAME_QUESTION_COUNT).length,
+      sharedCount: game.participants.filter((entry) =>
+        !identifiersMatch(entry.identifier, game.creatorIdentifier) || game.creatorRole === "participant").length,
+    },
+    recentDeltas: rapid ? [] : game.answers.slice(-6).map((answer) => ({
+      answeredAt: answer.answeredAt,
+      participantIdentifier: answer.participantIdentifier,
+      points: answer.points,
+    })),
+    reviewQuestions,
+    rules: {
+      correctPoints: GAME_CORRECT_POINTS,
+      incorrectPoints: GAME_INCORRECT_POINTS,
+      launchCountdownMs: game.rulesVersion === 2 || game.rulesVersion === 3 || rapid ? GAME_LAUNCH_COUNTDOWN_MS : 0,
+      questionCount: GAME_QUESTION_COUNT,
+      questionDurationMs: getGameQuestionDurationMs(game),
+    },
+    status: game.status,
+    title: game.title,
+    viewerMode: isAccepted ? "participant" : "spectator",
   };
 }
 
