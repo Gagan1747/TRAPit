@@ -27,7 +27,7 @@ export default async function AdminPage() {
         <AdminQuestionWorkspace
           currentActorRole="admin"
           currentAdminIdentifier={sessionIdentifier}
-          currentUserCategory={null}
+          currentUserCategory={session.userCategory}
           initialOpenSection="apportion"
           isSuperAdmin={isSuperAdmin}
           previousSignInAt={previousSignInAt}

@@ -22,48 +22,16 @@ function throwLimitExceeded(featureName: string, category: NormalUserCategory, n
 }
 
 export function assertCanCreateQuestionPool(category: NormalUserCategory, existingPoolCount: number) {
-  const definition = getNormalUserCategoryDefinition(category);
-
-  if (existingPoolCount >= definition.test.maxQuestionPools) {
-    throwLimitExceeded(
-      "Test - Question pool",
-      category,
-      getUpgradeTargetCategory(category, (candidateDefinition) =>
-        candidateDefinition.test.maxQuestionPools > definition.test.maxQuestionPools,
-      ) ?? getNextNormalUserCategory(category),
-    );
-  }
+  void category;
+  void existingPoolCount;
 }
 
 export function assertCanAddQuestionsToPools(
   category: NormalUserCategory,
   poolQuestionCountsAfterSave: number[],
 ) {
-  const definition = getNormalUserCategoryDefinition(category);
-
-  if (!definition.test.addQuestion || !definition.test.maxQuestionsPerPool) {
-    throwLimitExceeded(
-      "Test - Add question",
-      category,
-      getUpgradeTargetCategory(category, (candidateDefinition) =>
-        candidateDefinition.test.addQuestion,
-      ) ?? getNextNormalUserCategory(category),
-    );
-  }
-
-  if (poolQuestionCountsAfterSave.some((count) => count > definition.test.maxQuestionsPerPool!)) {
-    throwLimitExceeded(
-      "Test - Add question",
-      category,
-      getUpgradeTargetCategory(category, (candidateDefinition) => {
-        if (!candidateDefinition.test.maxQuestionsPerPool) {
-          return false;
-        }
-
-        return candidateDefinition.test.maxQuestionsPerPool > definition.test.maxQuestionsPerPool!;
-      }) ?? getNextNormalUserCategory(category),
-    );
-  }
+  void category;
+  void poolQuestionCountsAfterSave;
 }
 
 export function assertCanCreateGroup(category: NormalUserCategory) {
@@ -91,42 +59,26 @@ export function assertCanManageGroup(category: NormalUserCategory) {
 }
 
 export function assertCanCreatePollQuestions(category: NormalUserCategory) {
-  const definition = getNormalUserCategoryDefinition(category);
-
-  if (!definition.poll.addQuestion) {
-    throwLimitExceeded(
-      "Poll - Add question",
-      category,
-      getUpgradeTargetCategory(category, (candidateDefinition) => candidateDefinition.poll.addQuestion) ?? getNextNormalUserCategory(category),
-    );
-  }
+  void category;
 }
 
-export function assertCanSchedulePoll(category: NormalUserCategory, participantType: "open" | "registered") {
+export function assertCanSchedulePoll(
+  category: NormalUserCategory,
+  participantType: "open" | "registered",
+  openPollsThisMonth = 0,
+) {
   const definition = getNormalUserCategoryDefinition(category);
 
-  if (!definition.poll.schedule) {
-    throwLimitExceeded(
-      "Poll - Schedule Poll",
-      category,
-      getUpgradeTargetCategory(category, (candidateDefinition) => candidateDefinition.poll.schedule) ?? getNextNormalUserCategory(category),
-    );
-  }
-
-  if (participantType === "open" && !definition.poll.shareOpenToAll) {
-    throwLimitExceeded(
-      "Poll - Schedule Poll",
-      category,
-      getUpgradeTargetCategory(category, (candidateDefinition) => candidateDefinition.poll.shareOpenToAll) ?? getNextNormalUserCategory(category),
-    );
-  }
-
-  if (participantType === "registered" && !definition.poll.shareWithGroups) {
-    throwLimitExceeded(
-      "Poll - Schedule Poll",
-      category,
-      getUpgradeTargetCategory(category, (candidateDefinition) => candidateDefinition.poll.shareWithGroups) ?? getNextNormalUserCategory(category),
-    );
+  if (participantType === "open") {
+    if (!definition.poll.shareOpenToAll || openPollsThisMonth >= definition.poll.maxOpenPollsPerMonth) {
+      throwLimitExceeded(
+        "Poll - Schedule Poll",
+        category,
+        getUpgradeTargetCategory(category, (candidateDefinition) =>
+          candidateDefinition.poll.shareOpenToAll && candidateDefinition.poll.maxOpenPollsPerMonth > definition.poll.maxOpenPollsPerMonth,
+        ) ?? getNextNormalUserCategory(category),
+      );
+    }
   }
 }
 

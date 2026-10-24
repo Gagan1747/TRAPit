@@ -640,7 +640,7 @@ function ProviderLeaveCalendar({
   );
 }
 
-export function ApportionRolePanel({ canCreateBusiness: fallbackCanCreateBusiness, actorIdentifier, refreshVersion = 0, personalBusinessForm, personalBusinessConfiguration, personalBusinessBranding, personalBusinessFooter, onUpgrade, onPersonalAddressLimitChange, onPersonalConsultationLocationsChange, onProviderSettingsSaved, onOwnerDelegationChange }: { canCreateBusiness: boolean; actorIdentifier: string | null; refreshVersion?: number; personalBusinessForm: ReactNode; personalBusinessConfiguration?: ReactNode; personalBusinessBranding?: ReactNode; personalBusinessFooter?: ReactNode; onUpgrade: () => void; onPersonalAddressLimitChange?: (limit: number) => void; onPersonalConsultationLocationsChange?: (locationIds: string[]) => void; onProviderSettingsSaved?: (settings: ApportionProviderSettings) => void; onOwnerDelegationChange?: (delegated: boolean) => void }) {
+export function ApportionRolePanel({ canCreateBusiness: fallbackCanCreateBusiness, actorIdentifier, refreshVersion = 0, personalBusinessForm, personalBusinessConfiguration, personalBusinessBranding, personalBusinessFooter, onUpgrade, onPersonalAddressLimitChange, onPersonalConsultationLocationsChange, onProviderSettingsSaved, onOwnerDelegationChange, onAdminDelegationChange }: { canCreateBusiness: boolean; actorIdentifier: string | null; refreshVersion?: number; personalBusinessForm: ReactNode; personalBusinessConfiguration?: ReactNode; personalBusinessBranding?: ReactNode; personalBusinessFooter?: ReactNode; onUpgrade: () => void; onPersonalAddressLimitChange?: (limit: number) => void; onPersonalConsultationLocationsChange?: (locationIds: string[]) => void; onProviderSettingsSaved?: (settings: ApportionProviderSettings) => void; onOwnerDelegationChange?: (delegated: boolean) => void; onAdminDelegationChange?: (delegated: boolean) => void }) {
   const [panel, setPanel] = useState<Panel | null>(null);
   const [busy, setBusy] = useState(false);
   const [providerSettingsDirty, setProviderSettingsDirty] = useState(false);
@@ -653,7 +653,9 @@ export function ApportionRolePanel({ canCreateBusiness: fallbackCanCreateBusines
   useEffect(() => { personalConsultationCallback.current = onPersonalConsultationLocationsChange; }, [onPersonalConsultationLocationsChange]);
   useEffect(() => { if (panel) onPersonalAddressLimitChange?.(panel.personalAddressLimit); }, [panel, onPersonalAddressLimitChange]);
   const ownerDelegated = Boolean(panel?.businesses.some((business) => business.role === "owner" && business.business.adminDelegateIdentifier));
+  const adminDelegated = Boolean(panel?.businesses.some((business) => business.role === "admin"));
   useEffect(() => { if (panel) onOwnerDelegationChange?.(ownerDelegated); }, [panel, ownerDelegated, onOwnerDelegationChange]);
+  useEffect(() => { if (panel) onAdminDelegationChange?.(adminDelegated); }, [panel, adminDelegated, onAdminDelegationChange]);
   useEffect(() => {
     const controller = new AbortController();
     const version = ++panelRequestVersion.current;
@@ -692,6 +694,7 @@ export function ApportionRolePanel({ canCreateBusiness: fallbackCanCreateBusines
       const message = error instanceof Error ? error.message : "Unable to save.";
       setFeedback(message);
       if (message === "Admin address unavailable") window.alert("Admin address unavailable");
+      if (message.includes("Upgrade")) upgradeCallback.current();
       return false;
     }
     finally { submitting.current = false; setBusy(false); }

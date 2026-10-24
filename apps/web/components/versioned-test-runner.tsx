@@ -271,17 +271,21 @@ export function VersionedTestRunner({ testId, identifier, authConfigured, initia
             <div className="game-leaderboard-list">
               {(payload.leaderboard ?? []).map((entry, entryIndex) => (
                 <div className={`game-leaderboard-row test-results-leaderboard-row${entry.isSelf ? " is-self is-current-participant" : ""}`} aria-current={entry.isSelf ? "true" : undefined} key={`${entry.rank}-${entry.participantName}-${entryIndex}`}>
-                  <strong>#{entry.rank} {entry.participantName}{entry.isSelf ? " (You)" : ""}</strong>
-                  <span>
-                    {entry.maskedIdentifier}
-                    <br />
-                    <span className="test-results-leaderboard-time">{formatElapsedTime(entry.elapsedMs)} ({durationLabel})</span>
-                  </span>
-                  <span>
-                    {entry.marks} marks
-                    <br />
-                    <span className="muted-text">(+{entry.correctCount} / -{entry.incorrectUnansweredCount})</span>
-                  </span>
+                  <div className="test-results-leaderboard-left">
+                    <strong>#{entry.rank} {entry.participantName}{entry.isSelf ? " (You)" : ""}</strong>
+                    {test.status === "completed" ? (
+                      <>
+                        <span className="test-results-leaderboard-meta">{entry.maskedIdentifier}</span>
+                        <span className="test-results-leaderboard-time">{formatElapsedTime(entry.elapsedMs)} ({durationLabel})</span>
+                      </>
+                    ) : null}
+                  </div>
+                  <div className="test-results-leaderboard-right">
+                    <strong>{entry.marks} marks</strong>
+                    {test.status === "completed" ? (
+                      <span className="test-results-leaderboard-meta">(+{entry.correctCount} / -{entry.incorrectUnansweredCount})</span>
+                    ) : null}
+                  </div>
                 </div>
               ))}
             </div>

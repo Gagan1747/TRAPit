@@ -9,6 +9,9 @@ export const orderedNormalUserCategories = [...NORMAL_USER_CATEGORIES];
 export type NormalUserCategory = (typeof NORMAL_USER_CATEGORIES)[number];
 
 export type NormalUserCategoryDefinition = {
+  apportion: {
+    maxServicesPerAddress: number;
+  };
   group: {
     create: boolean;
     join: boolean;
@@ -18,6 +21,7 @@ export type NormalUserCategoryDefinition = {
   label: string;
   poll: {
     addQuestion: boolean;
+    maxOpenPollsPerMonth: number;
     schedule: boolean;
     shareOpenToAll: boolean;
     shareWithGroups: boolean;
@@ -35,6 +39,9 @@ export const defaultNormalUserCategory: NormalUserCategory = "trapit-normal";
 
 export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUserCategoryDefinition> = {
   "trapit-normal": {
+    apportion: {
+      maxServicesPerAddress: 0,
+    },
     group: {
       create: true,
       join: true,
@@ -44,19 +51,23 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
     label: "TRAPit normal users",
     poll: {
       addQuestion: true,
+      maxOpenPollsPerMonth: 0,
       schedule: true,
       shareOpenToAll: false,
       shareWithGroups: true,
     },
     test: {
       addQuestion: true,
-      maxQuestionsPerPool: 200,
-      maxQuestionPools: 5,
-      maxScheduledTestsPerMonth: 2,
+      maxQuestionsPerPool: null,
+      maxQuestionPools: Number.MAX_SAFE_INTEGER,
+      maxScheduledTestsPerMonth: 0,
       maxSelfTestsPerMonth: 0,
     },
   },
   "trapit-pro": {
+    apportion: {
+      maxServicesPerAddress: 4,
+    },
     group: {
       create: true,
       join: true,
@@ -66,19 +77,23 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
     label: "TRAPit Pro users",
     poll: {
       addQuestion: true,
+      maxOpenPollsPerMonth: 0,
       schedule: true,
       shareOpenToAll: false,
       shareWithGroups: true,
     },
     test: {
       addQuestion: true,
-      maxQuestionsPerPool: 400,
-      maxQuestionPools: 50,
-      maxScheduledTestsPerMonth: 50,
+      maxQuestionsPerPool: null,
+      maxQuestionPools: Number.MAX_SAFE_INTEGER,
+      maxScheduledTestsPerMonth: 10,
       maxSelfTestsPerMonth: 0,
     },
   },
   "trapit-pro-max": {
+    apportion: {
+      maxServicesPerAddress: 10,
+    },
     group: {
       create: true,
       join: true,
@@ -88,15 +103,16 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
     label: "TRAPit Pro Max users",
     poll: {
       addQuestion: true,
+      maxOpenPollsPerMonth: 10,
       schedule: true,
       shareOpenToAll: true,
       shareWithGroups: true,
     },
     test: {
       addQuestion: true,
-      maxQuestionsPerPool: 1000,
-      maxQuestionPools: 100,
-      maxScheduledTestsPerMonth: 100,
+      maxQuestionsPerPool: null,
+      maxQuestionPools: Number.MAX_SAFE_INTEGER,
+      maxScheduledTestsPerMonth: 20,
       maxSelfTestsPerMonth: 0,
     },
   },

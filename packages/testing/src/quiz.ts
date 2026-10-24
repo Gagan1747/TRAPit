@@ -238,6 +238,7 @@ export type ParticipantGroup = {
   inviteJoinMode: ParticipantGroupInviteJoinMode;
   name: string;
   ownerIdentifier: string | null;
+  ownerLabel?: string | null;
   participantIds: string[];
   shareCode: string | null;
   updatedAt: string;
@@ -261,6 +262,30 @@ export type GroupJoinRequest = {
   resolvedAt: string | null;
   status: GroupJoinRequestStatus;
   requestType: GroupJoinRequestType;
+};
+
+export type GroupMembershipStatus =
+  | "creator"
+  | "member"
+  | "requested"
+  | "left"
+  | "removed"
+  | "rejected";
+
+export type GroupMembershipRecord = {
+  createdAt: string;
+  endedAt: string | null;
+  groupId: string;
+  groupName: string;
+  id: string;
+  joinedAt: string | null;
+  ownerIdentifier: string;
+  ownerLabel: string;
+  requestId?: string | null;
+  status: GroupMembershipStatus;
+  updatedAt: string;
+  userIdentifier: string;
+  userLabel: string;
 };
 
 export type ScheduledTestStatus = "scheduled" | "live" | "completed";
@@ -437,6 +462,7 @@ export type TestingWorkspaceState = {
   attempts: TestAttempt[];
   games: ScheduledGame[];
   groupJoinRequests: GroupJoinRequest[];
+  groupMemberships?: GroupMembershipRecord[];
   pollAttempts: PollAttempt[];
   participantGroups: ParticipantGroup[];
   participants: ParticipantProfile[];
@@ -1211,6 +1237,7 @@ export function createParticipantGroup(input: {
   inviteJoinMode?: ParticipantGroupInviteJoinMode;
   name: string;
   ownerIdentifier?: string | null;
+  ownerLabel?: string | null;
   participantIds: string[];
   shareCode?: string | null;
 }): ParticipantGroup {
@@ -1223,6 +1250,7 @@ export function createParticipantGroup(input: {
     inviteJoinMode: input.inviteJoinMode ?? "approval-required",
     name: input.name.trim(),
     ownerIdentifier: input.ownerIdentifier?.trim() || null,
+    ownerLabel: input.ownerLabel?.trim() || null,
     participantIds: Array.from(new Set(input.participantIds)),
     shareCode: input.shareCode?.trim() || null,
     updatedAt: timestamp,
@@ -1453,6 +1481,7 @@ export function createEmptyTestingWorkspaceState(): TestingWorkspaceState {
     attempts: [],
     games: [],
     groupJoinRequests: [],
+    groupMemberships: [],
     pollAttempts: [],
     participantGroups: [],
     participants: [],

@@ -79,7 +79,7 @@ describe("Apportion UI contracts", () => {
     }] } as unknown as Parameters<typeof getAppointmentFilterPairs>[0];
     const ownPairs = getAppointmentFilterPairs(panel, owner);
     expect(ownPairs.map((pair) => pair.locationId)).toEqual(["one", "two"]);
-    expect(ownPairs[0].label).toContain("Address #1 (First Street)");
+    expect(ownPairs[0].label).toBe("First Street → Consultation");
     panel.businesses[0].role = "staff";
     expect(getAppointmentFilterPairs(panel, staff).map((pair) => pair.serviceId)).toEqual(["therapy"]);
     panel.businesses[0].role = "admin";

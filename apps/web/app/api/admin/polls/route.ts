@@ -157,7 +157,14 @@ export async function POST(request: Request) {
       }
 
       if (actor.role === "user") {
-        assertCanSchedulePoll(actor.userCategory, body.participantType ?? "registered");
+        const existingPolls = await listScheduledPolls(actor.sub);
+        const now = new Date();
+        const openPollsThisMonth = existingPolls.filter((poll) => {
+          if (poll.participantType !== "open") return false;
+          const createdAt = new Date(poll.createdAt);
+          return createdAt.getFullYear() === now.getFullYear() && createdAt.getMonth() === now.getMonth();
+        }).length;
+        assertCanSchedulePoll(actor.userCategory, body.participantType ?? "registered", openPollsThisMonth);
       }
 
       const resolvedCreatedQuestionIds = typedDrafts.length
@@ -178,7 +185,7 @@ export async function POST(request: Request) {
         creatorDisplayName: actor.displayName,
         creatorIdentifier: actor.identifier,
         endsAt: body.endsAt,
-        generateQrCode: Boolean(body.generateQrCode),
+        generateQrCode: (body.participantType ?? "registered") === "open" && Boolean(body.generateQrCode),
         openPollRequiresRegistration: Boolean(body.openPollRequiresRegistration),
         participantGroupIds: body.participantGroupIds ?? [],
         participantType: body.participantType ?? "registered",
@@ -217,7 +224,16 @@ export async function POST(request: Request) {
       }
 
       if (actor.role === "user") {
-        assertCanSchedulePoll(actor.userCategory, body.participantType ?? "registered");
+        const existingPolls = await listScheduledPolls(actor.sub);
+        const now = new Date();
+        const openPollsThisMonth = existingPolls
+          .filter((poll) => poll.id !== body.pollId)
+          .filter((poll) => {
+            if (poll.participantType !== "open") return false;
+            const createdAt = new Date(poll.createdAt);
+            return createdAt.getFullYear() === now.getFullYear() && createdAt.getMonth() === now.getMonth();
+          }).length;
+        assertCanSchedulePoll(actor.userCategory, body.participantType ?? "registered", openPollsThisMonth);
       }
 
       const resolvedCreatedQuestionIds = typedDrafts.length
@@ -238,7 +254,7 @@ export async function POST(request: Request) {
         creatorDisplayName: actor.displayName,
         creatorIdentifier: actor.identifier,
         endsAt: body.endsAt,
-        generateQrCode: Boolean(body.generateQrCode),
+        generateQrCode: (body.participantType ?? "registered") === "open" && Boolean(body.generateQrCode),
         openPollRequiresRegistration: Boolean(body.openPollRequiresRegistration),
         participantGroupIds: body.participantGroupIds ?? [],
         participantType: body.participantType ?? "registered",

@@ -73,6 +73,7 @@ export type CognitoTokens = {
 };
 
 export type RegisteredDirectoryUser = {
+  createdAt?: string | null;
   identifier: string;
   label: string;
   sub: string | null;
@@ -458,7 +459,12 @@ export async function listRegisteredDirectoryUsers(): Promise<RegisteredDirector
           getAttributeValue(user.Attributes, "given_name") ||
           identifier;
 
-        users.push({ identifier, label, sub: getAttributeValue(user.Attributes, "sub") || null });
+        users.push({
+          createdAt: user.UserCreateDate ? user.UserCreateDate.toISOString() : null,
+          identifier,
+          label,
+          sub: getAttributeValue(user.Attributes, "sub") || null,
+        });
       }
 
       paginationToken = response.PaginationToken;

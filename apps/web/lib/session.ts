@@ -158,9 +158,7 @@ export async function getWebSession(request?: Request): Promise<AuthSession | nu
 
     return {
       ...session,
-      userCategory: session.role === "user"
-        ? await resolveAssignedCategoryForSession(session)
-        : null,
+      userCategory: await resolveAssignedCategoryForSession(session),
     };
   } catch {
     return null;

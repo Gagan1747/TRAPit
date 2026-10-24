@@ -32,7 +32,12 @@ async function buildManagementResponse() {
     listParticipants(),
   ]);
 
+  const fallbackCreatedAtByIdentifier = new Map(
+    fallbackParticipants.map((participant) => [participant.identifier.trim().toLowerCase(), participant.createdAt]),
+  );
+
   let directoryUsers = fallbackParticipants.map((participant) => ({
+    createdAt: (participant.createdAt ?? null) as string | null,
     identifier: participant.identifier,
     label: participant.label,
     sub: null as string | null,
@@ -40,9 +45,16 @@ async function buildManagementResponse() {
 
   if (isWebAuthConfigured()) {
     try {
-      directoryUsers = await listRegisteredDirectoryUsers();
+      const cognitoUsers = await listRegisteredDirectoryUsers();
+      directoryUsers = cognitoUsers.map((user) => ({
+        createdAt: user.createdAt ?? fallbackCreatedAtByIdentifier.get(user.identifier.trim().toLowerCase()) ?? null,
+        identifier: user.identifier,
+        label: user.label,
+        sub: user.sub,
+      }));
     } catch {
       directoryUsers = fallbackParticipants.map((participant) => ({
+        createdAt: participant.createdAt ?? null,
         identifier: participant.identifier,
         label: participant.label,
         sub: null,
@@ -61,10 +73,11 @@ async function buildManagementResponse() {
       .map((assignment) => [assignment.userIdentifier?.trim().toLowerCase() ?? "", assignment]),
   );
 
-  const knownUsers = new Map<string, { identifier: string; label: string | null; sub: string | null }>();
+  const knownUsers = new Map<string, { createdAt: string | null; identifier: string; label: string | null; sub: string | null }>();
 
   for (const user of directoryUsers) {
     knownUsers.set(user.identifier.trim().toLowerCase(), {
+      createdAt: user.createdAt ?? null,
       identifier: user.identifier,
       label: user.label,
       sub: user.sub,
@@ -76,10 +89,13 @@ async function buildManagementResponse() {
       continue;
     }
 
-    knownUsers.set(request.requesterIdentifier.trim().toLowerCase(), {
+    const normalizedIdentifier = request.requesterIdentifier.trim().toLowerCase();
+    const existing = knownUsers.get(normalizedIdentifier);
+    knownUsers.set(normalizedIdentifier, {
+      createdAt: existing?.createdAt ?? fallbackCreatedAtByIdentifier.get(normalizedIdentifier) ?? request.requestedAt ?? null,
       identifier: request.requesterIdentifier,
-      label: request.requesterDisplayName,
-      sub: request.requesterSub,
+      label: existing?.label ?? request.requesterDisplayName,
+      sub: existing?.sub ?? request.requesterSub,
     });
   }
 
@@ -89,13 +105,21 @@ async function buildManagementResponse() {
     }
 
     const normalizedIdentifier = assignment.userIdentifier.trim().toLowerCase();
+    const existing = knownUsers.get(normalizedIdentifier);
 
     knownUsers.set(normalizedIdentifier, {
+      createdAt: existing?.createdAt ?? fallbackCreatedAtByIdentifier.get(normalizedIdentifier) ?? assignment.assignedAt ?? null,
       identifier: assignment.userIdentifier,
-      label: knownUsers.get(normalizedIdentifier)?.label ?? null,
-      sub: knownUsers.get(normalizedIdentifier)?.sub ?? assignment.userSub,
+      label: existing?.label ?? null,
+      sub: existing?.sub ?? assignment.userSub,
     });
   }
+
+  const tierPriority: Record<NormalUserCategory, number> = {
+    "trapit-pro-max": 0,
+    "trapit-pro": 1,
+    "trapit-normal": 2,
+  };
 
   const managedUsers = Array.from(knownUsers.values())
     .map((user) => {
@@ -103,18 +127,35 @@ async function buildManagementResponse() {
       const activeAssignment = activeAssignmentsByIdentifier.get(normalizedIdentifier) ?? null;
       const pendingRequest = pendingRequestsByIdentifier.get(normalizedIdentifier) ?? null;
       const currentCategory = activeAssignment?.category ?? defaultNormalUserCategory;
+      const expiresAt = activeAssignment?.expiresAt ?? null;
+      const daysRemaining = currentCategory !== defaultNormalUserCategory && expiresAt
+        ? Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 86_400_000))
+        : null;
 
       return {
         currentCategory,
         currentCategoryLabel: normalUserCategoryLabels[currentCategory],
-        displayName: pendingRequest?.requesterDisplayName ?? user.label,
-        expiresAt: activeAssignment?.expiresAt ?? null,
+        daysRemaining,
+        displayName: user.label ?? pendingRequest?.requesterDisplayName ?? null,
+        expiresAt,
         identifier: user.identifier,
+        joinedAt: user.createdAt,
         pendingRequest,
         userSub: activeAssignment?.userSub ?? user.sub,
       };
     })
-    .sort((leftUser, rightUser) => leftUser.identifier.localeCompare(rightUser.identifier));
+    .sort((leftUser, rightUser) => {
+      const tierDiff = tierPriority[leftUser.currentCategory] - tierPriority[rightUser.currentCategory];
+      if (tierDiff !== 0) {
+        return tierDiff;
+      }
+      const leftJoinedMs = leftUser.joinedAt ? new Date(leftUser.joinedAt).getTime() : 0;
+      const rightJoinedMs = rightUser.joinedAt ? new Date(rightUser.joinedAt).getTime() : 0;
+      if (rightJoinedMs !== leftJoinedMs) {
+        return rightJoinedMs - leftJoinedMs;
+      }
+      return leftUser.identifier.localeCompare(rightUser.identifier);
+    });
 
   return {
     managedUsers,

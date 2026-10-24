@@ -91,12 +91,12 @@ export function getAppointmentFilterPairs(panel: AssignmentPanel, identifier: st
     if (!service.active || !business.bookableServiceIds.includes(service.id)) return [];
     const provider = service.assignedIdentifier || (service.id === "consultation" ? business.business.ownerIdentifier : "");
     if (business.role !== "admin" && !matchApportionIdentity(provider, identifier)) return [];
-    return (business.branding.appointmentLocations ?? []).flatMap((location, index) =>
+    return (business.branding.appointmentLocations ?? []).flatMap((location) =>
       service.locationIds.includes(location.id) && location.address.trim()
         && (business.role === "admin" || matchApportionIdentity(provider, business.business.ownerIdentifier)
           || business.memberships.some((membership) => membership.locationId === location.id && matchApportionIdentity(membership.providerIdentifier, identifier)))
         ? [{ key: `${business.business.ownerIdentifier}::${location.id}::${service.id}`, ownerIdentifier: business.business.ownerIdentifier,
-          locationId: location.id, serviceId: service.id, label: `${business.branding.instituteName} → Address #${index + 1} (${location.address}) → ${service.name}` }]
+          locationId: location.id, serviceId: service.id, label: `${location.address.trim().slice(0, 20)} → ${service.name}` }]
         : []);
   }));
 }

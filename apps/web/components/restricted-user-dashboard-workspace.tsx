@@ -624,9 +624,7 @@ export function RestrictedUserDashboardWorkspace({
               { label: "Schedule" },
             ], { locked: true })}
             {renderMenuGroup("Groups", "groups", [
-              { label: "Create" },
-              { label: "Manage" },
-              { label: "Join", section: "join-groups" },
+              { label: "Groups", section: "join-groups" },
             ])}
           </div>
         </aside>

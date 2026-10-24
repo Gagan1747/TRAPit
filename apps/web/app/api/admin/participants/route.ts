@@ -5,13 +5,16 @@ import { isWebAuthConfigured } from "../../../../lib/auth-config";
 import { listRegisteredDirectoryUsers } from "../../../../lib/cognito";
 import { assertCanCreateGroup, assertCanManageGroup } from "../../../../lib/user-category-limits";
 import {
+  addGroupMemberDirect,
   createGroup,
   createParticipant,
   leaveParticipantGroup,
   listGroupJoinRequestsForAdmin,
+  listGroupMembershipsForActor,
   listParticipantGroupsForOwner,
   listParticipantGroups,
   listParticipants,
+  removeGroupMember,
   resolveGroupJoinRequest,
   syncParticipants,
   updateGroup,
@@ -46,6 +49,19 @@ type ParticipantBody =
     }
   | {
       groupId?: string;
+      mode?: "add-group-member";
+      targetIdentifier?: string;
+      targetLabel?: string;
+    }
+  | {
+      groupId?: string;
+      memberIdentifier?: string;
+      membershipId?: string;
+      mode?: "remove-group-member";
+    }
+  | {
+      groupId?: string;
+      membershipId?: string;
       mode?: "leave-group";
     };
 
@@ -61,6 +77,18 @@ function isUpdateGroupBody(
   return body.mode === "update-group";
 }
 
+function isAddGroupMemberBody(
+  body: ParticipantBody,
+): body is Extract<ParticipantBody, { mode?: "add-group-member" }> {
+  return body.mode === "add-group-member";
+}
+
+function isRemoveGroupMemberBody(
+  body: ParticipantBody,
+): body is Extract<ParticipantBody, { mode?: "remove-group-member" }> {
+  return body.mode === "remove-group-member";
+}
+
 function isResolveRequestBody(
   body: ParticipantBody,
 ): body is Extract<ParticipantBody, { mode?: "resolve-request" }> {
@@ -73,6 +101,27 @@ function isLeaveGroupBody(
   return body.mode === "leave-group";
 }
 
+async function buildParticipantsPayload(actorIdentifier: string | null, participantsOverride?: Awaited<ReturnType<typeof listParticipants>>) {
+  const [participants, participantGroups, groupJoinRequests, memberships] = await Promise.all([
+    participantsOverride ? Promise.resolve(participantsOverride) : listParticipants(),
+    actorIdentifier
+      ? listParticipantGroupsForOwner(actorIdentifier, { includeUnowned: true })
+      : listParticipantGroups(),
+    actorIdentifier ? listGroupJoinRequestsForAdmin(actorIdentifier) : Promise.resolve([]),
+    actorIdentifier
+      ? listGroupMembershipsForActor(actorIdentifier)
+      : Promise.resolve({ joinedGroupMemberships: [], ownedGroupMemberships: [] }),
+  ]);
+
+  return {
+    groupJoinRequests,
+    joinedGroupMemberships: memberships.joinedGroupMemberships,
+    ownedGroupMemberships: memberships.ownedGroupMemberships,
+    participantGroups,
+    participants,
+  };
+}
+
 export async function GET() {
   const actor = await getWorkspaceActor();
 
@@ -80,26 +129,18 @@ export async function GET() {
     return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
   }
 
-  let participantsPromise = listParticipants();
+  let syncedParticipants: Awaited<ReturnType<typeof listParticipants>> | undefined;
 
   if (isWebAuthConfigured()) {
     try {
       const directoryUsers = await listRegisteredDirectoryUsers();
-      participantsPromise = syncParticipants(directoryUsers);
+      syncedParticipants = await syncParticipants(directoryUsers);
     } catch {
-      participantsPromise = listParticipants();
+      syncedParticipants = undefined;
     }
   }
 
-  const [participants, participantGroups, groupJoinRequests] = await Promise.all([
-    participantsPromise,
-    actor.identifier
-      ? listParticipantGroupsForOwner(actor.identifier, { includeUnowned: true })
-      : listParticipantGroups(),
-    actor.identifier ? listGroupJoinRequestsForAdmin(actor.identifier) : Promise.resolve([]),
-  ]);
-
-  return NextResponse.json({ groupJoinRequests, participantGroups, participants });
+  return NextResponse.json(await buildParticipantsPayload(actor.identifier, syncedParticipants));
 }
 
 export async function POST(request: Request) {
@@ -117,25 +158,17 @@ export async function POST(request: Request) {
         assertCanCreateGroup(actor.userCategory);
       }
 
-      if (!body.name?.trim()) {
-        return NextResponse.json({ error: "Group or class name is required." }, { status: 400 });
-      }
-
-      const participantGroups = await createGroup({
+      await createGroup({
         description: body.description,
-        generateInviteLink: body.generateInviteLink,
-        inviteJoinMode: body.inviteJoinMode,
-        name: body.name,
+        generateInviteLink: body.generateInviteLink ?? true,
+        inviteJoinMode: "approval-required",
+        name: body.name ?? "",
         ownerLabel: actor.displayName,
         ownerIdentifier: actor.identifier,
         participantIds: body.participantIds ?? [],
       });
-      const participants = await listParticipants();
-      const groupJoinRequests = actor.identifier
-        ? await listGroupJoinRequestsForAdmin(actor.identifier)
-        : [];
 
-      return NextResponse.json({ groupJoinRequests, participantGroups, participants });
+      return NextResponse.json(await buildParticipantsPayload(actor.identifier));
     }
 
     if (isUpdateGroupBody(body)) {
@@ -147,25 +180,64 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Group id is required." }, { status: 400 });
       }
 
-      if (!body.name?.trim()) {
-        return NextResponse.json({ error: "Group or class name is required." }, { status: 400 });
-      }
-
-      const participantGroups = await updateGroup({
-        generateInviteLink: body.generateInviteLink,
+      await updateGroup({
+        generateInviteLink: body.generateInviteLink ?? true,
         groupId: body.groupId,
-        inviteJoinMode: body.inviteJoinMode,
-        name: body.name,
+        inviteJoinMode: "approval-required",
+        name: body.name ?? "",
         ownerLabel: actor.displayName,
         ownerIdentifier: actor.identifier,
-        participantIds: body.participantIds ?? [],
+        participantIds: body.participantIds,
       });
-      const participants = await listParticipants();
-      const groupJoinRequests = actor.identifier
-        ? await listGroupJoinRequestsForAdmin(actor.identifier)
-        : [];
 
-      return NextResponse.json({ groupJoinRequests, participantGroups, participants });
+      return NextResponse.json(await buildParticipantsPayload(actor.identifier));
+    }
+
+    if (isAddGroupMemberBody(body)) {
+      if (actor.role === "user") {
+        assertCanManageGroup(actor.userCategory);
+      }
+
+      if (!body.groupId?.trim() || !body.targetIdentifier?.trim()) {
+        return NextResponse.json({ error: "Group id and participant are required." }, { status: 400 });
+      }
+
+      if (!actor.identifier) {
+        return NextResponse.json({ error: "Owner identifier is required." }, { status: 400 });
+      }
+
+      await addGroupMemberDirect({
+        groupId: body.groupId,
+        ownerIdentifier: actor.identifier,
+        ownerLabel: actor.displayName,
+        targetIdentifier: body.targetIdentifier,
+        targetLabel: body.targetLabel,
+      });
+
+      return NextResponse.json(await buildParticipantsPayload(actor.identifier));
+    }
+
+    if (isRemoveGroupMemberBody(body)) {
+      if (actor.role === "user") {
+        assertCanManageGroup(actor.userCategory);
+      }
+
+      if (!body.groupId?.trim() || !body.memberIdentifier?.trim()) {
+        return NextResponse.json({ error: "Group id and member identifier are required." }, { status: 400 });
+      }
+
+      if (!actor.identifier) {
+        return NextResponse.json({ error: "Owner identifier is required." }, { status: 400 });
+      }
+
+      await removeGroupMember({
+        groupId: body.groupId,
+        memberIdentifier: body.memberIdentifier,
+        membershipId: body.membershipId,
+        ownerIdentifier: actor.identifier,
+      });
+
+      return NextResponse.json(await buildParticipantsPayload(actor.identifier));
     }
 
     if (isResolveRequestBody(body)) {
@@ -192,8 +264,13 @@ export async function POST(request: Request) {
         decision: body.decision,
         requestId: body.requestId,
       });
+      const memberships = await listGroupMembershipsForActor(actor.identifier);
 
-      return NextResponse.json(payload);
+      return NextResponse.json({
+        ...payload,
+        joinedGroupMemberships: memberships.joinedGroupMemberships,
+        ownedGroupMemberships: memberships.ownedGroupMemberships,
+      });
     }
 
     if (isLeaveGroupBody(body)) {
@@ -205,14 +282,13 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "User identifier is required to leave a group." }, { status: 400 });
       }
 
-      const participantGroups = await leaveParticipantGroup({
+      await leaveParticipantGroup({
         groupId: body.groupId,
+        membershipId: body.membershipId,
         userIdentifier: actor.identifier,
       });
-      const participants = await listParticipants();
-      const groupJoinRequests = await listGroupJoinRequestsForAdmin(actor.identifier);
 
-      return NextResponse.json({ groupJoinRequests, participantGroups, participants });
+      return NextResponse.json(await buildParticipantsPayload(actor.identifier));
     }
 
     if (!("identifier" in body) || !body.identifier?.trim()) {
@@ -223,18 +299,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Participant creation is only available to admins." }, { status: 403 });
     }
 
-    const participants = await createParticipant({
+    await createParticipant({
       identifier: body.identifier,
       label: body.label,
     });
-    const participantGroups = actor.identifier
-      ? await listParticipantGroupsForOwner(actor.identifier, { includeUnowned: true })
-      : await listParticipantGroups();
-    const groupJoinRequests = actor.identifier
-      ? await listGroupJoinRequestsForAdmin(actor.identifier)
-      : [];
 
-    return NextResponse.json({ groupJoinRequests, participantGroups, participants });
+    return NextResponse.json(await buildParticipantsPayload(actor.identifier));
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to update participants." },

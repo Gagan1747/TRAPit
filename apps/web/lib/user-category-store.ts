@@ -297,14 +297,6 @@ export async function createUserCategoryUpgradeRequest(input: {
   }
 
   const state = await readState();
-  const hasPendingRequest = state.requests.some(
-    (request) => request.status === "pending" && matchesUser(request, input),
-  );
-
-  if (hasPendingRequest) {
-    throw new Error("An upgrade request is already pending review.");
-  }
-
   const nextRequest: StoredUserCategoryUpgradeRequest = {
     approvedDurationMonths: null,
     currentCategory: input.currentCategory,
@@ -320,7 +312,10 @@ export async function createUserCategoryUpgradeRequest(input: {
     status: "pending",
   };
 
-  state.requests = [nextRequest, ...state.requests];
+  state.requests = [
+    nextRequest,
+    ...state.requests.filter((request) => !(request.status === "pending" && matchesUser(request, input))),
+  ];
   await writeState(state);
 
   return getUserCategorySnapshot({
@@ -360,6 +355,22 @@ export async function assignUserCategory(input: {
     identifier: input.userIdentifier,
     sub: input.userSub,
   });
+
+  if (input.reason === "manual") {
+    const resolvedAt = new Date().toISOString();
+    state.requests = state.requests.map((request) =>
+      request.status === "pending" && matchesUser(request, { identifier: input.userIdentifier, sub: input.userSub })
+        ? {
+            ...request,
+            approvedDurationMonths: input.category === defaultNormalUserCategory ? null : input.durationMonths,
+            resolvedAt,
+            reviewerDisplayName: input.assignedByDisplayName?.trim() || null,
+            reviewerIdentifier: input.assignedByIdentifier?.trim() || null,
+            status: input.category === defaultNormalUserCategory ? "rejected" : "accepted",
+          }
+        : request,
+    );
+  }
 
   if (input.category !== defaultNormalUserCategory) {
     const assignedAt = new Date();

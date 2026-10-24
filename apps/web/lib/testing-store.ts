@@ -1,6 +1,7 @@
 import "server-only";
 
 import { isAppointmentBusinessProfileComplete } from "./appointment-locations";
+import { matchesGroupShareCode } from "./group-invite-path";
 import { reconcileBrowserNotificationIntents, type BrowserSchedule } from "./notification-store";
 import { formatPhoneNumberForDisplay } from "./privacy";
 
@@ -54,6 +55,8 @@ import {
   summarizeTestHistory,
   type BulkImportPreview,
   type GroupJoinRequest,
+  type GroupMembershipRecord,
+  type GroupMembershipStatus,
   type GameCreatorRole,
   type GameLeaderboardEntry,
   type ObjectiveQuestion,
@@ -515,13 +518,29 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       resolvedAt: request.resolvedAt ?? null,
       status: request.status ?? "pending",
     })),
+    groupMemberships: (parsed.groupMemberships ?? []).map((record) => ({
+      createdAt: record.createdAt ?? new Date().toISOString(),
+      endedAt: record.endedAt ?? null,
+      groupId: record.groupId ?? "",
+      groupName: record.groupName?.trim() ?? "",
+      id: record.id ?? createEntityId("group-membership"),
+      joinedAt: record.joinedAt ?? null,
+      ownerIdentifier: record.ownerIdentifier?.trim() ?? "",
+      ownerLabel: record.ownerLabel?.trim() || record.ownerIdentifier?.trim() || "Owner",
+      requestId: record.requestId ?? null,
+      status: (record.status ?? "member") as GroupMembershipStatus,
+      updatedAt: record.updatedAt ?? record.createdAt ?? new Date().toISOString(),
+      userIdentifier: record.userIdentifier?.trim() ?? "",
+      userLabel: record.userLabel?.trim() || record.userIdentifier?.trim() || "Member",
+    })).filter((record) => record.groupId && record.userIdentifier),
     pollAttempts: parsed.pollAttempts ?? [],
     participantGroups: (parsed.participantGroups ?? []).map((group) => ({
       ...group,
       inviteJoinMode: group.inviteJoinMode ?? "approval-required",
       ownerIdentifier: group.ownerIdentifier?.trim() || null,
+      ownerLabel: group.ownerLabel?.trim() || null,
       participantIds: dedupe(group.participantIds ?? []),
-      shareCode: group.shareCode?.trim() || null,
+      shareCode: group.shareCode?.trim() || `TRAPIT-GROUP-${createEntityId("access").replace(/-/g, "").toUpperCase()}`,
     })),
     participants: parsed.participants ?? [],
     pollQuestions: (parsed.pollQuestions ?? []).map((question) => ({
@@ -591,6 +610,174 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
     workspaceBranding: normalizeWorkspaceBranding(parsed.workspaceBranding),
     workspaceBrandingByActor,
   };
+}
+
+function reconcileGroupMemberships(state: TestingWorkspaceState) {
+  state.groupMemberships ??= [];
+  const participantMap = getParticipantMap(state);
+
+  for (const group of state.participantGroups) {
+    const ownerIdentifier = group.ownerIdentifier?.trim() ?? "";
+    const ownerProfile = ownerIdentifier
+      ? state.participants.find((participant) => identifiersMatch(participant.identifier, ownerIdentifier))
+      : null;
+    const ownerLabel = group.ownerLabel?.trim() || ownerProfile?.label?.trim() || ownerIdentifier || "Creator";
+    if (ownerIdentifier && !group.ownerLabel && ownerProfile?.label) {
+      group.ownerLabel = ownerProfile.label;
+    }
+
+    if (ownerIdentifier) {
+      const hasCreatorRecord = state.groupMemberships.some(
+        (record) => record.groupId === group.id && record.status === "creator" && identifiersMatch(record.userIdentifier, ownerIdentifier),
+      );
+      if (!hasCreatorRecord) {
+        state.groupMemberships.push({
+          createdAt: group.createdAt,
+          endedAt: null,
+          groupId: group.id,
+          groupName: group.name,
+          id: createEntityId("group-membership"),
+          joinedAt: group.createdAt,
+          ownerIdentifier,
+          ownerLabel,
+          requestId: null,
+          status: "creator",
+          updatedAt: group.createdAt,
+          userIdentifier: ownerIdentifier,
+          userLabel: ownerLabel,
+        });
+      }
+    }
+
+    for (const participantId of group.participantIds) {
+      const participant = participantMap.get(participantId);
+      if (!participant) continue;
+      if (ownerIdentifier && identifiersMatch(participant.identifier, ownerIdentifier)) continue;
+      const hasActiveRecord = state.groupMemberships.some(
+        (record) =>
+          record.groupId === group.id
+          && (record.status === "member" || record.status === "creator")
+          && identifiersMatch(record.userIdentifier, participant.identifier),
+      );
+      if (!hasActiveRecord) {
+        state.groupMemberships.push({
+          createdAt: group.updatedAt || group.createdAt,
+          endedAt: null,
+          groupId: group.id,
+          groupName: group.name,
+          id: createEntityId("group-membership"),
+          joinedAt: group.updatedAt || group.createdAt,
+          ownerIdentifier,
+          ownerLabel,
+          requestId: null,
+          status: "member",
+          updatedAt: group.updatedAt || group.createdAt,
+          userIdentifier: participant.identifier,
+          userLabel: participant.label || participant.identifier,
+        });
+      }
+    }
+
+    for (const request of state.groupJoinRequests) {
+      if (request.adminGroupId !== group.id || request.requestType !== "user-request") continue;
+      const existingByRequest = state.groupMemberships.find((record) => record.requestId === request.id);
+      if (existingByRequest) continue;
+      if (request.status === "pending") {
+        const hasPendingRecord = state.groupMemberships.some(
+          (record) =>
+            record.groupId === group.id
+            && record.status === "requested"
+            && identifiersMatch(record.userIdentifier, request.requesterId),
+        );
+        if (!hasPendingRecord) {
+          state.groupMemberships.push({
+            createdAt: request.requestedAt,
+            endedAt: null,
+            groupId: group.id,
+            groupName: group.name,
+            id: createEntityId("group-membership"),
+            joinedAt: null,
+            ownerIdentifier,
+            ownerLabel,
+            requestId: request.id,
+            status: "requested",
+            updatedAt: request.requestedAt,
+            userIdentifier: request.requesterId,
+            userLabel: request.requesterLabel || request.requesterId,
+          });
+        }
+      } else if (request.status === "rejected") {
+        state.groupMemberships.push({
+          createdAt: request.requestedAt,
+          endedAt: request.resolvedAt ?? request.requestedAt,
+          groupId: group.id,
+          groupName: group.name,
+          id: createEntityId("group-membership"),
+          joinedAt: null,
+          ownerIdentifier,
+          ownerLabel,
+          requestId: request.id,
+          status: "rejected",
+          updatedAt: request.resolvedAt ?? request.requestedAt,
+          userIdentifier: request.requesterId,
+          userLabel: request.requesterLabel || request.requesterId,
+        });
+      }
+    }
+
+    for (const record of state.groupMemberships) {
+      if (record.groupId === group.id) {
+        record.groupName = group.name;
+        if (ownerIdentifier) {
+          record.ownerIdentifier = ownerIdentifier;
+          record.ownerLabel = ownerLabel;
+        }
+      }
+    }
+  }
+
+  return state.groupMemberships;
+}
+
+function refreshScheduledAssessmentsForGroup(state: TestingWorkspaceState, groupId: string) {
+  const participantMap = getParticipantMap(state);
+  state.scheduledTests = state.scheduledTests.map((test) => {
+    if (!test.participantGroupIds.includes(groupId)) return test;
+    if (resolveScheduledTestStatus(test, state.attempts, test.id) === "completed") return test;
+    return {
+      ...test,
+      resolvedParticipantIdentifiers: resolveParticipantIdentifiers(
+        state,
+        test.participantIds,
+        test.participantGroupIds,
+      ),
+    };
+  });
+
+  const group = state.participantGroups.find((entry) => entry.id === groupId);
+  if (!group) return;
+  const activeGroupParticipants = group.participantIds
+    .map((id) => participantMap.get(id))
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
+  state.games = state.games.map((game) => {
+    const gameGroupIds = game.participantGroupIds?.length ? game.participantGroupIds : [game.participantGroupId];
+    if (!gameGroupIds.includes(groupId) || getGameStatus(game) === "completed") return game;
+    const nextParticipants = [...game.participants];
+    for (const member of activeGroupParticipants) {
+      if (!nextParticipants.some((entry) => identifiersMatch(entry.identifier, member.identifier))) {
+        nextParticipants.push({
+          acceptedAt: null,
+          identifier: normalizeParticipantIdentifier(member.identifier),
+          label: member.label || member.identifier,
+        });
+      }
+    }
+    return {
+      ...game,
+      participants: nextParticipants,
+    };
+  });
 }
 
 export async function getOrCreateWorkspaceAppointmentShareCode(actorKey?: string | null) {
@@ -2386,32 +2573,34 @@ export async function createGroup(input: {
   ownerIdentifier: string | null;
   participantIds: string[];
 }) {
-  assertAssessmentName(input.name, "Group name");
+  const trimmedName = input.name.trim();
+  if (Array.from(trimmedName).length > 30) {
+    throw new Error("Group name must not exceed 30 characters.");
+  }
   const state = await readStore();
-  const shouldCreateInvites = Boolean(input.ownerIdentifier);
+  reconcileGroupMemberships(state);
+  const ownerProfile = input.ownerIdentifier
+    ? ensureParticipantProfile(state, {
+        identifier: input.ownerIdentifier,
+        label: input.ownerLabel ?? input.ownerIdentifier,
+      })
+    : null;
+  const directParticipantIds = dedupe([
+    ...(ownerProfile ? [ownerProfile.id] : []),
+    ...input.participantIds,
+  ]);
   const group = createParticipantGroup({
     description: input.description,
-    inviteJoinMode: input.inviteJoinMode,
-    name: input.name,
+    inviteJoinMode: "approval-required",
+    name: trimmedName,
     ownerIdentifier: input.ownerIdentifier,
-    participantIds: shouldCreateInvites ? [] : input.participantIds,
-    shareCode: input.generateInviteLink
-      ? `TRAPIT-GROUP-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
-      : null,
+    ownerLabel: input.ownerLabel ?? ownerProfile?.label ?? input.ownerIdentifier,
+    participantIds: directParticipantIds,
+    shareCode: `TRAPIT-GROUP-${createEntityId("access").replace(/-/g, "").toUpperCase()}`,
   });
 
-  if (shouldCreateInvites && input.ownerIdentifier) {
-    const inviteRequests = createAdminInviteRequests(state, {
-      adminIdentifier: input.ownerIdentifier,
-      adminLabel: input.ownerLabel,
-      group,
-      participantIds: input.participantIds,
-    });
-
-    state.groupJoinRequests = [...inviteRequests, ...state.groupJoinRequests];
-  }
-
   state.participantGroups = [group, ...state.participantGroups];
+  reconcileGroupMemberships(state);
   await writeStore(state);
 
   return state.participantGroups;
@@ -2424,15 +2613,19 @@ export async function updateGroup(input: {
   name: string;
   ownerLabel?: string | null;
   ownerIdentifier: string | null;
-  participantIds: string[];
+  participantIds?: string[];
 }) {
   const state = await readStore();
+  reconcileGroupMemberships(state);
   const existingGroup = state.participantGroups.find((group) => group.id === input.groupId);
 
   if (!existingGroup) {
     throw new Error("Group not found.");
   }
-  if (input.name.trim() !== existingGroup.name) assertAssessmentName(input.name, "Group name");
+  const trimmedName = input.name.trim();
+  if (Array.from(trimmedName).length > 30) {
+    throw new Error("Group name must not exceed 30 characters.");
+  }
 
   if (
     existingGroup.ownerIdentifier &&
@@ -2443,42 +2636,186 @@ export async function updateGroup(input: {
   }
 
   const timestamp = new Date().toISOString();
-  const shouldCreateInvites = Boolean(existingGroup.ownerIdentifier ?? input.ownerIdentifier);
-  const nextParticipantIds = shouldCreateInvites
-    ? existingGroup.participantIds.filter((participantId) => input.participantIds.includes(participantId))
-    : dedupe(input.participantIds);
-
-  if (shouldCreateInvites && (existingGroup.ownerIdentifier ?? input.ownerIdentifier)) {
-    const inviteRequests = createAdminInviteRequests(state, {
-      adminIdentifier: existingGroup.ownerIdentifier ?? input.ownerIdentifier ?? "",
-      adminLabel: input.ownerLabel,
-      group: {
-        ...existingGroup,
-        name: input.name.trim(),
-        participantIds: nextParticipantIds,
-      },
-      participantIds: input.participantIds.filter((participantId) => !existingGroup.participantIds.includes(participantId)),
-    });
-
-    state.groupJoinRequests = [...inviteRequests, ...state.groupJoinRequests];
-  }
+  const nextParticipantIds = input.participantIds !== undefined
+    ? dedupe(input.participantIds)
+    : existingGroup.participantIds;
 
   state.participantGroups = state.participantGroups.map((group) =>
     group.id === input.groupId
       ? {
           ...group,
-          inviteJoinMode: input.inviteJoinMode ?? group.inviteJoinMode,
-          name: input.name.trim(),
+          inviteJoinMode: "approval-required",
+          name: trimmedName,
           ownerIdentifier: group.ownerIdentifier ?? input.ownerIdentifier,
+          ownerLabel: input.ownerLabel?.trim() || group.ownerLabel || group.ownerIdentifier,
           participantIds: nextParticipantIds,
-          shareCode: input.generateInviteLink
-            ? group.shareCode ?? `TRAPIT-GROUP-${createEntityId("access").replace(/-/g, "").toUpperCase()}`
-            : null,
+          shareCode: group.shareCode ?? `TRAPIT-GROUP-${createEntityId("access").replace(/-/g, "").toUpperCase()}`,
           updatedAt: timestamp,
         }
       : group,
   );
 
+  reconcileGroupMemberships(state);
+  refreshScheduledAssessmentsForGroup(state, existingGroup.id);
+  await writeStore(state);
+
+  return state.participantGroups;
+}
+
+export async function addGroupMemberDirect(input: {
+  groupId: string;
+  ownerIdentifier: string;
+  ownerLabel?: string | null;
+  targetIdentifier: string;
+  targetLabel?: string | null;
+}) {
+  const state = await readStore();
+  reconcileGroupMemberships(state);
+  const group = state.participantGroups.find((entry) => entry.id === input.groupId);
+
+  if (!group) {
+    throw new Error("Group not found.");
+  }
+
+  if (!group.ownerIdentifier || !identifiersMatch(group.ownerIdentifier, input.ownerIdentifier)) {
+    throw new Error("You can only add members to groups you created.");
+  }
+
+  const participant = ensureParticipantProfile(state, {
+    identifier: input.targetIdentifier,
+    label: input.targetLabel?.trim() || input.targetIdentifier,
+  });
+  const participantMap = getParticipantMap(state);
+  const isAlreadyActive = group.participantIds.some((participantId) => {
+    const existing = participantMap.get(participantId);
+    return existing
+      ? identifiersMatch(existing.identifier, participant.identifier)
+        && !identifiersMatch(existing.identifier, group.ownerIdentifier ?? "")
+      : false;
+  }) || identifiersMatch(group.ownerIdentifier, participant.identifier);
+
+  if (isAlreadyActive) {
+    throw new Error("This user is already a member of the group.");
+  }
+
+  const timestamp = new Date().toISOString();
+  state.participantGroups = state.participantGroups.map((entry) =>
+    entry.id === group.id
+      ? {
+          ...entry,
+          participantIds: dedupe([...entry.participantIds, participant.id]),
+          updatedAt: timestamp,
+        }
+      : entry,
+  );
+
+  const pendingMembership = state.groupMemberships?.find(
+    (record) =>
+      record.groupId === group.id
+      && record.status === "requested"
+      && identifiersMatch(record.userIdentifier, participant.identifier),
+  );
+
+  if (pendingMembership) {
+    pendingMembership.status = "member";
+    pendingMembership.joinedAt = timestamp;
+    pendingMembership.updatedAt = timestamp;
+    pendingMembership.userLabel = participant.label || participant.identifier;
+  } else {
+    state.groupMemberships = [
+      ...(state.groupMemberships ?? []),
+      {
+        createdAt: timestamp,
+        endedAt: null,
+        groupId: group.id,
+        groupName: group.name,
+        id: createEntityId("group-membership"),
+        joinedAt: timestamp,
+        ownerIdentifier: group.ownerIdentifier,
+        ownerLabel: input.ownerLabel?.trim() || group.ownerLabel || group.ownerIdentifier,
+        requestId: null,
+        status: "member",
+        updatedAt: timestamp,
+        userIdentifier: participant.identifier,
+        userLabel: participant.label || participant.identifier,
+      },
+    ];
+  }
+
+  state.groupJoinRequests = state.groupJoinRequests.map((request) =>
+    request.adminGroupId === group.id
+    && identifiersMatch(request.requesterId, participant.identifier)
+    && request.status === "pending"
+      ? {
+          ...request,
+          resolvedAt: timestamp,
+          status: "accepted",
+        }
+      : request,
+  );
+
+  refreshScheduledAssessmentsForGroup(state, group.id);
+  await writeStore(state);
+
+  return state.participantGroups;
+}
+
+export async function removeGroupMember(input: {
+  groupId: string;
+  memberIdentifier: string;
+  membershipId?: string | null;
+  ownerIdentifier: string;
+}) {
+  const state = await readStore();
+  reconcileGroupMemberships(state);
+  const group = state.participantGroups.find((entry) => entry.id === input.groupId);
+
+  if (!group) {
+    throw new Error("Group not found.");
+  }
+
+  if (!group.ownerIdentifier || !identifiersMatch(group.ownerIdentifier, input.ownerIdentifier)) {
+    throw new Error("You can only remove members from groups you created.");
+  }
+
+  if (identifiersMatch(group.ownerIdentifier, input.memberIdentifier)) {
+    throw new Error("The group creator cannot be removed.");
+  }
+
+  const participantMap = getParticipantMap(state);
+  const participantIdsToRemove = group.participantIds.filter((participantId) => {
+    const participant = participantMap.get(participantId);
+    return participant ? identifiersMatch(participant.identifier, input.memberIdentifier) : false;
+  });
+
+  const timestamp = new Date().toISOString();
+  state.participantGroups = state.participantGroups.map((entry) =>
+    entry.id === group.id
+      ? {
+          ...entry,
+          participantIds: entry.participantIds.filter((participantId) => !participantIdsToRemove.includes(participantId)),
+          updatedAt: timestamp,
+        }
+      : entry,
+  );
+
+  let didMarkRemoved = false;
+  state.groupMemberships = (state.groupMemberships ?? []).map((record) => {
+    if (didMarkRemoved) return record;
+    const matchesRecord = input.membershipId
+      ? record.id === input.membershipId
+      : record.groupId === group.id && record.status === "member" && identifiersMatch(record.userIdentifier, input.memberIdentifier);
+    if (!matchesRecord) return record;
+    didMarkRemoved = true;
+    return {
+      ...record,
+      endedAt: timestamp,
+      status: "removed",
+      updatedAt: timestamp,
+    };
+  });
+
+  refreshScheduledAssessmentsForGroup(state, group.id);
   await writeStore(state);
 
   return state.participantGroups;
@@ -2486,9 +2823,11 @@ export async function updateGroup(input: {
 
 export async function leaveParticipantGroup(input: {
   groupId: string;
+  membershipId?: string | null;
   userIdentifier: string;
 }) {
   const state = await readStore();
+  reconcileGroupMemberships(state);
   const group = state.participantGroups.find((entry) => entry.id === input.groupId);
 
   if (!group) {
@@ -2521,9 +2860,50 @@ export async function leaveParticipantGroup(input: {
       : entry,
   );
 
+  let didMarkLeft = false;
+  state.groupMemberships = (state.groupMemberships ?? []).map((record) => {
+    if (didMarkLeft) return record;
+    const matchesRecord = input.membershipId
+      ? record.id === input.membershipId
+      : record.groupId === group.id && record.status === "member" && identifiersMatch(record.userIdentifier, input.userIdentifier);
+    if (!matchesRecord) return record;
+    didMarkLeft = true;
+    return {
+      ...record,
+      endedAt: timestamp,
+      status: "left",
+      updatedAt: timestamp,
+    };
+  });
+
+  refreshScheduledAssessmentsForGroup(state, group.id);
   await writeStore(state);
 
   return listParticipantGroupsForOwner(input.userIdentifier, { includeUnowned: true });
+}
+
+export async function listGroupMembershipsForActor(actorIdentifier: string) {
+  const state = await readStore();
+  const records = reconcileGroupMemberships(state);
+  const ownedGroupIds = new Set(
+    state.participantGroups
+      .filter((group) => isGroupOwnedBy(group, actorIdentifier))
+      .map((group) => group.id),
+  );
+
+  const joinedGroupMemberships = records.filter(
+    (record) =>
+      !ownedGroupIds.has(record.groupId)
+      && record.status !== "creator"
+      && identifiersMatch(record.userIdentifier, actorIdentifier),
+  );
+
+  const ownedGroupMemberships = records.filter((record) => ownedGroupIds.has(record.groupId));
+
+  return {
+    joinedGroupMemberships,
+    ownedGroupMemberships,
+  };
 }
 
 export async function listGroupJoinRequestsForAdmin(adminIdentifier: string) {
@@ -2551,6 +2931,7 @@ export async function createGroupJoinRequest(input: {
   requesterLabel: string;
 }) {
   const state = await readStore();
+  reconcileGroupMemberships(state);
   const normalizedRequesterId = normalizeParticipantIdentifier(input.requesterId);
   const group = state.participantGroups.find((entry) => entry.id === input.adminGroupId);
 
@@ -2584,16 +2965,39 @@ export async function createGroupJoinRequest(input: {
     throw new Error("A request for this group is already pending.");
   }
 
+  const ownerProfile = state.participants.find((participant) =>
+    identifiersMatch(participant.identifier, group.ownerIdentifier ?? ""),
+  );
+  const ownerLabel = input.adminLabel?.trim() || group.ownerLabel || ownerProfile?.label || group.ownerIdentifier;
+
   const request = createStoredGroupJoinRequest({
     adminGroupId: group.id,
     adminIdentifier: group.ownerIdentifier,
     adminGroupName: group.name,
-    adminLabel: input.adminLabel?.trim() || group.ownerIdentifier,
+    adminLabel: ownerLabel,
     requesterId: normalizedRequesterId,
     requesterLabel: input.requesterLabel.trim() || normalizedRequesterId,
   });
 
   state.groupJoinRequests = [request, ...state.groupJoinRequests];
+  state.groupMemberships = [
+    ...(state.groupMemberships ?? []),
+    {
+      createdAt: request.requestedAt,
+      endedAt: null,
+      groupId: group.id,
+      groupName: group.name,
+      id: createEntityId("group-membership"),
+      joinedAt: null,
+      ownerIdentifier: group.ownerIdentifier,
+      ownerLabel,
+      requestId: request.id,
+      status: "requested",
+      updatedAt: request.requestedAt,
+      userIdentifier: normalizedRequesterId,
+      userLabel: input.requesterLabel.trim() || normalizedRequesterId,
+    },
+  ];
   await writeStore(state);
 
   return request;
@@ -2623,19 +3027,6 @@ export async function requestParticipantGroupAccess(input: {
     throw new Error("You are already part of this group.");
   }
 
-  if (group.inviteJoinMode === "automatic") {
-    await addParticipantToGroup(state, {
-      groupId: group.id,
-      participantIdentifier: normalizedRequesterId,
-      participantLabel: input.requesterLabel,
-    });
-    await writeStore(state);
-
-    return {
-      mode: "automatic" as const,
-    };
-  }
-
   await createGroupJoinRequest({
     adminGroupId: group.id,
     requesterId: normalizedRequesterId,
@@ -2652,9 +3043,9 @@ export async function getParticipantGroupInviteByShareCode(
   viewerIdentifier?: string | null,
 ) {
   const state = await readStore();
-  const normalizedShareCode = shareCode.trim().toUpperCase();
-  const group = state.participantGroups.find(
-    (entry) => entry.shareCode?.trim().toUpperCase() === normalizedShareCode,
+  reconcileGroupMemberships(state);
+  const group = state.participantGroups.find((entry) =>
+    matchesGroupShareCode(entry.shareCode, shareCode, entry.name),
   );
 
   if (!group) {
@@ -2672,7 +3063,7 @@ export async function getParticipantGroupInviteByShareCode(
         return participant
           ? identifiersMatch(participant.identifier, normalizedViewerIdentifier)
           : false;
-      })
+      }) || Boolean(group.ownerIdentifier && identifiersMatch(group.ownerIdentifier, normalizedViewerIdentifier))
     : false;
   const latestRequest = normalizedViewerIdentifier
     ? state.groupJoinRequests.find(
@@ -2691,7 +3082,7 @@ export async function getParticipantGroupInviteByShareCode(
     group: {
       description: group.description,
       id: group.id,
-      inviteJoinMode: group.inviteJoinMode,
+      inviteJoinMode: "approval-required" as const,
       name: group.name,
       ownerIdentifier: group.ownerIdentifier,
       shareCode: group.shareCode,
@@ -2704,24 +3095,10 @@ export async function requestParticipantGroupAccessByShareCode(input: {
   requesterLabel: string;
   shareCode: string;
 }) {
-  const state = await readStore();
   const invite = await getParticipantGroupInviteByShareCode(input.shareCode, input.requesterId);
 
   if (invite.access.isGroupMember) {
     throw new Error("You are already part of this group.");
-  }
-
-  if (invite.group.inviteJoinMode === "automatic") {
-    await addParticipantToGroup(state, {
-      groupId: invite.group.id,
-      participantIdentifier: input.requesterId,
-      participantLabel: input.requesterLabel,
-    });
-    await writeStore(state);
-
-    return {
-      mode: "automatic" as const,
-    };
   }
 
   await createGroupJoinRequest({
@@ -2772,19 +3149,6 @@ export async function requestScheduledPollAccessByShareCode(input: {
     throw new Error("You are already part of this group.");
   }
 
-  if (group.inviteJoinMode === "automatic") {
-    await addParticipantToGroup(state, {
-      groupId: group.id,
-      participantIdentifier: input.requesterId,
-      participantLabel: input.requesterLabel,
-    });
-    await writeStore(state);
-
-    return {
-      mode: "automatic" as const,
-    };
-  }
-
   await createGroupJoinRequest({
     adminGroupId: group.id,
     requesterId: input.requesterId,
@@ -2802,8 +3166,11 @@ export async function resolveGroupJoinRequest(input: {
   requestId: string;
 }) {
   const state = await readStore();
+  reconcileGroupMemberships(state);
   const normalizedAdminIdentifier = normalizeParticipantIdentifier(input.adminIdentifier);
-  const request = state.groupJoinRequests.find((entry) => entry.id === input.requestId);
+  const membershipById = state.groupMemberships?.find((entry) => entry.id === input.requestId);
+  const resolvedRequestId = membershipById?.requestId ?? input.requestId;
+  const request = state.groupJoinRequests.find((entry) => entry.id === resolvedRequestId);
 
   if (!request) {
     throw new Error("Request not found.");
@@ -2822,10 +3189,9 @@ export async function resolveGroupJoinRequest(input: {
   }
 
   const timestamp = new Date().toISOString();
+  const group = state.participantGroups.find((entry) => entry.id === request.adminGroupId);
 
   if (input.decision === "accept") {
-    const group = state.participantGroups.find((entry) => entry.id === request.adminGroupId);
-
     if (!group) {
       throw new Error("The selected group could not be found.");
     }
@@ -2855,6 +3221,27 @@ export async function resolveGroupJoinRequest(input: {
         }
       : entry,
   );
+
+  let didResolveMembership = false;
+  state.groupMemberships = (state.groupMemberships ?? []).map((record) => {
+    if (didResolveMembership) return record;
+    const matchesRequest = record.requestId === request.id
+      || record.id === input.requestId
+      || (record.groupId === request.adminGroupId && record.status === "requested" && identifiersMatch(record.userIdentifier, request.requesterId));
+    if (!matchesRequest) return record;
+    didResolveMembership = true;
+    return {
+      ...record,
+      endedAt: input.decision === "reject" ? timestamp : null,
+      joinedAt: input.decision === "accept" ? timestamp : null,
+      status: input.decision === "accept" ? "member" : "rejected",
+      updatedAt: timestamp,
+    };
+  });
+
+  if (group) {
+    refreshScheduledAssessmentsForGroup(state, group.id);
+  }
 
   await writeStore(state);
 

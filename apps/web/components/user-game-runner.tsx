@@ -553,11 +553,12 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
 
 function GameLeaderboard({ game }: { game: GameState }) {
   const durationLabel = `${game.resultMetadata.durationMinutes} min`;
+  const isCompleted = game.status === "completed";
   return (
     <aside className="workspace-card game-leaderboard-panel test-results-leaderboard">
       <p className="eyebrow">Leaderboard</p>
       <h2>
-        {game.status === "completed"
+        {isCompleted
           ? `Final standings (${game.resultMetadata.submittedCount}/${game.resultMetadata.sharedCount})`
           : "Live leaderboard"}
       </h2>
@@ -571,17 +572,21 @@ function GameLeaderboard({ game }: { game: GameState }) {
           const incorrectUnansweredCount = entry.incorrectUnansweredCount ?? 0;
           return (
             <div className={`game-leaderboard-row test-results-leaderboard-row${entry.isSelf ? " is-self is-current-participant" : ""}`} aria-current={entry.isSelf ? "true" : undefined} style={entry.isSelf ? { background: "var(--surface-soft, #eef6ff)", border: "2px solid currentColor" } : undefined} key={entry.participantIdentifier}>
-              <strong>#{entry.rank} {entry.participantLabel}{entry.isSelf ? " (You)" : ""}</strong>
-              <span>
-                {entry.maskedIdentifier || "—"}
-                <br />
-                <span className="test-results-leaderboard-time">{formatElapsedTime(entry.elapsedMs ?? 0)} ({durationLabel})</span>
-              </span>
-              <span>
-                {entry.points} pts
-                <br />
-                <span className="muted-text">(+{correctCount} / -{incorrectUnansweredCount})</span>
-              </span>
+              <div className="test-results-leaderboard-left">
+                <strong>#{entry.rank} {entry.participantLabel}{entry.isSelf ? " (You)" : ""}</strong>
+                {isCompleted ? (
+                  <>
+                    <span className="test-results-leaderboard-meta">{entry.maskedIdentifier || "—"}</span>
+                    <span className="test-results-leaderboard-time">{formatElapsedTime(entry.elapsedMs ?? 0)} ({durationLabel})</span>
+                  </>
+                ) : null}
+              </div>
+              <div className="test-results-leaderboard-right">
+                <strong>{entry.points} pts</strong>
+                {isCompleted ? (
+                  <span className="test-results-leaderboard-meta">(+{correctCount} / -{incorrectUnansweredCount})</span>
+                ) : null}
+              </div>
               {recentDelta ? (
                 <span className="game-score-flash">
                   {`Answered (${recentDelta.points >= 0 ? "+" : ""}${recentDelta.points})`}

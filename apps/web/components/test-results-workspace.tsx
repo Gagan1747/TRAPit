@@ -201,17 +201,15 @@ export function TestResultsContent({ payload }: { payload: TestResultsPayload })
             <div className="game-leaderboard-list">
               {payload.participants.map((participant, index) => (
                 <div className={`game-leaderboard-row test-results-leaderboard-row${participant.isCurrentParticipant ? " is-current-participant" : ""}`} aria-current={participant.isCurrentParticipant ? "true" : undefined} key={`${participant.rank}-${participant.manualName}-${index}`}>
-                  <strong>#{participant.rank} {participant.manualName}{participant.isCurrentParticipant ? " (You)" : ""}</strong>
-                  <span>
-                    {participant.maskedIdentifier}
-                    <br />
+                  <div className="test-results-leaderboard-left">
+                    <strong>#{participant.rank} {participant.manualName}{participant.isCurrentParticipant ? " (You)" : ""}</strong>
+                    <span className="test-results-leaderboard-meta">{participant.maskedIdentifier}</span>
                     <span className="test-results-leaderboard-time">{formatElapsedTime(participant.elapsedMs)} ({duration})</span>
-                  </span>
-                  <span>
-                    {participant.marks} marks
-                    <br />
-                    <span className="muted-text">(+{participant.correctCount} / -{participant.incorrectCount + participant.unansweredCount})</span>
-                  </span>
+                  </div>
+                  <div className="test-results-leaderboard-right">
+                    <strong>{participant.marks} marks</strong>
+                    <span className="test-results-leaderboard-meta">(+{participant.correctCount} / -{participant.incorrectCount + participant.unansweredCount})</span>
+                  </div>
                 </div>
               ))}
             </div>

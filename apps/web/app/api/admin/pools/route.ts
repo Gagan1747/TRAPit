@@ -29,21 +29,15 @@ function getPoolCreationCapability(
   pools: Array<{ createdBy: string | null }>,
   actor: NonNullable<Awaited<ReturnType<typeof getWorkspaceActor>>>,
 ) {
-  if (actor.role !== "user") {
-    return { canCreate: true, limit: null, ownedCount: pools.length, reason: null };
-  }
-
-  const definition = getNormalUserCategoryDefinition(actor.userCategory);
-  const ownedCount = pools.filter((pool) => pool.createdBy === actor.sub).length;
-  const canCreate = ownedCount < definition.test.maxQuestionPools;
+  const ownedCount = actor.role === "user"
+    ? pools.filter((pool) => pool.createdBy === actor.sub).length
+    : pools.length;
 
   return {
-    canCreate,
-    limit: definition.test.maxQuestionPools,
+    canCreate: true,
+    limit: null,
     ownedCount,
-    reason: canCreate
-      ? null
-      : `Question pool limit reached (${ownedCount}/${definition.test.maxQuestionPools}).`,
+    reason: null,
   };
 }
 

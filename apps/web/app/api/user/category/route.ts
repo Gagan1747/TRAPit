@@ -6,7 +6,7 @@ import { createUserCategoryUpgradeRequest, getUserCategorySnapshot } from "../..
 export async function GET(request: Request) {
   const actor = await getWorkspaceActor(request);
 
-  if (!actor || actor.role !== "user") {
+  if (!actor) {
     return NextResponse.json({ error: "User access is required." }, { status: 403 });
   }
 
@@ -23,7 +23,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const actor = await getWorkspaceActor(request);
 
-  if (!actor || actor.role !== "user") {
+  if (!actor) {
     return NextResponse.json({ error: "User access is required." }, { status: 403 });
   }
 
