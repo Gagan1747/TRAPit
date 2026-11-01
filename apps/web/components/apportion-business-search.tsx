@@ -8,7 +8,13 @@ import { buildApportionBookingPath } from "../lib/apportion-booking-path";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
 import { FloatingWindowCloseButton } from "./floating-window-close-button";
 
-type Business = { name: string; ownerIdentifier: string; appointmentShareCode: string };
+type Business = {
+  name: string;
+  ownerIdentifier: string;
+  appointmentShareCode: string;
+  profileImageDataUrl?: string | null;
+  imageDataUrl?: string | null;
+};
 
 export function ApportionBusinessSearch({ businesses, onClose }: { businesses: Business[]; onClose: () => void }) {
   const [query, setQuery] = useState("");
@@ -68,15 +74,30 @@ export function ApportionBusinessSearch({ businesses, onClose }: { businesses: B
               <input autoComplete="off" id="apportion-business-query" ref={inputRef} type="search" value={query} onChange={(event) => setQuery(event.target.value)} />
             </div>
           </div>
-          <ul className="apportion-business-search-results">
-            {results.map((business) => (
-              <li key={`${business.ownerIdentifier}::${business.appointmentShareCode}`}>
-                <a href={buildApportionBookingPath(business.appointmentShareCode, undefined, business.name)} target="_blank" rel="noopener noreferrer">
-                  <span><strong>{business.name}</strong><span>{formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true })}</span></span>
-                  <ArrowRight aria-hidden="true" size={20} />
-                </a>
-              </li>
-            ))}
+          <ul className="apportion-business-search-results apportion-business-card-grid">
+            {results.map((business) => {
+              const avatarSrc = business.profileImageDataUrl || business.imageDataUrl || "/trapit-logo.jpeg";
+              return (
+                <li className="apportion-business-card-item" key={`${business.ownerIdentifier}::${business.appointmentShareCode}`}>
+                  <a
+                    className="apportion-business-card"
+                    href={buildApportionBookingPath(business.appointmentShareCode, undefined, business.name)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <img
+                      alt={business.name}
+                      className="apportion-business-card-avatar"
+                      src={avatarSrc}
+                    />
+                    <span className="apportion-business-card-details">
+                      <strong>{business.name}</strong>
+                      <span>{formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true })}</span>
+                    </span>
+                  </a>
+                </li>
+              );
+            })}
           </ul>
           {!results.length ? <p className="muted-text" role="status">No businesses found.</p> : null}
           {searchError ? <p className="form-error" role="alert">{searchError}</p> : null}

@@ -1734,6 +1734,8 @@ export function AdminQuestionWorkspace({
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [editingQuestionDraft, setEditingQuestionDraft] = useState<EditableQuestionDraft | null>(null);
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
+  const [isEditingQuestionPool, setIsEditingQuestionPool] = useState(false);
+  const [poolQuestionDrafts, setPoolQuestionDrafts] = useState<Record<string, EditableQuestionDraft>>({});
   const [feedback, setFeedback] = useState<string | null>(null);
   const [groupFeedback, setGroupFeedback] = useState<string | null>(null);
   const [groupGenerateInviteLink, setGroupGenerateInviteLink] = useState(false);
@@ -1744,6 +1746,8 @@ export function AdminQuestionWorkspace({
   const [groupNameDrafts, setGroupNameDrafts] = useState<Record<string, string>>({});
   const [groupMemberSearchByGroupId, setGroupMemberSearchByGroupId] = useState<Record<string, string>>({});
   const [groupQrCodes, setGroupQrCodes] = useState<Record<string, string>>({});
+  const [groupAttendanceOffsetByRecordId, setGroupAttendanceOffsetByRecordId] = useState<Record<string, number>>({});
+  const [groupIntroAdminPhoneByRecordId, setGroupIntroAdminPhoneByRecordId] = useState<Record<string, string>>({});
   const [isContactUsOpen, setIsContactUsOpen] = useState(false);
   const [superAdminUpgradePendingRow, setSuperAdminUpgradePendingRow] = useState<{
     identifier: string;
@@ -2338,7 +2342,21 @@ export function AdminQuestionWorkspace({
 
   useEffect(() => {
     let isMounted = true;
-    const groupsWithShareCodes = participantGroups.filter((group) => group.shareCode);
+    const resolveEffectiveGroupShareCode = (group: ParticipantGroup) => {
+      if (currentAdminIdentifier && group.ownerIdentifier && participantIdentifiersMatch(group.ownerIdentifier, currentAdminIdentifier)) {
+        return group.shareCode ?? "";
+      }
+      if (currentAdminIdentifier && group.adminShareCodesByIdentifier) {
+        const adminEntry = Object.entries(group.adminShareCodesByIdentifier).find(([adminId]) =>
+          participantIdentifiersMatch(adminId, currentAdminIdentifier),
+        );
+        if (adminEntry?.[1]) {
+          return adminEntry[1];
+        }
+      }
+      return group.shareCode ?? "";
+    };
+    const groupsWithShareCodes = participantGroups.filter((group) => resolveEffectiveGroupShareCode(group));
 
     if (!groupsWithShareCodes.length) {
       setGroupQrCodes({});
@@ -2350,7 +2368,7 @@ export function AdminQuestionWorkspace({
     void Promise.all(
       groupsWithShareCodes.map(async (group) => [
         group.id,
-        await QRCode.toDataURL(getGroupAccessUrl(group.shareCode ?? "", group.name), { margin: 1, width: 512 }),
+        await QRCode.toDataURL(getGroupAccessUrl(resolveEffectiveGroupShareCode(group), group.name), { margin: 1, width: 512 }),
       ] as const),
     ).then((entries) => {
       if (!isMounted) {
@@ -2363,7 +2381,7 @@ export function AdminQuestionWorkspace({
     return () => {
       isMounted = false;
     };
-  }, [participantGroups]);
+  }, [participantGroups, currentAdminIdentifier]);
 
   function getGroupAccessUrl(shareCode: string, groupNameValue?: string | null) {
     if (!shareCode.trim()) {
@@ -3534,6 +3552,117 @@ export function AdminQuestionWorkspace({
     })();
   }
 
+  function handleStartEditingQuestionPool() {
+    const nextDrafts: Record<string, EditableQuestionDraft> = {};
+    for (const question of filteredQuestionBankQuestions) {
+      if (question.canManage) {
+        nextDrafts[question.id] = {
+          correctOptionIndex: question.correctOptionIndex,
+          options: [...question.options],
+          prompt: question.prompt,
+        };
+      }
+    }
+    setPoolQuestionDrafts(nextDrafts);
+    setIsEditingQuestionPool(true);
+    setFeedback(null);
+  }
+
+  function handleCancelEditingQuestionPool() {
+    setIsEditingQuestionPool(false);
+    setPoolQuestionDrafts({});
+  }
+
+  function handlePoolQuestionOptionCountChange(questionId: string, optionCount: 4 | 5) {
+    setPoolQuestionDrafts((currentDrafts) => {
+      const currentDraft = currentDrafts[questionId];
+      if (!currentDraft) return currentDrafts;
+      const nextOptions = [...currentDraft.options];
+      while (nextOptions.length < optionCount) {
+        nextOptions.push("");
+      }
+      const trimmedOptions = nextOptions.slice(0, optionCount);
+      return {
+        ...currentDrafts,
+        [questionId]: {
+          ...currentDraft,
+          correctOptionIndex: Math.min(currentDraft.correctOptionIndex, optionCount - 1),
+          options: trimmedOptions,
+        },
+      };
+    });
+  }
+
+  function updatePoolQuestionOption(questionId: string, optionIndex: number, value: string) {
+    setPoolQuestionDrafts((currentDrafts) => {
+      const currentDraft = currentDrafts[questionId];
+      if (!currentDraft) return currentDrafts;
+      return {
+        ...currentDrafts,
+        [questionId]: {
+          ...currentDraft,
+          options: currentDraft.options.map((option, index) => (index === optionIndex ? value : option)),
+        },
+      };
+    });
+  }
+
+  function handleSaveEditedQuestionPool() {
+    const updates = Object.entries(poolQuestionDrafts).map(([questionId, draft]) => ({
+      draft,
+      questionId,
+    }));
+
+    if (!updates.length) {
+      setIsEditingQuestionPool(false);
+      return;
+    }
+
+    for (const item of updates) {
+      const validationError = validateQuestionDraft(item.draft);
+      if (validationError) {
+        setFeedback(validationError);
+        return;
+      }
+    }
+
+    void mutateWorkspace(async () => {
+      await readJson<QuestionApiResponse>(
+        await fetch("/api/admin/questions", {
+          body: JSON.stringify({ updates }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "PATCH",
+        }),
+      );
+
+      setIsEditingQuestionPool(false);
+      setPoolQuestionDrafts({});
+      setFeedback("Question pool updated.");
+    }).catch((error) => {
+      setFeedback(error instanceof Error ? error.message : "Unable to update the question pool.");
+    });
+  }
+
+  function handleToggleQuestionTag(questionId: string, nextTaggedState: boolean) {
+    void mutateWorkspace(async () => {
+      await readJson<QuestionApiResponse>(
+        await fetch(`/api/admin/questions/${questionId}`, {
+          body: JSON.stringify({ isTaggedIncorrect: nextTaggedState }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "PATCH",
+        }),
+      );
+
+      setFeedback(nextTaggedState ? "Question tagged and excluded from tests." : "Question untagged.");
+    }).catch((error) => {
+      setFeedback(error instanceof Error ? error.message : "Unable to update question tag.");
+    });
+  }
+
   function handleStartEditingQuestion(question: PersistentQuestion) {
     setEditingQuestionId(question.id);
     setEditingQuestionDraft({
@@ -3729,11 +3858,12 @@ export function AdminQuestionWorkspace({
   }
 
   function handleCommitImport() {
-    if (!authorPoolId && poolName.trim().length > 30) {
+    const resolvedAuthorPoolId = authorPoolId && authorPoolId !== "__create_new_pool__" ? authorPoolId : "";
+    if (!resolvedAuthorPoolId && poolName.trim().length > 30) {
       setImportFeedback("Use a pool name of up to 30 characters.");
       return;
     }
-    if (!authorPoolId && !poolName.trim()) {
+    if (!resolvedAuthorPoolId && !poolName.trim()) {
       setImportFeedback("Select a pool or enter a new pool name before importing questions.");
       return;
     }
@@ -3753,8 +3883,8 @@ export function AdminQuestionWorkspace({
           body: JSON.stringify({
             drafts,
             mode: "import",
-            newPoolName: authorPoolId ? undefined : poolName.trim(),
-            poolIds: authorPoolId ? [authorPoolId] : [],
+            newPoolName: resolvedAuthorPoolId ? undefined : poolName.trim(),
+            poolIds: resolvedAuthorPoolId ? [resolvedAuthorPoolId] : [],
           } satisfies QuestionMutationPayload),
           headers: {
             "Content-Type": "application/json",
@@ -4842,9 +4972,131 @@ export function AdminQuestionWorkspace({
     });
   }
 
+  function handleToggleGroupMemberAdmin(groupId: string, memberIdentifier: string) {
+    setGroupFeedback(null);
+    void mutateWorkspace(async () => {
+      const payload = await readJson<ParticipantsResponse>(
+        await fetch("/api/admin/participants", {
+          body: JSON.stringify({
+            groupId,
+            memberIdentifier,
+            mode: "toggle-group-admin",
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setParticipants(payload.participants);
+      setParticipantGroups(payload.participantGroups);
+      setGroupJoinRequests(payload.groupJoinRequests);
+      setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
+      setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
+      setGroupFeedback("Group admin role updated.");
+    }).catch((error) => {
+      handleWorkspaceActionError(error, "Unable to update group admin role.", setGroupFeedback);
+    });
+  }
+
+  function handleCycleGroupMemberAttendance(groupId: string, record: GroupMembershipRecord, dateKey: string) {
+    const currentStatus = record.attendanceByDateKey?.[dateKey] ?? null;
+    const nextStatus: "present" | "absent" | null =
+      currentStatus === "present" ? "absent" : currentStatus === "absent" ? null : "present";
+
+    void mutateWorkspace(async () => {
+      const payload = await readJson<ParticipantsResponse>(
+        await fetch("/api/admin/participants", {
+          body: JSON.stringify({
+            dateKey,
+            groupId,
+            memberIdentifier: record.userIdentifier,
+            membershipId: record.id,
+            mode: "mark-group-attendance",
+            status: nextStatus,
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setParticipants(payload.participants);
+      setParticipantGroups(payload.participantGroups);
+      setGroupJoinRequests(payload.groupJoinRequests);
+      setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
+      setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
+    }).catch((error) => {
+      handleWorkspaceActionError(error, "Unable to update attendance.", setGroupFeedback);
+    });
+  }
+
+  function isCompletePhoneNumberSearch(value: string) {
+    return value.replace(/\D/g, "").length >= 10;
+  }
+
+  function handleDeclareGroupIntroducingAdmin(groupId: string, membershipId: string, adminPhoneNumber: string) {
+    if (!isCompletePhoneNumberSearch(adminPhoneNumber)) {
+      setGroupFeedback("Enter the complete phone number to declare the introducing admin.");
+      return;
+    }
+
+    setGroupFeedback(null);
+    void mutateWorkspace(async () => {
+      const payload = await readJson<ParticipantsResponse>(
+        await fetch("/api/admin/participants", {
+          body: JSON.stringify({
+            adminPhoneNumber: adminPhoneNumber.trim(),
+            groupId,
+            membershipId,
+            mode: "declare-group-admin",
+          }),
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        }),
+      );
+
+      setParticipants(payload.participants);
+      setParticipantGroups(payload.participantGroups);
+      setGroupJoinRequests(payload.groupJoinRequests);
+      setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
+      setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
+      setGroupIntroAdminPhoneByRecordId((current) => ({ ...current, [membershipId]: "" }));
+      setGroupFeedback("Introducing admin updated.");
+    }).catch((error) => {
+      handleWorkspaceActionError(error, "Unable to update introducing admin.", setGroupFeedback);
+    });
+  }
+
+  function buildGroupAttendanceDates(offsetWeeks = 0) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(today);
+      date.setDate(today.getDate() - (6 - index) + offsetWeeks * 7);
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      const dateKey = `${year}-${month}-${day}`;
+      const label = date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+      return { dateKey, label };
+    });
+  }
+
   const isScheduleSelfTestSelected = scheduleParticipantGroupIds.includes(SELF_TEST_GROUP_OPTION_ID);
   const selectedScheduleGroupIds = scheduleParticipantGroupIds.filter((groupId) => groupId !== SELF_TEST_GROUP_OPTION_ID);
   const ownedScheduleGroups = participantGroups.filter((group) => Boolean(currentAdminIdentifier && group.ownerIdentifier && participantIdentifiersMatch(group.ownerIdentifier, currentAdminIdentifier)));
+  const managedCreatedGroups = participantGroups.filter((group) =>
+    Boolean(
+      currentAdminIdentifier
+      && ((group.ownerIdentifier && participantIdentifiersMatch(group.ownerIdentifier, currentAdminIdentifier))
+        || (group.adminIdentifiers ?? []).some((adminId) => participantIdentifiersMatch(adminId, currentAdminIdentifier))),
+    ),
+  );
   const editingScheduledTest = scheduledTests.find((test) => test.id === editingScheduledTestId);
   const scheduleGroupOptions = ownedScheduleGroups.filter((group) => group.participantIds.length > 0);
   const selectedScheduleMemberIds = new Set(participantGroups.filter((group) => selectedScheduleGroupIds.includes(group.id)).flatMap((group) => group.participantIds));
@@ -6313,8 +6565,18 @@ export function AdminQuestionWorkspace({
               <div>
                 <p className="eyebrow">Membership</p>
                 <h2 className="section-title" id="upgrade-modal-title">
-                  {upgradePrompt?.message ?? (effectiveUserCategory === "trapit-normal" ? "Upgrade to Pro or Pro max" : "Upgrade to Pro max")}
+                  {upgradePrompt?.message ?? (effectiveUserCategory === "trapit-normal" ? "Upgrade to Pro or Pro max" : effectiveUserCategory === "trapit-pro" ? "Upgrade to Pro max" : "Membership Plan")}
                 </h2>
+                {(effectiveUserCategory === "trapit-pro" || effectiveUserCategory === "trapit-pro-max") ? (
+                  <p className="muted-text">
+                    Days remaining:{" "}
+                    <strong>
+                      {categorySnapshot?.activeAssignment?.expiresAt
+                        ? Math.max(0, Math.ceil((new Date(categorySnapshot.activeAssignment.expiresAt).getTime() - Date.now()) / 86_400_000))
+                        : "—"}
+                    </strong>
+                  </p>
+                ) : null}
               </div>
               <FloatingWindowCloseButton label="Close Upgrade Modal" onClick={() => setIsUpgradePanelOpen(false)} />
             </div>
@@ -6325,57 +6587,59 @@ export function AdminQuestionWorkspace({
                   <tr>
                     <th scope="col">S.N.</th>
                     <th scope="col">Features</th>
-                    <th scope="col">Free (0)</th>
-                    <th scope="col">Pro (10,000 / 12 months)</th>
-                    <th scope="col">Pro Max (20,000 / 12 months)</th>
+                    <th className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined} scope="col">Free (0)</th>
+                    <th className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined} scope="col">Pro (10,000 / 12 months)</th>
+                    <th className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined} scope="col">Pro Max (20,000 / 12 months)</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr>
                     <td>1</td>
                     <td>Test: Schedule test / month</td>
-                    <td>-</td>
-                    <td>10</td>
-                    <td>20</td>
+                    <td className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined}>-</td>
+                    <td className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined}>10</td>
+                    <td className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined}>20</td>
                   </tr>
                   <tr>
                     <td>2</td>
                     <td>Apportion: Business Panel (services per address)</td>
-                    <td>-</td>
-                    <td>4</td>
-                    <td>10</td>
+                    <td className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined}>-</td>
+                    <td className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined}>4</td>
+                    <td className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined}>10</td>
                   </tr>
                   <tr>
                     <td>3</td>
                     <td>Poll: Schedule Polls (open to all polls)</td>
-                    <td>-</td>
-                    <td>-</td>
-                    <td>10</td>
+                    <td className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined}>-</td>
+                    <td className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined}>-</td>
+                    <td className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined}>10</td>
                   </tr>
                 </tbody>
               </table>
             </div>
 
-            <div className="inline-actions upgrade-modal-actions">
-              {(upgradePrompt?.showProButton ?? (effectiveUserCategory === "trapit-normal")) ? (
-                <button
-                  className="button"
-                  type="button"
-                  onClick={() => void handleRequestCategoryUpgrade("trapit-pro")}
-                >
-                  TRAPit Pro
-                </button>
-              ) : null}
-              {(upgradePrompt?.showProMaxButton ?? true) ? (
-                <button
-                  className="button"
-                  type="button"
-                  onClick={() => void handleRequestCategoryUpgrade("trapit-pro-max")}
-                >
-                  TRAPit Pro Max
-                </button>
-              ) : null}
-            </div>
+            {effectiveUserCategory !== "trapit-pro-max" ? (
+              <div className="inline-actions upgrade-modal-actions">
+                {(upgradePrompt?.showProButton ?? (effectiveUserCategory === "trapit-normal")) ? (
+                  <button
+                    className="button"
+                    type="button"
+                    onClick={() => void handleRequestCategoryUpgrade("trapit-pro")}
+                  >
+                    TRAPit Pro
+                  </button>
+                ) : null}
+                {(upgradePrompt?.showProMaxButton ?? true) ? (
+                  <button
+                    className="button"
+                    type="button"
+                    onClick={() => void handleRequestCategoryUpgrade("trapit-pro-max")}
+                  >
+                    TRAPit Pro Max
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
 
             {userPendingCategoryRequest ? (
               <p className="muted-text">
@@ -6412,34 +6676,33 @@ export function AdminQuestionWorkspace({
                 <table className="leaderboard-table manage-upgrades-table">
                   <thead>
                     <tr>
+                      <th>S.N.</th>
                       <th>User Name</th>
-                      <th>Number</th>
                       <th>Days Remaining</th>
-                      <th>Request Received</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {categoryManagement.managedUsers.map((user) => {
+                    {categoryManagement.managedUsers.map((user, index) => {
                       const isSelectingPro =
                         superAdminUpgradePendingRow?.identifier === user.identifier
                         && superAdminUpgradePendingRow.targetCategory === "trapit-pro";
                       const isSelectingProMax =
                         superAdminUpgradePendingRow?.identifier === user.identifier
                         && superAdminUpgradePendingRow.targetCategory === "trapit-pro-max";
+                      const hasPendingProRequest = user.pendingRequest?.requestedCategory === "trapit-pro";
+                      const hasPendingProMaxRequest = user.pendingRequest?.requestedCategory === "trapit-pro-max";
 
                       return (
                         <tr key={user.identifier}>
-                          <td><strong>{user.displayName || "—"}</strong></td>
-                          <td>{formatPhoneNumberForDisplay(user.identifier, { showFullPhoneNumber: true })}</td>
-                          <td>{user.currentCategory === "trapit-normal" ? "" : (user.daysRemaining !== null && user.daysRemaining !== undefined ? String(user.daysRemaining) : "")}</td>
+                          <td>{index + 1}</td>
                           <td>
-                            {user.pendingRequest ? (
-                              <span className="status-chip warning">
-                                {user.pendingRequest.requestedCategory === "trapit-pro-max" ? "TRAPit Pro Max" : "TRAPit Pro"}
-                              </span>
-                            ) : null}
+                            <strong>{user.displayName || "—"}</strong>
+                            <span className="assessment-log-detail muted-text">
+                              {formatPhoneNumberForDisplay(user.identifier, { showFullPhoneNumber: true })}
+                            </span>
                           </td>
+                          <td>{user.currentCategory === "trapit-normal" ? "-" : (user.daysRemaining !== null && user.daysRemaining !== undefined ? String(user.daysRemaining) : "")}</td>
                           <td>
                             <div className="inline-actions">
                               {user.currentCategory === "trapit-pro-max" ? (
@@ -6486,7 +6749,7 @@ export function AdminQuestionWorkspace({
                                         userSub: user.userSub,
                                       })}
                                     >
-                                      Upgrade
+                                      {hasPendingProMaxRequest ? "+ Upgrade" : "Upgrade"}
                                     </button>
                                   )}
                                   <button
@@ -6533,7 +6796,7 @@ export function AdminQuestionWorkspace({
                                         userSub: user.userSub,
                                       })}
                                     >
-                                      Upgrade (Pro)
+                                      {hasPendingProRequest ? "+ Upgrade (Pro)" : "Upgrade (Pro)"}
                                     </button>
                                   )}
                                   {isSelectingProMax ? (
@@ -6570,7 +6833,7 @@ export function AdminQuestionWorkspace({
                                         userSub: user.userSub,
                                       })}
                                     >
-                                      Upgrade (Pro max)
+                                      {hasPendingProMaxRequest ? "+ Upgrade (Pro max)" : "Upgrade (Pro max)"}
                                     </button>
                                   )}
                                 </>
@@ -6611,7 +6874,7 @@ export function AdminQuestionWorkspace({
               <div className="question-card nested-card">
                 <p><strong>Business Name:</strong> TRAPit.in</p>
                 <p><strong>Contact Number:</strong> +91-8800797123</p>
-                <p><strong>Email:</strong> gagan_cvrmech@yahoo.co.in</p>
+                <p><strong>Email:</strong> trapitdotin@gmail.com</p>
                 <p><strong>Operating Address:</strong> Flat-1144, ATS Marigold, Sector 89A, Gurugram, Haryana (122505)</p>
               </div>
             </div>
@@ -6789,70 +7052,185 @@ export function AdminQuestionWorkspace({
                       <tr>
                         <th>S.N.</th>
                         <th>Group Name &amp; Created By</th>
+                        <th>Admin</th>
                         <th>Action</th>
                       </tr>
                     </thead>
                     <tbody>
                       {joinedGroupMemberships.length ? (
-                        joinedGroupMemberships.map((record, index) => (
-                          <tr key={record.id}>
-                            <td>{index + 1}</td>
-                            <td>
-                              <strong>{record.groupName || "Unnamed Group"}</strong>
-                              <span className="assessment-log-detail muted-text">
-                                {record.ownerLabel} ({formatPhoneNumberForDisplay(record.ownerIdentifier, { showFullPhoneNumber: true })})
-                              </span>
-                            </td>
-                            <td>
-                              {record.status === "member" ? (
-                                <div className="groups-action-cell">
-                                  <button
-                                    className="button-secondary small-button"
-                                    disabled={isMutating}
-                                    type="button"
-                                    onClick={() => handleLeaveGroup(record.groupId, record.id)}
-                                  >
-                                    Leave Group
-                                  </button>
+                        joinedGroupMemberships.map((record, index) => {
+                          const offsetWeeks = groupAttendanceOffsetByRecordId[record.id] ?? 0;
+                          const attendanceDates = buildGroupAttendanceDates(offsetWeeks);
+                          const introSearchValue = (groupIntroAdminPhoneByRecordId[record.id] ?? "").trim();
+                          const joinedGroupObj = participantGroups.find((entry) => entry.id === record.groupId);
+                          const matchingIntroAdmin = isCompletePhoneNumberSearch(introSearchValue)
+                            ? participants.find((participant) => {
+                                const isEligibleAdmin = Boolean(
+                                  (joinedGroupObj?.ownerIdentifier && participantIdentifiersMatch(participant.identifier, joinedGroupObj.ownerIdentifier))
+                                  || (joinedGroupObj?.adminIdentifiers ?? []).some((adminId) => participantIdentifiersMatch(participant.identifier, adminId)),
+                                );
+                                if (!isEligibleAdmin) return false;
+                                return (
+                                  participantIdentifiersMatch(participant.identifier, introSearchValue)
+                                  || participant.identifier.replace(/\D/g, "").slice(-10) === introSearchValue.replace(/\D/g, "").slice(-10)
+                                );
+                              })
+                            : null;
+
+                          return (
+                            <Fragment key={record.id}>
+                              <tr>
+                                <td>{index + 1}</td>
+                                <td>
+                                  <strong>{record.groupName || "Unnamed Group"}</strong>
                                   <span className="assessment-log-detail muted-text">
-                                    Joined: {formatGroupTimestamp(record.joinedAt ?? record.createdAt)}
+                                    {record.ownerLabel} ({formatPhoneNumberForDisplay(record.ownerIdentifier, { showFullPhoneNumber: true })})
                                   </span>
-                                </div>
-                              ) : record.status === "requested" ? (
-                                <div className="groups-action-cell">
-                                  <span className="status-chip warning">Requested</span>
-                                  <span className="assessment-log-detail muted-text">
-                                    {formatGroupTimestamp(record.createdAt)}
-                                  </span>
-                                </div>
-                              ) : record.status === "left" ? (
-                                <div className="groups-action-cell">
-                                  <span className="status-chip">Left On</span>
-                                  <span className="assessment-log-detail muted-text">
-                                    {formatGroupTimestamp(record.endedAt ?? record.updatedAt)}
-                                  </span>
-                                </div>
-                              ) : record.status === "removed" ? (
-                                <div className="groups-action-cell">
-                                  <span className="status-chip warning">Removed</span>
-                                  <span className="assessment-log-detail muted-text">
-                                    {formatGroupTimestamp(record.endedAt ?? record.updatedAt)}
-                                  </span>
-                                </div>
-                              ) : (
-                                <div className="groups-action-cell">
-                                  <span className="status-chip warning">Rejected</span>
-                                  <span className="assessment-log-detail muted-text">
-                                    {formatGroupTimestamp(record.endedAt ?? record.updatedAt)}
-                                  </span>
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        ))
+                                </td>
+                                <td>
+                                  {record.introducedByAdminIdentifier ? (
+                                    <div>
+                                      <strong>{record.introducedByAdminLabel || formatPhoneNumberForDisplay(record.introducedByAdminIdentifier, { showFullPhoneNumber: true })}</strong>
+                                      <span className="assessment-log-detail muted-text">
+                                        {formatPhoneNumberForDisplay(record.introducedByAdminIdentifier, { showFullPhoneNumber: true })}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div className="joined-group-admin-search">
+                                      <input
+                                        aria-label="Search introducing admin by complete phone number"
+                                        placeholder="Enter complete phone number"
+                                        type="search"
+                                        value={groupIntroAdminPhoneByRecordId[record.id] ?? ""}
+                                        onChange={(event) =>
+                                          setGroupIntroAdminPhoneByRecordId((current) => ({
+                                            ...current,
+                                            [record.id]: event.target.value,
+                                          }))
+                                        }
+                                      />
+                                      {isCompletePhoneNumberSearch(introSearchValue) ? (
+                                        matchingIntroAdmin ? (
+                                          <button
+                                            className="button-secondary small-button"
+                                            disabled={isMutating}
+                                            type="button"
+                                            onClick={() => handleDeclareGroupIntroducingAdmin(record.groupId, record.id, matchingIntroAdmin.identifier)}
+                                          >
+                                            {matchingIntroAdmin.label}
+                                          </button>
+                                        ) : (
+                                          <button
+                                            className="button-secondary small-button"
+                                            disabled={isMutating}
+                                            type="button"
+                                            onClick={() => handleDeclareGroupIntroducingAdmin(record.groupId, record.id, introSearchValue)}
+                                          >
+                                            Declare admin
+                                          </button>
+                                        )
+                                      ) : null}
+                                    </div>
+                                  )}
+                                </td>
+                                <td>
+                                  {record.status === "member" ? (
+                                    <div className="groups-action-cell">
+                                      <button
+                                        className="button-secondary small-button"
+                                        disabled={isMutating}
+                                        type="button"
+                                        onClick={() => handleLeaveGroup(record.groupId, record.id)}
+                                      >
+                                        Leave Group
+                                      </button>
+                                      <span className="assessment-log-detail muted-text">
+                                        Joined: {formatGroupTimestamp(record.joinedAt ?? record.createdAt)}
+                                      </span>
+                                    </div>
+                                  ) : record.status === "requested" ? (
+                                    <div className="groups-action-cell">
+                                      <span className="status-chip warning">Requested</span>
+                                      <span className="assessment-log-detail muted-text">
+                                        {formatGroupTimestamp(record.createdAt)}
+                                      </span>
+                                    </div>
+                                  ) : record.status === "left" ? (
+                                    <div className="groups-action-cell">
+                                      <span className="status-chip">Left On</span>
+                                      <span className="assessment-log-detail muted-text">
+                                        {formatGroupTimestamp(record.endedAt ?? record.updatedAt)}
+                                      </span>
+                                    </div>
+                                  ) : record.status === "removed" ? (
+                                    <div className="groups-action-cell">
+                                      <span className="status-chip warning">Removed</span>
+                                      <span className="assessment-log-detail muted-text">
+                                        {formatGroupTimestamp(record.endedAt ?? record.updatedAt)}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <div className="groups-action-cell">
+                                      <span className="status-chip warning">Rejected</span>
+                                      <span className="assessment-log-detail muted-text">
+                                        {formatGroupTimestamp(record.endedAt ?? record.updatedAt)}
+                                      </span>
+                                    </div>
+                                  )}
+                                </td>
+                              </tr>
+                              <tr className="group-attendance-calendar-row">
+                                <td colSpan={4}>
+                                  <div className="group-attendance-strip">
+                                    <button
+                                      aria-label="Previous attendance dates"
+                                      className="button-secondary small-button"
+                                      type="button"
+                                      onClick={() =>
+                                        setGroupAttendanceOffsetByRecordId((current) => ({
+                                          ...current,
+                                          [record.id]: (current[record.id] ?? 0) - 1,
+                                        }))
+                                      }
+                                    >
+                                      ◀
+                                    </button>
+                                    <div className="group-attendance-days">
+                                      {attendanceDates.map((day) => {
+                                        const mark = record.attendanceByDateKey?.[day.dateKey] ?? null;
+                                        return (
+                                          <span
+                                            className={`group-attendance-day${mark === "present" ? " is-present" : mark === "absent" ? " is-absent" : ""}`}
+                                            key={`${record.id}-${day.dateKey}`}
+                                          >
+                                            <small>{day.label}</small>
+                                            <strong>{mark === "present" ? "✓" : mark === "absent" ? "✗" : "—"}</strong>
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                    <button
+                                      aria-label="Next attendance dates"
+                                      className="button-secondary small-button"
+                                      type="button"
+                                      onClick={() =>
+                                        setGroupAttendanceOffsetByRecordId((current) => ({
+                                          ...current,
+                                          [record.id]: (current[record.id] ?? 0) + 1,
+                                        }))
+                                      }
+                                    >
+                                      ▶
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            </Fragment>
+                          );
+                        })
                       ) : (
                         <tr>
-                          <td colSpan={3} className="muted-text">No joined groups yet.</td>
+                          <td colSpan={4} className="muted-text">No joined groups yet.</td>
                         </tr>
                       )}
                     </tbody>
@@ -6862,17 +7240,30 @@ export function AdminQuestionWorkspace({
 
               <section className="groups-section created-groups-section">
                 <h3>Created Groups</h3>
-                {ownedScheduleGroups.length ? (
+                {managedCreatedGroups.length ? (
                   <div className="form-stack">
-                    {ownedScheduleGroups.map((group) => {
+                    {managedCreatedGroups.map((group) => {
+                      const isGroupCreator = Boolean(
+                        currentAdminIdentifier
+                        && group.ownerIdentifier
+                        && participantIdentifiersMatch(group.ownerIdentifier, currentAdminIdentifier),
+                      );
                       const draftGroupName = groupNameDrafts[group.id] ?? group.name;
-                      const groupShareUrl = group.shareCode ? getGroupAccessUrl(group.shareCode, draftGroupName || group.name) : "";
+                      const adminShareCodeEntry = !isGroupCreator && currentAdminIdentifier && group.adminShareCodesByIdentifier
+                        ? Object.entries(group.adminShareCodesByIdentifier).find(([adminId]) =>
+                            participantIdentifiersMatch(adminId, currentAdminIdentifier),
+                          )
+                        : null;
+                      const effectiveShareCode = isGroupCreator
+                        ? (group.shareCode ?? "")
+                        : (adminShareCodeEntry?.[1] ?? group.shareCode ?? "");
+                      const groupShareUrl = effectiveShareCode ? getGroupAccessUrl(effectiveShareCode, draftGroupName || group.name) : "";
                       const groupQrDataUrl = groupQrCodes[group.id] ?? "";
                       const searchQuery = (groupMemberSearchByGroupId[group.id] ?? "").trim();
-                      const normalizedSearch = searchQuery.toLowerCase();
                       const normalizedSearchDigits = searchQuery.replace(/\D/g, "");
                       const groupRecords = ownedGroupMemberships.filter((record) => record.groupId === group.id);
                       const creatorRecord = groupRecords.find((record) => record.status === "creator") ?? {
+                        attendanceByDateKey: {},
                         createdAt: group.createdAt,
                         endedAt: null,
                         groupId: group.id,
@@ -6893,7 +7284,7 @@ export function AdminQuestionWorkspace({
                           ?? "Creator",
                       };
                       const memberAndRequestRecords = groupRecords.filter((record) => record.status !== "creator");
-                      const matchingParticipants = searchQuery
+                      const matchingParticipants = isCompletePhoneNumberSearch(searchQuery)
                         ? participants.filter((participant) => {
                             if (
                               group.ownerIdentifier
@@ -6905,10 +7296,10 @@ export function AdminQuestionWorkspace({
                             if (isActiveMember) {
                               return false;
                             }
-                            const labelMatch = participant.label.toLowerCase().includes(normalizedSearch);
-                            const identifierMatch = participant.identifier.toLowerCase().includes(normalizedSearch)
-                              || (normalizedSearchDigits.length >= 3 && participant.identifier.replace(/\D/g, "").includes(normalizedSearchDigits));
-                            return labelMatch || identifierMatch;
+                            return (
+                              participantIdentifiersMatch(participant.identifier, searchQuery)
+                              || participant.identifier.replace(/\D/g, "").slice(-10) === normalizedSearchDigits.slice(-10)
+                            );
                           }).slice(0, 8)
                         : [];
 
@@ -6923,15 +7314,20 @@ export function AdminQuestionWorkspace({
                                     className="group-name-header-input"
                                     maxLength={30}
                                     placeholder="Enter group name (max 30 chars)"
+                                    readOnly={!isGroupCreator}
                                     type="text"
                                     value={draftGroupName}
-                                    onChange={(event) =>
+                                    onChange={(event) => {
+                                      if (!isGroupCreator) return;
                                       setGroupNameDrafts((current) => ({
                                         ...current,
                                         [group.id]: event.target.value.slice(0, 30),
-                                      }))
-                                    }
-                                    onBlur={(event) => handleRenameCreatedGroup(group.id, event.target.value)}
+                                      }));
+                                    }}
+                                    onBlur={(event) => {
+                                      if (!isGroupCreator) return;
+                                      handleRenameCreatedGroup(group.id, event.target.value);
+                                    }}
                                     onKeyDown={(event) => {
                                       if (event.key === "Enter") {
                                         event.preventDefault();
@@ -6940,7 +7336,7 @@ export function AdminQuestionWorkspace({
                                     }}
                                   />
                                 </th>
-                                <th colSpan={2}>
+                                <th>
                                   <div className="inline-actions created-group-header-actions">
                                     {groupQrDataUrl ? (
                                       <a
@@ -6968,11 +7364,11 @@ export function AdminQuestionWorkspace({
                                 </th>
                               </tr>
                               <tr className="created-group-header-row-2">
-                                <th colSpan={4}>
+                                <th colSpan={3}>
                                   <div className="created-group-user-search">
                                     <input
-                                      aria-label="Search users by name or phone number"
-                                      placeholder="Search users by name or phone number to add to group"
+                                      aria-label="Search users by complete phone number"
+                                      placeholder="Enter complete phone number to add user to group"
                                       type="search"
                                       value={groupMemberSearchByGroupId[group.id] ?? ""}
                                       onChange={(event) =>
@@ -6982,7 +7378,7 @@ export function AdminQuestionWorkspace({
                                         }))
                                       }
                                     />
-                                    {searchQuery ? (
+                                    {isCompletePhoneNumberSearch(searchQuery) ? (
                                       <div className="created-group-search-results">
                                         {matchingParticipants.length ? (
                                           matchingParticipants.map((participant) => (
@@ -7008,7 +7404,6 @@ export function AdminQuestionWorkspace({
                                 <th>S.N.</th>
                                 <th>Member Name and Complete Phone Number</th>
                                 <th>Action</th>
-                                <th>Time &amp; Date Stamp</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -7021,70 +7416,167 @@ export function AdminQuestionWorkspace({
                                   </span>
                                 </td>
                                 <td>
-                                  <span className="status-chip success">Creator</span>
-                                </td>
-                                <td>{formatGroupTimestamp(creatorRecord.joinedAt ?? creatorRecord.createdAt)}</td>
-                              </tr>
-                              {memberAndRequestRecords.map((record, index) => (
-                                <tr key={record.id}>
-                                  <td>{index + 2}</td>
-                                  <td>
-                                    <strong>{record.userLabel}</strong>
+                                  <div className="groups-action-cell">
+                                    <span className="status-chip success">Creator</span>
                                     <span className="assessment-log-detail muted-text">
-                                      {formatPhoneNumberForDisplay(record.userIdentifier, { showFullPhoneNumber: true })}
+                                      {formatGroupTimestamp(creatorRecord.joinedAt ?? creatorRecord.createdAt)}
                                     </span>
-                                  </td>
-                                  <td>
-                                    {record.status === "member" ? (
-                                      <div className="groups-action-cell">
-                                        <button
-                                          className="button-secondary small-button"
-                                          disabled={isMutating}
-                                          type="button"
-                                          onClick={() => handleRemoveMemberFromGroup(group.id, record.userIdentifier, record.id)}
-                                        >
-                                          Remove
-                                        </button>
+                                  </div>
+                                </td>
+                              </tr>
+                              {memberAndRequestRecords.map((record, index) => {
+                                const offsetWeeks = groupAttendanceOffsetByRecordId[record.id] ?? 0;
+                                const attendanceDates = buildGroupAttendanceDates(offsetWeeks);
+                                const isMemberAdmin = Boolean(
+                                  record.isGroupAdmin
+                                  || (group.adminIdentifiers ?? []).some((adminId) => participantIdentifiersMatch(adminId, record.userIdentifier)),
+                                );
+
+                                return (
+                                  <Fragment key={record.id}>
+                                    <tr>
+                                      <td>{index + 2}</td>
+                                      <td>
+                                        <strong>{record.userLabel}</strong>
                                         <span className="assessment-log-detail muted-text">
-                                          {formatGroupTimestamp(record.joinedAt ?? record.createdAt)}
+                                          {formatPhoneNumberForDisplay(record.userIdentifier, { showFullPhoneNumber: true })}
                                         </span>
-                                      </div>
-                                    ) : record.status === "left" ? (
-                                      <span className="status-chip">Left</span>
-                                    ) : record.status === "removed" ? (
-                                      <span className="status-chip warning">Removed</span>
-                                    ) : record.status === "requested" ? (
-                                      <div className="inline-actions">
-                                        <button
-                                          className="button small-button"
-                                          disabled={isMutating}
-                                          type="button"
-                                          onClick={() => handleResolveGroupRequest(record.requestId ?? record.id, "accept")}
-                                        >
-                                          Accept
-                                        </button>
-                                        <button
-                                          className="button-secondary small-button"
-                                          disabled={isMutating}
-                                          type="button"
-                                          onClick={() => handleResolveGroupRequest(record.requestId ?? record.id, "reject")}
-                                        >
-                                          Reject
-                                        </button>
-                                      </div>
-                                    ) : (
-                                      <span className="status-chip warning">Rejected</span>
-                                    )}
-                                  </td>
-                                  <td>
-                                    {record.status === "member"
-                                      ? formatGroupTimestamp(record.joinedAt ?? record.createdAt)
-                                      : record.status === "requested"
-                                        ? formatGroupTimestamp(record.createdAt)
-                                        : formatGroupTimestamp(record.endedAt ?? record.updatedAt)}
-                                  </td>
-                                </tr>
-                              ))}
+                                      </td>
+                                      <td>
+                                        {record.status === "member" ? (
+                                          <div className="groups-action-cell">
+                                            <div className="inline-actions">
+                                              {isGroupCreator ? (
+                                                <>
+                                                  <button
+                                                    className={isMemberAdmin ? "button small-button" : "button-secondary small-button"}
+                                                    disabled={isMutating}
+                                                    type="button"
+                                                    onClick={() => handleToggleGroupMemberAdmin(group.id, record.userIdentifier)}
+                                                  >
+                                                    {isMemberAdmin ? "Admin" : "Make Admin"}
+                                                  </button>
+                                                  <button
+                                                    className="button-secondary small-button"
+                                                    disabled={isMutating}
+                                                    type="button"
+                                                    onClick={() => handleRemoveMemberFromGroup(group.id, record.userIdentifier, record.id)}
+                                                  >
+                                                    Remove
+                                                  </button>
+                                                </>
+                                              ) : (
+                                                <span className="status-chip">{isMemberAdmin ? "Admin" : "Member"}</span>
+                                              )}
+                                            </div>
+                                            <span className="assessment-log-detail muted-text">
+                                              {formatGroupTimestamp(record.joinedAt ?? record.createdAt)}
+                                            </span>
+                                          </div>
+                                        ) : record.status === "left" ? (
+                                          <div className="groups-action-cell">
+                                            <span className="status-chip">Left</span>
+                                            <span className="assessment-log-detail muted-text">
+                                              {formatGroupTimestamp(record.endedAt ?? record.updatedAt)}
+                                            </span>
+                                          </div>
+                                        ) : record.status === "removed" ? (
+                                          <div className="groups-action-cell">
+                                            <span className="status-chip warning">Removed</span>
+                                            <span className="assessment-log-detail muted-text">
+                                              {formatGroupTimestamp(record.endedAt ?? record.updatedAt)}
+                                            </span>
+                                          </div>
+                                        ) : record.status === "requested" ? (
+                                          <div className="groups-action-cell">
+                                            {isGroupCreator ? (
+                                              <div className="inline-actions">
+                                                <button
+                                                  className="button small-button"
+                                                  disabled={isMutating}
+                                                  type="button"
+                                                  onClick={() => handleResolveGroupRequest(record.requestId ?? record.id, "accept")}
+                                                >
+                                                  Accept
+                                                </button>
+                                                <button
+                                                  className="button-secondary small-button"
+                                                  disabled={isMutating}
+                                                  type="button"
+                                                  onClick={() => handleResolveGroupRequest(record.requestId ?? record.id, "reject")}
+                                                >
+                                                  Reject
+                                                </button>
+                                              </div>
+                                            ) : (
+                                              <span className="status-chip warning">Requested</span>
+                                            )}
+                                            <span className="assessment-log-detail muted-text">
+                                              {formatGroupTimestamp(record.createdAt)}
+                                            </span>
+                                          </div>
+                                        ) : (
+                                          <div className="groups-action-cell">
+                                            <span className="status-chip warning">Rejected</span>
+                                            <span className="assessment-log-detail muted-text">
+                                              {formatGroupTimestamp(record.endedAt ?? record.updatedAt)}
+                                            </span>
+                                          </div>
+                                        )}
+                                      </td>
+                                    </tr>
+                                    <tr className="group-attendance-calendar-row">
+                                      <td colSpan={3}>
+                                        <div className="group-attendance-strip">
+                                          <button
+                                            aria-label="Previous attendance dates"
+                                            className="button-secondary small-button"
+                                            type="button"
+                                            onClick={() =>
+                                              setGroupAttendanceOffsetByRecordId((current) => ({
+                                                ...current,
+                                                [record.id]: (current[record.id] ?? 0) - 1,
+                                              }))
+                                            }
+                                          >
+                                            ◀
+                                          </button>
+                                          <div className="group-attendance-days">
+                                            {attendanceDates.map((day) => {
+                                              const mark = record.attendanceByDateKey?.[day.dateKey] ?? null;
+                                              return (
+                                                <button
+                                                  className={`group-attendance-day${mark === "present" ? " is-present" : mark === "absent" ? " is-absent" : ""}`}
+                                                  disabled={!isGroupCreator || isMutating}
+                                                  key={`${record.id}-${day.dateKey}`}
+                                                  type="button"
+                                                  onClick={() => handleCycleGroupMemberAttendance(group.id, record, day.dateKey)}
+                                                >
+                                                  <small>{day.label}</small>
+                                                  <strong>{mark === "present" ? "✓" : mark === "absent" ? "✗" : "—"}</strong>
+                                                </button>
+                                              );
+                                            })}
+                                          </div>
+                                          <button
+                                            aria-label="Next attendance dates"
+                                            className="button-secondary small-button"
+                                            type="button"
+                                            onClick={() =>
+                                              setGroupAttendanceOffsetByRecordId((current) => ({
+                                                ...current,
+                                                [record.id]: (current[record.id] ?? 0) + 1,
+                                              }))
+                                            }
+                                          >
+                                            ▶
+                                          </button>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  </Fragment>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -7115,9 +7607,16 @@ export function AdminQuestionWorkspace({
                   className="select-field"
                   id="author-pool"
                   value={authorPoolId}
-                  onChange={(event) => setAuthorPoolId(event.target.value)}
+                  onChange={(event) => {
+                    const nextValue = event.target.value;
+                    setAuthorPoolId(nextValue);
+                    if (nextValue !== "__create_new_pool__") {
+                      setPoolName("");
+                    }
+                  }}
                 >
                   <option value="">Select a pool</option>
+                  <option value="__create_new_pool__">Create new pool</option>
                   {pools.map((pool) => (
                     <option key={pool.id} value={pool.id}>
                       {pool.name}
@@ -7125,19 +7624,20 @@ export function AdminQuestionWorkspace({
                   ))}
                 </select>
               </div>
-              <div className="role-option role-option-create">
-                <div className="field compact-field">
-                  <label htmlFor="pool-name-inline">Create New Pool</label>
-                  <input
-                    id="pool-name-inline"
-                    placeholder="Pool name"
-                    maxLength={30}
-                    value={poolName}
-                    onChange={(event) => setPoolName(event.target.value)}
-                  />
+              {authorPoolId === "__create_new_pool__" ? (
+                <div className="role-option role-option-create">
+                  <div className="field compact-field">
+                    <label htmlFor="pool-name-inline">Create New Pool</label>
+                    <input
+                      id="pool-name-inline"
+                      placeholder="Pool name"
+                      maxLength={30}
+                      value={poolName}
+                      onChange={(event) => setPoolName(event.target.value)}
+                    />
+                  </div>
                 </div>
-                <p className="muted-text">The pool is created when valid questions are imported.</p>
-              </div>
+              ) : null}
             </div>
           </div>
 
@@ -7148,13 +7648,10 @@ export function AdminQuestionWorkspace({
           <div className="question-bank-summary">
             <div>
               <strong>OCR import</strong>
-              <p className="muted-text question-bank-summary-copy">
-                Select or create a pool first, then use OCR import to preview and clean pasted text before saving.
-              </p>
             </div>
             <button
               className="button-secondary small-button"
-              disabled={!authorPoolId && !poolName.trim()}
+              disabled={!(authorPoolId && authorPoolId !== "__create_new_pool__") && !poolName.trim()}
               type="button"
               onClick={() => setIsOcrImportOpen((currentState) => !currentState)}
             >
@@ -7162,9 +7659,9 @@ export function AdminQuestionWorkspace({
             </button>
           </div>
 
-          {!authorPoolId && !poolName.trim() ? <p className="muted-text">Select a pool or enter a new pool name to enable OCR import.</p> : null}
+          {!(authorPoolId && authorPoolId !== "__create_new_pool__") && !poolName.trim() ? <p className="muted-text">Select a pool or enter a new pool name to enable OCR import.</p> : null}
 
-          {(authorPoolId || poolName.trim()) && isOcrImportOpen ? (
+          {((authorPoolId && authorPoolId !== "__create_new_pool__") || poolName.trim()) && isOcrImportOpen ? (
             <div className="form-stack import-card">
               <div className="section-head">
                 <div>
@@ -7296,6 +7793,8 @@ export function AdminQuestionWorkspace({
                       setSelectedQuestionBankPoolId(pool.id);
                       setPoolRenameName(pool.name);
                       setPoolFeedback(null);
+                      setIsEditingQuestionPool(false);
+                      setPoolQuestionDrafts({});
                     }}
                   >
                     <strong>{pool.name}</strong>
@@ -7312,9 +7811,11 @@ export function AdminQuestionWorkspace({
               <div className="question-bank-summary">
                 <div>
                   <strong>{selectedQuestionBankPool.name}</strong>
-                  <p className="muted-text question-bank-summary-copy">
-                    {selectedQuestionBankPool.description || "No description added for this pool yet."}
-                  </p>
+                  {selectedQuestionBankPool.description ? (
+                    <p className="muted-text question-bank-summary-copy">
+                      {selectedQuestionBankPool.description}
+                    </p>
+                  ) : null}
                   <div className="inline-actions question-bank-summary-chips">
                     {selectedQuestionBankPool.isShared ? (
                       <span className="status-chip">Shared with you</span>
@@ -7345,6 +7846,14 @@ export function AdminQuestionWorkspace({
                         onClick={handleRenamePool}
                       >
                         Rename
+                      </button>
+                      <button
+                        className="button-secondary small-button"
+                        disabled={isMutating || !filteredQuestionBankQuestions.some((question) => question.canManage)}
+                        type="button"
+                        onClick={() => (isEditingQuestionPool ? handleCancelEditingQuestionPool() : handleStartEditingQuestionPool())}
+                      >
+                        {isEditingQuestionPool ? "Cancel" : "Edit"}
                       </button>
                       <button className="button-secondary small-button" disabled={isMutating} type="button" onClick={handleDeletePool}>
                         Delete pool
@@ -7402,15 +7911,17 @@ export function AdminQuestionWorkspace({
                 <div className="question-bank-share-panel-head">
                   <div>
                     <strong>Share question pool</strong>
-                    <p className="muted-text question-bank-summary-copy">
-                      {selectedQuestionBankPool.canManage
-                        ? "Choose users who should be able to open and use this pool."
-                        : "This pool was shared with you. Only the owner can change sharing."}
-                    </p>
+                    {!selectedQuestionBankPool.canManage ? (
+                      <p className="muted-text question-bank-summary-copy">
+                        This pool was shared with you. Only the owner can change sharing.
+                      </p>
+                    ) : null}
                   </div>
-                  <span className="status-chip">
-                    {selectedQuestionBankPool.sharedWithIdentifiers.length} shared
-                  </span>
+                  {selectedQuestionBankPool.sharedWithIdentifiers.length > 0 ? (
+                    <span className="status-chip">
+                      {selectedQuestionBankPool.sharedWithIdentifiers.length} shared
+                    </span>
+                  ) : null}
                 </div>
 
                 {selectedQuestionBankPool.sharedWithIdentifiers.length ? (
@@ -7428,9 +7939,7 @@ export function AdminQuestionWorkspace({
                       </button>
                     ))}
                   </div>
-                ) : (
-                  <p className="muted-text">This pool is not shared with anyone yet.</p>
-                )}
+                ) : null}
 
                 {selectedQuestionBankPool.canManage ? (
                   <div className="form-stack">
@@ -7443,7 +7952,6 @@ export function AdminQuestionWorkspace({
                         onChange={(event) => setPoolShareSearch(event.target.value)}
                       />
                     </div>
-                    <p className="muted-text">Enter the complete phone number to reveal a user before sharing this pool.</p>
 
                     <div className="question-bank-share-chip-row">
                       {poolShareSearch.trim() && filteredShareableParticipants.length ? (
@@ -7466,9 +7974,7 @@ export function AdminQuestionWorkspace({
                         })
                       ) : poolShareSearch.trim() ? (
                         <p className="muted-text">No matching users found.</p>
-                      ) : (
-                        <p className="muted-text">Enter the full phone number to search.</p>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 ) : null}
@@ -7513,202 +8019,211 @@ export function AdminQuestionWorkspace({
             ) : null}
 
             {selectedQuestionBankPoolId && filteredQuestionBankQuestions.length ? (
-              <div className="question-bank-grid">
-                {filteredQuestionBankQuestions.map((question, index) => {
-                  const duplicateGroup = duplicateQuestionGroupByQuestionId.get(question.id);
-                  const duplicatePositions = duplicateGroup
-                    ? duplicateGroup.questions
-                        .filter((entry) => entry.id !== question.id)
-                        .map((entry) => `Q${questionBankQuestionPositionById.get(entry.id)}`)
-                        .join(", ")
-                    : "";
-                  const removableDuplicateIds = duplicateGroup
-                    ? duplicateGroup.questions
-                        .filter((entry) => entry.id !== question.id && entry.canManage)
-                        .map((entry) => entry.id)
-                    : [];
+              <div className="form-stack">
+                <div className="question-bank-grid">
+                  {filteredQuestionBankQuestions.map((question, index) => {
+                    const duplicateGroup = duplicateQuestionGroupByQuestionId.get(question.id);
+                    const duplicatePositions = duplicateGroup
+                      ? duplicateGroup.questions
+                          .filter((entry) => entry.id !== question.id)
+                          .map((entry) => `Q${questionBankQuestionPositionById.get(entry.id)}`)
+                          .join(", ")
+                      : "";
+                    const removableDuplicateIds = duplicateGroup
+                      ? duplicateGroup.questions
+                          .filter((entry) => entry.id !== question.id && entry.canManage)
+                          .map((entry) => entry.id)
+                      : [];
+                    const activePoolDraft = isEditingQuestionPool ? poolQuestionDrafts[question.id] : null;
 
-                  return (
-                  <article
-                    className={`question-card compact-question-card${duplicateGroup ? " is-duplicate" : ""}`}
-                    key={question.id}
-                  >
-                    <div className="question-head compact-question-head">
-                      <div className="inline-actions">
-                        <label className="radio-chip">
-                          <input
-                            checked={selectedQuestionIds.includes(question.id)}
-                            disabled={!question.canManage}
-                            type="checkbox"
-                            onChange={() => toggleQuestionSelection(question.id)}
-                          />
-                          {question.canManage ? "Select" : "Read-only"}
-                        </label>
-                        <strong>Q{index + 1}</strong>
+                    return (
+                    <article
+                      className={`question-card compact-question-card${duplicateGroup ? " is-duplicate" : ""}`}
+                      key={question.id}
+                    >
+                      <div className="question-head compact-question-head">
+                        <div className="inline-actions">
+                          <label className="radio-chip">
+                            <input
+                              checked={selectedQuestionIds.includes(question.id)}
+                              disabled={!question.canManage}
+                              type="checkbox"
+                              onChange={() => toggleQuestionSelection(question.id)}
+                            />
+                            {question.canManage ? "Select" : "Read-only"}
+                          </label>
+                          <strong>Q{index + 1}</strong>
+                        </div>
+                        <div className="inline-actions question-card-top-right-actions">
+                          {question.canManage ? (
+                            <button
+                              className={question.isTaggedIncorrect ? "button small-button" : "button-secondary small-button"}
+                              disabled={isMutating}
+                              type="button"
+                              onClick={() => handleToggleQuestionTag(question.id, !question.isTaggedIncorrect)}
+                            >
+                              {question.isTaggedIncorrect ? "Untag" : "Tag"}
+                            </button>
+                          ) : null}
+                          <button
+                            aria-label="Remove question"
+                            className="button-secondary small-button question-remove-cross-button"
+                            disabled={isMutating || !question.canManage}
+                            type="button"
+                            onClick={() => handleDeleteQuestion(question.id)}
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </div>
-                      <div className="inline-actions">
-                        <button
-                          className="button-secondary small-button"
-                          disabled={isMutating || !question.canManage}
-                          type="button"
-                          onClick={() =>
-                            editingQuestionId === question.id
-                              ? handleCancelEditingQuestion()
-                              : handleStartEditingQuestion(question)
-                          }
-                        >
-                          {editingQuestionId === question.id ? "Cancel" : "Edit"}
-                        </button>
-                        <button
-                          className="button-secondary small-button"
-                          disabled={isMutating || !question.canManage}
-                          type="button"
-                          onClick={() => handleDeleteQuestion(question.id)}
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                    {duplicateGroup || question.isShared ? (
-                      <div className="duplicate-question-banner">
-                        {duplicateGroup ? (
-                          <>
-                            <div className="inline-actions">
-                              <span className="status-chip warning">
-                                Duplicate with {duplicateGroup.questions.length - 1} other question{duplicateGroup.questions.length === 2 ? "" : "s"}
-                              </span>
-                              {!question.canManage ? <span className="status-chip">Read-only</span> : null}
-                            </div>
-                            <p className="muted-text compact-question-meta">
-                              Matches {duplicatePositions}. Keep one copy and remove the rest.
-                            </p>
-                            {question.canManage ? (
+                      {duplicateGroup || question.isShared ? (
+                        <div className="duplicate-question-banner">
+                          {duplicateGroup ? (
+                            <>
                               <div className="inline-actions">
-                                <button
-                                  className="button-secondary small-button"
-                                  disabled={!removableDuplicateIds.length || isMutating}
-                                  type="button"
-                                  onClick={() => handleDeleteSelectedQuestions(removableDuplicateIds)}
-                                >
-                                  Keep this, remove others
-                                </button>
+                                <span className="status-chip warning">
+                                  Duplicate with {duplicateGroup.questions.length - 1} other question{duplicateGroup.questions.length === 2 ? "" : "s"}
+                                </span>
+                                {!question.canManage ? <span className="status-chip">Read-only</span> : null}
                               </div>
-                            ) : null}
-                          </>
-                        ) : (
-                          <span className="status-chip">Shared question</span>
-                        )}
-                      </div>
-                    ) : null}
-                    {editingQuestionId === question.id && editingQuestionDraft ? (
-                      <div className="form-stack">
-                        <div className="field textarea-field">
-                          <label htmlFor={`edit-question-${question.id}`}>Question</label>
-                          <textarea
-                            id={`edit-question-${question.id}`}
-                            value={editingQuestionDraft.prompt}
-                            onChange={(event) =>
-                              setEditingQuestionDraft((currentDraft) =>
-                                currentDraft
-                                  ? {
+                              <p className="muted-text compact-question-meta">
+                                Matches {duplicatePositions}. Keep one copy and remove the rest.
+                              </p>
+                              {question.canManage ? (
+                                <div className="inline-actions">
+                                                                <button
+                                    className="button-secondary small-button"
+                                    disabled={!removableDuplicateIds.length || isMutating}
+                                    type="button"
+                                    onClick={() => handleDeleteSelectedQuestions(removableDuplicateIds)}
+                                  >
+                                    Keep this, remove others
+                                  </button>
+                                </div>
+                              ) : null}
+                            </>
+                          ) : (
+                            <span className="status-chip">Shared question</span>
+                          )}
+                        </div>
+                      ) : null}
+                      {activePoolDraft ? (
+                        <div className="form-stack">
+                          <div className="field textarea-field">
+                            <label htmlFor={`edit-question-${question.id}`}>Question</label>
+                            <textarea
+                              id={`edit-question-${question.id}`}
+                              value={activePoolDraft.prompt}
+                              onChange={(event) =>
+                                setPoolQuestionDrafts((currentDrafts) => {
+                                  const currentDraft = currentDrafts[question.id];
+                                  if (!currentDraft) return currentDrafts;
+                                  return {
+                                    ...currentDrafts,
+                                    [question.id]: {
                                       ...currentDraft,
                                       prompt: event.target.value,
-                                    }
-                                  : currentDraft,
-                              )
-                            }
-                          />
-                        </div>
+                                    },
+                                  };
+                                })
+                              }
+                            />
+                          </div>
 
-                        <div className="inline-actions">
-                          <button
-                            className={editingQuestionDraft.options.length === 4 ? "button" : "button-secondary"}
-                            type="button"
-                            onClick={() => handleEditableOptionCountChange(4)}
-                          >
-                            4 options
-                          </button>
-                          <button
-                            className={editingQuestionDraft.options.length === 5 ? "button" : "button-secondary"}
-                            type="button"
-                            onClick={() => handleEditableOptionCountChange(5)}
-                          >
-                            5 options
-                          </button>
-                        </div>
+                          <div className="inline-actions">
+                            <button
+                              className={activePoolDraft.options.length === 4 ? "button" : "button-secondary"}
+                              type="button"
+                              onClick={() => handlePoolQuestionOptionCountChange(question.id, 4)}
+                            >
+                              4 options
+                            </button>
+                            <button
+                              className={activePoolDraft.options.length === 5 ? "button" : "button-secondary"}
+                              type="button"
+                              onClick={() => handlePoolQuestionOptionCountChange(question.id, 5)}
+                            >
+                              5 options
+                            </button>
+                          </div>
 
-                        <div className="option-list">
-                          {editingQuestionDraft.options.map((option, optionIndex) => (
-                            <div className="option-editor" key={`${question.id}-edit-option-${optionIndex}`}>
-                              <div className="field">
-                                <label htmlFor={`${question.id}-edit-option-${optionIndex}`}>
-                                  Option {optionIndex + 1}
-                                </label>
-                                <input
-                                  id={`${question.id}-edit-option-${optionIndex}`}
-                                  value={option}
-                                  onChange={(event) => updateEditableOption(optionIndex, event.target.value)}
-                                />
-                              </div>
-                              <label className="radio-chip">
-                                <input
-                                  checked={editingQuestionDraft.correctOptionIndex === optionIndex}
-                                  name={`edit-correct-option-${question.id}`}
-                                  type="radio"
-                                  onChange={() =>
-                                    setEditingQuestionDraft((currentDraft) =>
-                                      currentDraft
-                                        ? {
+                          <div className="option-list">
+                            {activePoolDraft.options.map((option, optionIndex) => (
+                              <div className="option-editor" key={`${question.id}-edit-option-${optionIndex}`}>
+                                <div className="field">
+                                  <label htmlFor={`${question.id}-edit-option-${optionIndex}`}>
+                                    Option {optionIndex + 1}
+                                  </label>
+                                  <input
+                                    id={`${question.id}-edit-option-${optionIndex}`}
+                                    value={option}
+                                    onChange={(event) => updatePoolQuestionOption(question.id, optionIndex, event.target.value)}
+                                  />
+                                </div>
+                                <label className="radio-chip">
+                                  <input
+                                    checked={activePoolDraft.correctOptionIndex === optionIndex}
+                                    name={`edit-correct-option-${question.id}`}
+                                    type="radio"
+                                    onChange={() =>
+                                      setPoolQuestionDrafts((currentDrafts) => {
+                                        const currentDraft = currentDrafts[question.id];
+                                        if (!currentDraft) return currentDrafts;
+                                        return {
+                                          ...currentDrafts,
+                                          [question.id]: {
                                             ...currentDraft,
                                             correctOptionIndex: optionIndex,
-                                          }
-                                        : currentDraft,
-                                    )
-                                  }
-                                />
-                                Correct
-                              </label>
-                            </div>
-                          ))}
+                                          },
+                                        };
+                                      })
+                                    }
+                                  />
+                                  Correct
+                                </label>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-
-                        <div className="inline-actions">
-                          <button
-                            className="button"
-                            disabled={isMutating}
-                            type="button"
-                            onClick={() => handleSaveEditedQuestion(question.id)}
-                          >
-                            Save changes
-                          </button>
-                          <button
-                            className="button-secondary"
-                            disabled={isMutating}
-                            type="button"
-                            onClick={handleCancelEditingQuestion}
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <p className="compact-question-prompt">{question.prompt}</p>
-                        <ol className="question-options compact-question-options">
-                          {question.options.map((option, optionIndex) => (
-                            <li key={`${question.id}-${optionIndex}`}>
-                              {option}
-                              {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
-                            </li>
-                          ))}
-                        </ol>
-                      </>
-                    )}
-                    <p className="muted-text compact-question-meta">
-                      {question.source} · {formatShortDate(question.createdAt)}
-                    </p>
-                  </article>
-                );})}
+                      ) : (
+                        <>
+                          <p className="compact-question-prompt">{question.prompt}</p>
+                          <ol className="question-options compact-question-options">
+                            {question.options.map((option, optionIndex) => (
+                              <li key={`${question.id}-${optionIndex}`}>
+                                {option}
+                                {optionIndex === question.correctOptionIndex ? " (correct)" : ""}
+                              </li>
+                            ))}
+                          </ol>
+                        </>
+                      )}
+                      <p className="muted-text compact-question-meta">
+                        {question.source} · {formatShortDate(question.createdAt)}
+                      </p>
+                    </article>
+                  );})}
+                </div>
+                {isEditingQuestionPool ? (
+                  <div className="inline-actions question-pool-bulk-save-bar">
+                    <button
+                      className="button"
+                      disabled={isMutating}
+                      type="button"
+                      onClick={handleSaveEditedQuestionPool}
+                    >
+                      Save
+                    </button>
+                    <button
+                      className="button-secondary"
+                      disabled={isMutating}
+                      type="button"
+                      onClick={handleCancelEditingQuestionPool}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : selectedQuestionBankPoolId ? (
               <div className="empty-state compact-empty-state">
@@ -7755,9 +8270,16 @@ export function AdminQuestionWorkspace({
                       className="select-field"
                       id="author-pool"
                       value={authorPoolId}
-                      onChange={(event) => setAuthorPoolId(event.target.value)}
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+                        setAuthorPoolId(nextValue);
+                        if (nextValue !== "__create_new_pool__") {
+                          setPoolName("");
+                        }
+                      }}
                     >
                       <option value="">Select a pool</option>
+                      <option value="__create_new_pool__">Create new pool</option>
                       {pools.map((pool) => (
                         <option key={pool.id} value={pool.id}>
                           {pool.name}
@@ -7765,19 +8287,20 @@ export function AdminQuestionWorkspace({
                       ))}
                     </select>
                   </div>
-                  <div className="role-option role-option-create">
-                    <div className="field compact-field">
-                      <label htmlFor="pool-name-inline">Create New Pool</label>
-                      <input
-                        id="pool-name-inline"
-                        placeholder="Pool name"
-                        maxLength={30}
-                        value={poolName}
-                        onChange={(event) => setPoolName(event.target.value)}
-                      />
+                  {authorPoolId === "__create_new_pool__" ? (
+                    <div className="role-option role-option-create">
+                      <div className="field compact-field">
+                        <label htmlFor="pool-name-inline">Create New Pool</label>
+                        <input
+                          id="pool-name-inline"
+                          placeholder="Pool name"
+                          maxLength={30}
+                          value={poolName}
+                          onChange={(event) => setPoolName(event.target.value)}
+                        />
+                      </div>
                     </div>
-                    <p className="muted-text">The pool is created when valid questions are imported.</p>
-                  </div>
+                  ) : null}
                 </div>
               </div>
 
@@ -7788,13 +8311,10 @@ export function AdminQuestionWorkspace({
               <div className="question-bank-summary">
                 <div>
                   <strong>OCR import</strong>
-                  <p className="muted-text question-bank-summary-copy">
-                    Select or create a pool first, then use OCR import to preview and clean pasted text before saving.
-                  </p>
                 </div>
                 <button
                   className="button-secondary small-button"
-                  disabled={!authorPoolId && !poolName.trim()}
+                  disabled={!(authorPoolId && authorPoolId !== "__create_new_pool__") && !poolName.trim()}
                   type="button"
                   onClick={() => setIsOcrImportOpen((currentState) => !currentState)}
                 >
@@ -7802,9 +8322,9 @@ export function AdminQuestionWorkspace({
                 </button>
               </div>
 
-              {!authorPoolId && !poolName.trim() ? <p className="muted-text">Select a pool or enter a new pool name to enable OCR import.</p> : null}
+              {!(authorPoolId && authorPoolId !== "__create_new_pool__") && !poolName.trim() ? <p className="muted-text">Select a pool or enter a new pool name to enable OCR import.</p> : null}
 
-              {(authorPoolId || poolName.trim()) && isOcrImportOpen ? (
+              {((authorPoolId && authorPoolId !== "__create_new_pool__") || poolName.trim()) && isOcrImportOpen ? (
                 <div className="form-stack import-card">
                   <div className="section-head">
                     <div>

@@ -514,16 +514,22 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       ...request,
       adminLabel: request.adminLabel?.trim() || request.adminIdentifier?.trim() || "Unknown admin",
       adminGroupName: request.adminGroupName?.trim() ?? "Unnamed group",
+      introducedByAdminIdentifier: request.introducedByAdminIdentifier?.trim() || null,
+      introducedByAdminLabel: request.introducedByAdminLabel?.trim() || null,
       requestType: request.requestType ?? "user-request",
       resolvedAt: request.resolvedAt ?? null,
       status: request.status ?? "pending",
     })),
     groupMemberships: (parsed.groupMemberships ?? []).map((record) => ({
+      attendanceByDateKey: record.attendanceByDateKey ?? {},
       createdAt: record.createdAt ?? new Date().toISOString(),
       endedAt: record.endedAt ?? null,
       groupId: record.groupId ?? "",
       groupName: record.groupName?.trim() ?? "",
       id: record.id ?? createEntityId("group-membership"),
+      introducedByAdminIdentifier: record.introducedByAdminIdentifier?.trim() || null,
+      introducedByAdminLabel: record.introducedByAdminLabel?.trim() || null,
+      isGroupAdmin: Boolean(record.isGroupAdmin),
       joinedAt: record.joinedAt ?? null,
       ownerIdentifier: record.ownerIdentifier?.trim() ?? "",
       ownerLabel: record.ownerLabel?.trim() || record.ownerIdentifier?.trim() || "Owner",
@@ -536,6 +542,8 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
     pollAttempts: parsed.pollAttempts ?? [],
     participantGroups: (parsed.participantGroups ?? []).map((group) => ({
       ...group,
+      adminIdentifiers: dedupe((group.adminIdentifiers ?? []).map((id) => normalizeParticipantIdentifier(id)).filter(Boolean)),
+      adminShareCodesByIdentifier: group.adminShareCodesByIdentifier ?? {},
       inviteJoinMode: group.inviteJoinMode ?? "approval-required",
       ownerIdentifier: group.ownerIdentifier?.trim() || null,
       ownerLabel: group.ownerLabel?.trim() || null,
@@ -612,11 +620,24 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
   };
 }
 
+function isGroupAdminOf(group: ParticipantGroup, identifier: string | null | undefined) {
+  if (!identifier?.trim()) return false;
+  return (group.adminIdentifiers ?? []).some((adminId) => identifiersMatch(adminId, identifier));
+}
+
 function reconcileGroupMemberships(state: TestingWorkspaceState) {
   state.groupMemberships ??= [];
   const participantMap = getParticipantMap(state);
 
   for (const group of state.participantGroups) {
+    group.adminIdentifiers = dedupe((group.adminIdentifiers ?? []).map((id) => normalizeParticipantIdentifier(id)).filter(Boolean));
+    group.adminShareCodesByIdentifier ??= {};
+    for (const adminId of group.adminIdentifiers) {
+      const existingEntry = Object.entries(group.adminShareCodesByIdentifier).find(([key]) => identifiersMatch(key, adminId));
+      if (!existingEntry?.[1]?.trim()) {
+        group.adminShareCodesByIdentifier[adminId] = `TRAPIT-GROUP-ADM-${createEntityId("access").replace(/-/g, "").toUpperCase()}`;
+      }
+    }
     const ownerIdentifier = group.ownerIdentifier?.trim() ?? "";
     const ownerProfile = ownerIdentifier
       ? state.participants.find((participant) => identifiersMatch(participant.identifier, ownerIdentifier))
@@ -728,6 +749,16 @@ function reconcileGroupMemberships(state: TestingWorkspaceState) {
     for (const record of state.groupMemberships) {
       if (record.groupId === group.id) {
         record.groupName = group.name;
+        record.attendanceByDateKey ??= {};
+        record.isGroupAdmin = isGroupAdminOf(group, record.userIdentifier);
+        if (record.introducedByAdminIdentifier) {
+          const introProfile = state.participants.find((participant) =>
+            identifiersMatch(participant.identifier, record.introducedByAdminIdentifier!),
+          );
+          if (introProfile?.label?.trim()) {
+            record.introducedByAdminLabel = introProfile.label.trim();
+          }
+        }
         if (ownerIdentifier) {
           record.ownerIdentifier = ownerIdentifier;
           record.ownerLabel = ownerLabel;
@@ -850,6 +881,7 @@ export async function listWorkspaceAppointmentBusinesses(query?: string) {
         locations: branding.appointmentLocations ?? [],
         name: name || "Business",
         ownerIdentifier,
+        profileImageDataUrl: branding.profileImageDataUrl ?? branding.imageDataUrl ?? null,
         recurringBookingLimit: null as number | null,
         recurringBookingsEnabled: false as boolean,
         slotDurationMinutes: branding.slotDurationMinutes ?? null,
@@ -868,6 +900,7 @@ export async function listWorkspaceAppointmentBusinesses(query?: string) {
       locations: NonNullable<WorkspaceBranding["appointmentLocations"]>;
       name: string;
       ownerIdentifier: string;
+      profileImageDataUrl: string | null;
       recurringBookingLimit: number | null;
       recurringBookingsEnabled: boolean;
       slotDurationMinutes: number | null;
@@ -1642,12 +1675,26 @@ async function assignUnownedGroupsToOwner(ownerIdentifier: string) {
   return participantGroups;
 }
 
+function isQuestionExcludedFromTests(state: TestingWorkspaceState, question: PersistentQuestion) {
+  return Boolean(
+    question.isTaggedIncorrect
+    || state.questionReports.some((report) => report.questionId === question.id && report.status === "open"),
+  );
+}
+
+function hydrateQuestionTagState(state: TestingWorkspaceState, questions: PersistentQuestion[]): PersistentQuestion[] {
+  return questions.map((question) => ({
+    ...question,
+    isTaggedIncorrect: isQuestionExcludedFromTests(state, question),
+  }));
+}
+
 export async function listQuestions(
   actorId: string | null = null,
   actorIdentifier: string | null = null,
 ) {
   const state = await readStoreSnapshot();
-  return filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier);
+  return hydrateQuestionTagState(state, filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier));
 }
 
 export async function createQuestion(
@@ -1806,7 +1853,84 @@ export async function updateQuestion(
   }
 
   await writeStore(state);
-  return filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier);
+  return hydrateQuestionTagState(state, filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier));
+}
+
+export async function toggleQuestionIncorrectTag(
+  questionId: string,
+  isTaggedIncorrect: boolean,
+  actorId: string | null = null,
+  actorIdentifier: string | null = null,
+) {
+  const state = await readStore();
+  ensureActorOwnsQuestion(state, questionId, actorId);
+  const timestamp = new Date().toISOString();
+
+  state.questions = state.questions.map((question) =>
+    question.id === questionId
+      ? {
+          ...question,
+          isTaggedIncorrect,
+          updatedAt: timestamp,
+        }
+      : question,
+  );
+
+  if (!isTaggedIncorrect) {
+    state.questionReports = state.questionReports.map((report) =>
+      report.questionId === questionId && report.status === "open"
+        ? {
+            ...report,
+            resolvedAt: timestamp,
+            status: "resolved",
+          }
+        : report,
+    );
+  }
+
+  await writeStore(state);
+  return hydrateQuestionTagState(state, filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier));
+}
+
+export async function updateQuestionsBulk(
+  updates: Array<{ questionId: string; draft: QuestionDraft }>,
+  actorId: string | null = null,
+  actorIdentifier: string | null = null,
+) {
+  if (!updates.length) {
+    throw new Error("No question updates were provided.");
+  }
+
+  const state = await readStore();
+  const timestamp = new Date().toISOString();
+  const normalizedUpdates = new Map<string, ReturnType<typeof normalizeDraft>>();
+
+  for (const item of updates) {
+    ensureActorOwnsQuestion(state, item.questionId, actorId);
+    const validationError = validateQuestionDraft(item.draft);
+    if (validationError) {
+      throw new Error(validationError);
+    }
+    normalizedUpdates.set(item.questionId, normalizeDraft(item.draft));
+  }
+
+  state.questions = state.questions.map((question) => {
+    const nextDraft = normalizedUpdates.get(question.id);
+    if (!nextDraft) {
+      return question;
+    }
+
+    return {
+      ...question,
+      correctOptionIndex: nextDraft.correctOptionIndex,
+      options: nextDraft.options,
+      prompt: nextDraft.prompt,
+      updatedAt: timestamp,
+    };
+  });
+
+  await writeStore(state);
+  return hydrateQuestionTagState(state, filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier));
 }
 
 export async function deleteQuestion(questionId: string, actorId: string | null = null) {
@@ -2540,7 +2664,7 @@ export async function listParticipantGroupsForOwner(
   });
 
   return participantGroups.filter((group) => {
-    if (isGroupOwnedBy(group, ownerIdentifier)) {
+    if (isGroupOwnedBy(group, ownerIdentifier) || isGroupAdminOf(group, ownerIdentifier)) {
       return true;
     }
 
@@ -2677,8 +2801,16 @@ export async function addGroupMemberDirect(input: {
     throw new Error("Group not found.");
   }
 
-  if (!group.ownerIdentifier || !identifiersMatch(group.ownerIdentifier, input.ownerIdentifier)) {
-    throw new Error("You can only add members to groups you created.");
+  const isCreator = Boolean(group.ownerIdentifier && identifiersMatch(group.ownerIdentifier, input.ownerIdentifier));
+  const isGroupAdmin = isGroupAdminOf(group, input.ownerIdentifier);
+
+  if (!isCreator && !isGroupAdmin) {
+    throw new Error("Only the group creator or a group admin can add members to this group.");
+  }
+
+  const normalizedDigits = input.targetIdentifier.replace(/\D/g, "");
+  if (normalizedDigits.length < 10) {
+    throw new Error("Enter a complete phone number to add a user to the group.");
   }
 
   const participant = ensureParticipantProfile(state, {
@@ -2692,7 +2824,7 @@ export async function addGroupMemberDirect(input: {
       ? identifiersMatch(existing.identifier, participant.identifier)
         && !identifiersMatch(existing.identifier, group.ownerIdentifier ?? "")
       : false;
-  }) || identifiersMatch(group.ownerIdentifier, participant.identifier);
+  }) || Boolean(group.ownerIdentifier && identifiersMatch(group.ownerIdentifier, participant.identifier));
 
   if (isAlreadyActive) {
     throw new Error("This user is already a member of the group.");
@@ -2725,14 +2857,18 @@ export async function addGroupMemberDirect(input: {
     state.groupMemberships = [
       ...(state.groupMemberships ?? []),
       {
+        attendanceByDateKey: {},
         createdAt: timestamp,
         endedAt: null,
         groupId: group.id,
         groupName: group.name,
         id: createEntityId("group-membership"),
+        introducedByAdminIdentifier: null,
+        introducedByAdminLabel: null,
+        isGroupAdmin: false,
         joinedAt: timestamp,
-        ownerIdentifier: group.ownerIdentifier,
-        ownerLabel: input.ownerLabel?.trim() || group.ownerLabel || group.ownerIdentifier,
+        ownerIdentifier: group.ownerIdentifier ?? input.ownerIdentifier,
+        ownerLabel: group.ownerLabel || input.ownerLabel?.trim() || group.ownerIdentifier || input.ownerIdentifier,
         requestId: null,
         status: "member",
         updatedAt: timestamp,
@@ -2885,25 +3021,190 @@ export async function leaveParticipantGroup(input: {
 export async function listGroupMembershipsForActor(actorIdentifier: string) {
   const state = await readStore();
   const records = reconcileGroupMemberships(state);
-  const ownedGroupIds = new Set(
+  const creatorGroupIds = new Set(
     state.participantGroups
       .filter((group) => isGroupOwnedBy(group, actorIdentifier))
+      .map((group) => group.id),
+  );
+  const managedGroupIds = new Set(
+    state.participantGroups
+      .filter((group) => isGroupOwnedBy(group, actorIdentifier) || isGroupAdminOf(group, actorIdentifier))
       .map((group) => group.id),
   );
 
   const joinedGroupMemberships = records.filter(
     (record) =>
-      !ownedGroupIds.has(record.groupId)
+      !creatorGroupIds.has(record.groupId)
       && record.status !== "creator"
       && identifiersMatch(record.userIdentifier, actorIdentifier),
   );
 
-  const ownedGroupMemberships = records.filter((record) => ownedGroupIds.has(record.groupId));
+  const ownedGroupMemberships = records.filter((record) => managedGroupIds.has(record.groupId));
 
   return {
     joinedGroupMemberships,
     ownedGroupMemberships,
   };
+}
+
+export async function toggleGroupMemberAdmin(input: {
+  groupId: string;
+  memberIdentifier: string;
+  ownerIdentifier: string;
+}) {
+  const state = await readStore();
+  reconcileGroupMemberships(state);
+  const group = state.participantGroups.find((entry) => entry.id === input.groupId);
+
+  if (!group) {
+    throw new Error("Group not found.");
+  }
+
+  if (!group.ownerIdentifier || !identifiersMatch(group.ownerIdentifier, input.ownerIdentifier)) {
+    throw new Error("Only the group creator can mark members as admins.");
+  }
+
+  const normalizedMember = normalizeParticipantIdentifier(input.memberIdentifier);
+  if (identifiersMatch(group.ownerIdentifier, normalizedMember)) {
+    throw new Error("The group creator is already the owner of this group.");
+  }
+
+  const currentAdmins = group.adminIdentifiers ?? [];
+  const isCurrentlyAdmin = currentAdmins.some((adminId) => identifiersMatch(adminId, normalizedMember));
+  const nextAdmins = isCurrentlyAdmin
+    ? currentAdmins.filter((adminId) => !identifiersMatch(adminId, normalizedMember))
+    : [...currentAdmins, normalizedMember];
+
+  const nextShareCodes = { ...(group.adminShareCodesByIdentifier ?? {}) };
+  if (!isCurrentlyAdmin) {
+    const existingCodeEntry = Object.entries(nextShareCodes).find(([key]) => identifiersMatch(key, normalizedMember));
+    if (!existingCodeEntry?.[1]?.trim()) {
+      nextShareCodes[normalizedMember] = `TRAPIT-GROUP-ADM-${createEntityId("access").replace(/-/g, "").toUpperCase()}`;
+    }
+  }
+
+  const timestamp = new Date().toISOString();
+  state.participantGroups = state.participantGroups.map((entry) =>
+    entry.id === group.id
+      ? {
+          ...entry,
+          adminIdentifiers: nextAdmins,
+          adminShareCodesByIdentifier: nextShareCodes,
+          updatedAt: timestamp,
+        }
+      : entry,
+  );
+
+  reconcileGroupMemberships(state);
+  await writeStore(state);
+  return state.participantGroups;
+}
+
+export async function markGroupMemberAttendance(input: {
+  dateKey: string;
+  groupId: string;
+  memberIdentifier: string;
+  membershipId?: string | null;
+  ownerIdentifier: string;
+  status: "present" | "absent" | null;
+}) {
+  const state = await readStore();
+  reconcileGroupMemberships(state);
+  const group = state.participantGroups.find((entry) => entry.id === input.groupId);
+
+  if (!group) {
+    throw new Error("Group not found.");
+  }
+
+  if (!group.ownerIdentifier || !identifiersMatch(group.ownerIdentifier, input.ownerIdentifier)) {
+    throw new Error("Only the group creator can mark attendance.");
+  }
+
+  const dateKey = input.dateKey.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
+    throw new Error("Valid attendance date is required.");
+  }
+
+  const timestamp = new Date().toISOString();
+  let updated = false;
+  state.groupMemberships = (state.groupMemberships ?? []).map((record) => {
+    if (updated) return record;
+    const matchesTarget = input.membershipId
+      ? record.id === input.membershipId
+      : record.groupId === group.id && identifiersMatch(record.userIdentifier, input.memberIdentifier);
+    if (!matchesTarget) return record;
+    updated = true;
+    const nextAttendance = { ...(record.attendanceByDateKey ?? {}) };
+    if (input.status === null) {
+      delete nextAttendance[dateKey];
+    } else {
+      nextAttendance[dateKey] = input.status;
+    }
+    return {
+      ...record,
+      attendanceByDateKey: nextAttendance,
+      updatedAt: timestamp,
+    };
+  });
+
+  await writeStore(state);
+  return state.groupMemberships;
+}
+
+export async function declareGroupIntroducingAdmin(input: {
+  adminPhoneNumber: string;
+  groupId: string;
+  memberIdentifier: string;
+  membershipId?: string | null;
+}) {
+  const state = await readStore();
+  reconcileGroupMemberships(state);
+  const group = state.participantGroups.find((entry) => entry.id === input.groupId);
+
+  if (!group) {
+    throw new Error("Group not found.");
+  }
+
+  const rawPhone = input.adminPhoneNumber.trim();
+  const digits = rawPhone.replace(/\D/g, "");
+  if (digits.length < 10) {
+    throw new Error("Enter the complete phone number to search for the admin.");
+  }
+
+  const normalizedPhone = normalizeParticipantIdentifier(rawPhone);
+  const eligibleAdminIdentifiers = dedupe([
+    ...(group.adminIdentifiers ?? []),
+    ...(group.ownerIdentifier ? [group.ownerIdentifier] : []),
+  ]);
+  const matchedAdminIdentifier = eligibleAdminIdentifiers.find((adminId) =>
+    identifiersMatch(adminId, normalizedPhone) || adminId.replace(/\D/g, "").slice(-10) === digits.slice(-10),
+  );
+
+  if (!matchedAdminIdentifier) {
+    throw new Error("No group admin found with this phone number.");
+  }
+
+  const adminProfile = state.participants.find((participant) =>
+    identifiersMatch(participant.identifier, matchedAdminIdentifier),
+  );
+  const adminLabel = adminProfile?.label?.trim() || matchedAdminIdentifier;
+  const timestamp = new Date().toISOString();
+
+  state.groupMemberships = (state.groupMemberships ?? []).map((record) => {
+    const matchesTarget = input.membershipId
+      ? record.id === input.membershipId
+      : record.groupId === group.id && identifiersMatch(record.userIdentifier, input.memberIdentifier);
+    if (!matchesTarget) return record;
+    return {
+      ...record,
+      introducedByAdminIdentifier: matchedAdminIdentifier,
+      introducedByAdminLabel: adminLabel,
+      updatedAt: timestamp,
+    };
+  });
+
+  await writeStore(state);
+  return state.groupMemberships;
 }
 
 export async function listGroupJoinRequestsForAdmin(adminIdentifier: string) {
@@ -2927,6 +3228,8 @@ export async function listGroupJoinRequestsForUser(requesterId: string) {
 export async function createGroupJoinRequest(input: {
   adminGroupId: string;
   adminLabel?: string | null;
+  introducedByAdminIdentifier?: string | null;
+  introducedByAdminLabel?: string | null;
   requesterId: string;
   requesterLabel: string;
 }) {
@@ -2969,25 +3272,40 @@ export async function createGroupJoinRequest(input: {
     identifiersMatch(participant.identifier, group.ownerIdentifier ?? ""),
   );
   const ownerLabel = input.adminLabel?.trim() || group.ownerLabel || ownerProfile?.label || group.ownerIdentifier;
+  const introducedByAdminIdentifier = input.introducedByAdminIdentifier?.trim() || null;
+  const introducedByAdminProfile = introducedByAdminIdentifier
+    ? state.participants.find((participant) => identifiersMatch(participant.identifier, introducedByAdminIdentifier))
+    : null;
+  const introducedByAdminLabel = introducedByAdminIdentifier
+    ? (input.introducedByAdminLabel?.trim() || introducedByAdminProfile?.label?.trim() || introducedByAdminIdentifier)
+    : null;
 
-  const request = createStoredGroupJoinRequest({
-    adminGroupId: group.id,
-    adminIdentifier: group.ownerIdentifier,
-    adminGroupName: group.name,
-    adminLabel: ownerLabel,
-    requesterId: normalizedRequesterId,
-    requesterLabel: input.requesterLabel.trim() || normalizedRequesterId,
-  });
+  const request: GroupJoinRequest = {
+    ...createStoredGroupJoinRequest({
+      adminGroupId: group.id,
+      adminIdentifier: group.ownerIdentifier,
+      adminGroupName: group.name,
+      adminLabel: ownerLabel,
+      requesterId: normalizedRequesterId,
+      requesterLabel: input.requesterLabel.trim() || normalizedRequesterId,
+    }),
+    introducedByAdminIdentifier,
+    introducedByAdminLabel,
+  };
 
   state.groupJoinRequests = [request, ...state.groupJoinRequests];
   state.groupMemberships = [
     ...(state.groupMemberships ?? []),
     {
+      attendanceByDateKey: {},
       createdAt: request.requestedAt,
       endedAt: null,
       groupId: group.id,
       groupName: group.name,
       id: createEntityId("group-membership"),
+      introducedByAdminIdentifier,
+      introducedByAdminLabel,
+      isGroupAdmin: false,
       joinedAt: null,
       ownerIdentifier: group.ownerIdentifier,
       ownerLabel,
@@ -3044,9 +3362,20 @@ export async function getParticipantGroupInviteByShareCode(
 ) {
   const state = await readStore();
   reconcileGroupMemberships(state);
-  const group = state.participantGroups.find((entry) =>
-    matchesGroupShareCode(entry.shareCode, shareCode, entry.name),
-  );
+  let matchedAdminIdentifier: string | null = null;
+  const group = state.participantGroups.find((entry) => {
+    if (matchesGroupShareCode(entry.shareCode, shareCode, entry.name)) {
+      matchedAdminIdentifier = null;
+      return true;
+    }
+    for (const [adminId, adminCode] of Object.entries(entry.adminShareCodesByIdentifier ?? {})) {
+      if (matchesGroupShareCode(adminCode, shareCode, entry.name)) {
+        matchedAdminIdentifier = adminId;
+        return true;
+      }
+    }
+    return false;
+  });
 
   if (!group) {
     throw new Error("This group invite link is invalid or no longer available.");
@@ -3072,6 +3401,9 @@ export async function getParticipantGroupInviteByShareCode(
           && identifiersMatch(request.requesterId, normalizedViewerIdentifier),
       ) ?? null
     : null;
+  const matchedAdminProfile = matchedAdminIdentifier
+    ? state.participants.find((participant) => identifiersMatch(participant.identifier, matchedAdminIdentifier!))
+    : null;
 
   return {
     access: {
@@ -3087,6 +3419,8 @@ export async function getParticipantGroupInviteByShareCode(
       ownerIdentifier: group.ownerIdentifier,
       shareCode: group.shareCode,
     },
+    introducedByAdminIdentifier: matchedAdminIdentifier,
+    introducedByAdminLabel: matchedAdminIdentifier ? (matchedAdminProfile?.label?.trim() || matchedAdminIdentifier) : null,
   };
 }
 
@@ -3103,6 +3437,8 @@ export async function requestParticipantGroupAccessByShareCode(input: {
 
   await createGroupJoinRequest({
     adminGroupId: invite.group.id,
+    introducedByAdminIdentifier: invite.introducedByAdminIdentifier ?? null,
+    introducedByAdminLabel: invite.introducedByAdminLabel ?? null,
     requesterId: input.requesterId,
     requesterLabel: input.requesterLabel,
   });
@@ -3397,7 +3733,7 @@ async function createScheduledTestWithoutNotifications(input: {
   const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy, input.actorIdentifier ?? null);
 
   const poolQuestionIds = dedupe(pool.questionIds).filter((questionId) =>
-    state.questions.some((question) => question.id === questionId),
+    state.questions.some((question) => question.id === questionId && !isQuestionExcludedFromTests(state, question)),
   );
 
   if (input.questionCount > poolQuestionIds.length) {
@@ -3502,7 +3838,7 @@ async function updateScheduledTestWithoutNotifications(input: {
 
   const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy, input.actorIdentifier ?? null);
   const poolQuestionIds = dedupe(pool.questionIds).filter((questionId) =>
-    state.questions.some((question) => question.id === questionId),
+    state.questions.some((question) => question.id === questionId && !isQuestionExcludedFromTests(state, question)),
   );
 
   if (input.questionCount > poolQuestionIds.length) {
@@ -5113,9 +5449,183 @@ export async function reportTestQuestion(input: {
     ];
   }
 
+  state.questions = state.questions.map((question) =>
+    question.id === input.questionId
+      ? {
+          ...question,
+          isTaggedIncorrect: true,
+          updatedAt: timestamp,
+        }
+      : question,
+  );
+
   await writeStore(state);
 
   return getUserTestReview(input.testId, normalizedReporterIdentifier);
+}
+
+export async function reportPostTestQuestion(input: {
+  actorId: string | null;
+  questionId: string;
+  reason?: string | null;
+  reporterIdentifier: string;
+  reporterLabel?: string | null;
+  testId: string;
+}) {
+  const state = await readStore();
+  const scheduledTest = getCompletedScheduledTest(state, input.testId);
+  const normalizedReporterIdentifier = normalizeParticipantIdentifier(input.reporterIdentifier);
+  const participantAttempt = state.attempts.find(
+    (attempt) => attempt.testId === input.testId
+      && identifiersMatch(attempt.userId, normalizedReporterIdentifier),
+  );
+  const hasParticipantScope = Boolean(participantAttempt)
+    || scheduledTest.resolvedParticipantIdentifiers.some((identifier) =>
+      identifiersMatch(identifier, normalizedReporterIdentifier),
+    );
+  const hasCreatorScope = input.actorId === null || scheduledTest.createdBy === input.actorId;
+
+  if (!hasCreatorScope && !hasParticipantScope) {
+    throw new Error("You do not have access to report questions in this test.");
+  }
+
+  if (!scheduledTest.questionIds.includes(input.questionId)) {
+    throw new Error("Question not found in this test.");
+  }
+
+  const timestamp = new Date().toISOString();
+  const reason = input.reason?.trim() || (hasCreatorScope ? "Reported by admin." : "Reported by participant.");
+  const reporterKey = normalizedReporterIdentifier || input.actorId || "admin";
+  const existingReport = state.questionReports.find(
+    (report) => report.testId === input.testId
+      && report.questionId === input.questionId
+      && identifiersMatch(report.reporterIdentifier, reporterKey),
+  );
+
+  if (existingReport) {
+    state.questionReports = state.questionReports.map((report) =>
+      report.id === existingReport.id
+        ? {
+            ...report,
+            createdAt: timestamp,
+            reason,
+            reporterLabel: input.reporterLabel?.trim() || report.reporterLabel,
+            resolvedAt: null,
+            status: "open",
+          }
+        : report,
+    );
+  } else {
+    state.questionReports = [
+      {
+        createdAt: timestamp,
+        id: createEntityId("question-report"),
+        questionId: input.questionId,
+        reason,
+        reporterIdentifier: reporterKey,
+        reporterLabel: input.reporterLabel?.trim() || null,
+        resolvedAt: null,
+        status: "open",
+        testId: input.testId,
+      },
+      ...state.questionReports,
+    ];
+  }
+
+  state.questions = state.questions.map((question) =>
+    question.id === input.questionId
+      ? {
+          ...question,
+          isTaggedIncorrect: true,
+          updatedAt: timestamp,
+        }
+      : question,
+  );
+
+  await writeStore(state);
+
+  return getTestResults({
+    actorId: input.actorId,
+    participantIdentifier: input.reporterIdentifier,
+    testId: input.testId,
+  });
+}
+
+export async function reportPostGameQuestion(input: {
+  gameId: string;
+  questionId: string;
+  reason?: string | null;
+  reporterIdentifier: string;
+}) {
+  const state = await readStore();
+  const game = state.games.find((entry) => entry.id === input.gameId);
+
+  if (!game || hydrateGame(game).status !== "completed") {
+    throw new Error("Questions can only be reported after the game is completed.");
+  }
+
+  const normalizedReporterIdentifier = normalizeParticipantIdentifier(input.reporterIdentifier);
+  const isCreator = identifiersMatch(game.creatorIdentifier, normalizedReporterIdentifier);
+  const isParticipant = game.participants.some((entry) =>
+    identifiersMatch(entry.identifier, normalizedReporterIdentifier),
+  );
+
+  if (!isCreator && !isParticipant) {
+    throw new Error("You do not have access to report questions in this game.");
+  }
+
+  if (!game.questionIds.includes(input.questionId)) {
+    throw new Error("Question not found in this game.");
+  }
+
+  const timestamp = new Date().toISOString();
+  const reason = input.reason?.trim() || (isCreator ? "Reported by admin." : "Reported by participant.");
+  const existingReport = state.questionReports.find(
+    (report) => report.testId === input.gameId
+      && report.questionId === input.questionId
+      && identifiersMatch(report.reporterIdentifier, normalizedReporterIdentifier),
+  );
+
+  if (existingReport) {
+    state.questionReports = state.questionReports.map((report) =>
+      report.id === existingReport.id
+        ? {
+            ...report,
+            createdAt: timestamp,
+            reason,
+            resolvedAt: null,
+            status: "open",
+          }
+        : report,
+    );
+  } else {
+    state.questionReports = [
+      {
+        createdAt: timestamp,
+        id: createEntityId("question-report"),
+        questionId: input.questionId,
+        reason,
+        reporterIdentifier: normalizedReporterIdentifier,
+        reporterLabel: null,
+        resolvedAt: null,
+        status: "open",
+        testId: input.gameId,
+      },
+      ...state.questionReports,
+    ];
+  }
+
+  state.questions = state.questions.map((question) =>
+    question.id === input.questionId
+      ? {
+          ...question,
+          isTaggedIncorrect: true,
+          updatedAt: timestamp,
+        }
+      : question,
+  );
+
+  await writeStore(state);
 }
 
 export async function getScheduledTestInviteByShareCode(
@@ -5383,15 +5893,57 @@ export async function getTestResults(input: {
     ? (assessmentKind === "instant" ? 4 : 1)
     : (attempts[0]?.result.correctMarks ?? 4);
   const overallMarks = getCumulativeTestMarks(state, normalizedParticipantIdentifier);
+  const openReportsForTest = state.questionReports.filter(
+    (report) => report.testId === scheduledTest.id && report.status === "open",
+  );
+  const reportedQuestionIds = dedupe([
+    ...openReportsForTest.map((report) => report.questionId),
+    ...scheduledTest.questionIds.filter((questionId) => Boolean(questionMap.get(questionId)?.isTaggedIncorrect)),
+  ]);
+  const creatorParticipantResponses = hasCreatorScope
+    ? visibleEntries.map((entry) => {
+        const entryAttempt = attempts.find((attempt) =>
+          identifiersMatch(attempt.userId, entry.participantId),
+        );
+        const profileLabel = state.participants.find((participant) =>
+          identifiersMatch(participant.identifier, entry.participantId),
+        )?.label?.trim();
+        const rawManualName = entry.participantName?.trim() || "";
+        const resolvedName = (rawManualName && !/^\+?[\d\s()-]+$/.test(rawManualName))
+          ? rawManualName
+          : (profileLabel || formatPhoneNumberForDisplay(rawManualName) || "—");
+        const selectedOptionByQuestionId: Record<string, number | null> = {};
+        const marksByQuestionId: Record<string, number> = {};
+
+        for (const questionId of scheduledTest.questionIds) {
+          const question = questionMap.get(questionId);
+          if (!question) continue;
+          const selected = entryAttempt?.answers[question.id] ?? null;
+          selectedOptionByQuestionId[question.id] = typeof selected === "number" ? selected : null;
+          marksByQuestionId[question.id] = selected === question.correctOptionIndex ? correctMarks : -1;
+        }
+
+        return {
+          marks: entry.marks,
+          marksByQuestionId,
+          overallMarks: getCumulativeTestMarks(state, entry.participantId),
+          participantName: resolvedName,
+          rank: entry.rank,
+          selectedOptionByQuestionId,
+        };
+      })
+    : undefined;
 
   return {
     assessmentKind,
     branding: scheduledTest.branding ?? null,
     correctMarks,
+    ...(creatorParticipantResponses ? { creatorParticipantResponses } : {}),
     groupNames,
     hasCreatorScope,
     hasParticipantScope,
     overallMarks,
+    reportedQuestionIds,
     participantResult: participantEntry
       ? {
           completedAt: participantEntry.completedAt,
@@ -5858,7 +6410,7 @@ export async function createScheduledGame(input: {
     }
 
     const availableQuestionIds = dedupe(pool.questionIds).filter((questionId) =>
-      state.questions.some((question) => question.id === questionId),
+      state.questions.some((question) => question.id === questionId && !isQuestionExcludedFromTests(state, question)),
     );
 
     if (availableQuestionIds.length < GAME_QUESTION_COUNT) {

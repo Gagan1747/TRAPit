@@ -3,7 +3,7 @@ import { validateQuestionDraft, type QuestionDraft } from "@trapit/testing";
 
 import { getWorkspaceActor } from "../../../../../lib/workspace-actor";
 import { assertCanAddQuestionsToPools } from "../../../../../lib/user-category-limits";
-import { deleteQuestion, listPoolsForActor, listQuestions, updateQuestion } from "../../../../../lib/testing-store";
+import { deleteQuestion, listPoolsForActor, listQuestions, toggleQuestionIncorrectTag, updateQuestion } from "../../../../../lib/testing-store";
 
 function decorateQuestion<T extends { createdBy: string | null }>(
   question: T,
@@ -51,8 +51,19 @@ export async function PATCH(
   try {
     const body = (await request.json()) as {
       draft?: QuestionDraft;
+      isTaggedIncorrect?: boolean;
       poolIds?: string[];
     };
+
+    if (typeof body.isTaggedIncorrect === "boolean") {
+      const questions = await toggleQuestionIncorrectTag(
+        context.params.questionId,
+        body.isTaggedIncorrect,
+        actor.sub,
+        actor.identifier,
+      );
+      return NextResponse.json({ questions: questions.map((question) => decorateQuestion(question, actor.sub)) });
+    }
 
     if (!body.draft && !body.poolIds) {
       return NextResponse.json(

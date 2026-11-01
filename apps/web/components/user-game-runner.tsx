@@ -1,6 +1,6 @@
 "use client";
 
-import { formatElapsedTime, type GameAnswer, type GameCreatorRole, type GameLeaderboardEntry } from "@trapit/testing";
+import { formatElapsedTime, shuffleOptionIndexesWithSeed, type GameAnswer, type GameCreatorRole, type GameLeaderboardEntry } from "@trapit/testing";
 import { useEffect, useRef, useState } from "react";
 
 import { formatShortDateTime } from "../lib/date-format";
@@ -361,6 +361,16 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
         ) : null}
         <div className="game-runner-layout">
           <section className="workspace-card game-question-panel">
+            {((game.isCreator && game.creatorRole !== "spectator" && !game.isAccepted) || (!game.isCreator && !game.isAccepted)) && game.status === "upcoming" ? (
+              <div className="pre-test-best-outcome-note" style={{ textAlign: "center", marginBottom: "1rem" }}>
+                <h2 style={{ fontWeight: 700, fontSize: "1.35rem", margin: "0 0 0.5rem" }}>For best outcome</h2>
+                <ul style={{ display: "inline-block", textAlign: "left", margin: 0, paddingLeft: "1.25rem" }}>
+                  <li>Avoid cheating/taking help from others</li>
+                  <li>Avoid doing guess work</li>
+                  <li>Try to score purely based on your knowledge and learnings</li>
+                </ul>
+              </div>
+            ) : null}
             <p className="eyebrow">Game waiting room</p>
             <h1>{game.title}</h1>
             <div className="game-rules-list">
@@ -513,7 +523,12 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
           <div className="form-stack">
             <h2>{game.currentQuestion.prompt}</h2>
             <div className="game-answer-grid">
-              {game.currentQuestion.options.map((option, optionIndex) => (
+              {shuffleOptionIndexesWithSeed(
+                game.currentQuestion.options,
+                `${gameId}:${identifier || game.displayName}:${game.currentQuestion.id}`,
+              ).map((optionIndex) => {
+                const option = game.currentQuestion!.options[optionIndex];
+                return (
                 <button
                   aria-pressed={selectedOptionIndex === optionIndex}
                   className={`role-option game-answer-option${selectedOptionIndex === optionIndex ? " is-selected" : ""}`}
@@ -524,7 +539,8 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
                 >
                   {option}
                 </button>
-              ))}
+                );
+              })}
             </div>
             {game.viewerMode === "participant" ? (
               <div className="game-answer-action-bar">

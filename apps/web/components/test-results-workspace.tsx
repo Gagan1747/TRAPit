@@ -6,14 +6,25 @@ import { useEffect, useState } from "react";
 
 import { formatShortDateTime } from "../lib/date-format";
 
+type CreatorParticipantResponse = {
+  marks: number;
+  marksByQuestionId: Record<string, number>;
+  overallMarks: number;
+  participantName: string;
+  rank: number;
+  selectedOptionByQuestionId: Record<string, number | null>;
+};
+
 type TestResultsPayload = {
   assessmentKind?: "standard" | "instant";
   branding: WorkspaceBranding | null;
   correctMarks?: number;
+  creatorParticipantResponses?: CreatorParticipantResponse[];
   groupNames: string[];
   hasCreatorScope: boolean;
   hasParticipantScope: boolean;
   overallMarks?: number;
+  reportedQuestionIds?: string[];
   participantResult: {
     correctCount: number;
     elapsedMs: number;
@@ -112,20 +123,72 @@ export function TestResultsWorkspace({ testId }: TestResultsWorkspaceProps) {
     return <p className="muted-text">Loading test results...</p>;
   }
 
-  return <TestResultsContent payload={payload} />;
+  return <TestResultsContent payload={payload} onPayloadUpdate={setPayload} />;
 }
 
-export function TestResultsContent({ payload }: { payload: TestResultsPayload }) {
+export function TestResultsContent({
+  payload,
+  onPayloadUpdate,
+}: {
+  payload: TestResultsPayload;
+  onPayloadUpdate?: (nextPayload: TestResultsPayload) => void;
+}) {
+  const [selectedParticipantIndex, setSelectedParticipantIndex] = useState<number | null>(null);
+  const [reportingQuestionId, setReportingQuestionId] = useState<string | null>(null);
+  const [reportReason, setReportReason] = useState("");
+  const [isReporting, setIsReporting] = useState(false);
+  const [reportFeedback, setReportFeedback] = useState<string | null>(null);
+  const [localReportedIds, setLocalReportedIds] = useState<string[]>([]);
+
   const duration = `${payload.summary.durationMinutes} min`;
   const correctMarks = payload.correctMarks ?? (payload.assessmentKind === "instant" ? 4 : 1);
-  const overallMarks = payload.overallMarks ?? payload.participantResult?.marks ?? 0;
+  const selectedCreatorParticipant =
+    payload.hasCreatorScope && selectedParticipantIndex !== null
+      ? payload.creatorParticipantResponses?.[selectedParticipantIndex] ?? null
+      : null;
+  const activeParticipantName = selectedCreatorParticipant
+    ? (selectedCreatorParticipant.participantName || payload.participants[selectedParticipantIndex!]?.manualName || "—")
+    : (payload.summary.participantName || payload.participantResult?.participantName || "—");
+  const overallMarks = selectedCreatorParticipant
+    ? selectedCreatorParticipant.overallMarks
+    : (payload.overallMarks ?? payload.participantResult?.marks ?? 0);
+  const canInspectParticipantResponses = Boolean(payload.hasParticipantScope || selectedCreatorParticipant);
+  const canReportQuestions = Boolean(payload.hasCreatorScope || payload.hasParticipantScope);
+  const reportedSet = new Set([...(payload.reportedQuestionIds ?? []), ...localReportedIds]);
+
+  async function handleSubmitQuestionReport(questionId: string) {
+    if (isReporting) return;
+    setIsReporting(true);
+    setReportFeedback(null);
+    try {
+      const nextPayload = await readJson<TestResultsPayload>(
+        await fetch(`/api/test-results/${encodeURIComponent(payload.summary.testId)}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            questionId,
+            reason: reportReason.trim(),
+          }),
+        }),
+      );
+      setLocalReportedIds((current) => [...new Set([...current, questionId])]);
+      setReportingQuestionId(null);
+      setReportReason("");
+      setReportFeedback("Question reported and tagged for review.");
+      onPayloadUpdate?.(nextPayload);
+    } catch (reportError) {
+      setReportFeedback(reportError instanceof Error ? reportError.message : "Unable to report question.");
+    } finally {
+      setIsReporting(false);
+    }
+  }
 
   return (
     <div className="test-results-stack game-page-stack">
       <header className="game-user-banner">
         <div>
           <span className="eyebrow">Participant</span>
-          <strong>{payload.summary.participantName || payload.participantResult?.participantName || "—"}</strong>
+          <strong>{activeParticipantName}</strong>
         </div>
         <div className="game-user-points">
           <span className="eyebrow">Overall marks</span>
@@ -150,30 +213,91 @@ export function TestResultsContent({ payload }: { payload: TestResultsPayload })
         </table>
       </div>
 
+      {reportFeedback ? <p className="muted-text" role="status">{reportFeedback}</p> : null}
+
       <div className="test-results-layout">
         <section className="workspace-card test-results-question-panel">
           <h2>Questions ({payload.questions.length})</h2>
           <p className="muted-text">Responses {payload.questions.length}</p>
           <div className="test-results-question-list">
           {payload.questions.map((question, questionIndex) => {
-            const questionMarks = payload.hasParticipantScope
-              ? (question.marks !== undefined && question.marks !== null
-                  ? question.marks
-                  : question.selectedOptionIndex === question.correctOptionIndex
-                    ? correctMarks
-                    : -1)
-              : null;
+            const effectiveSelectedOptionIndex = selectedCreatorParticipant
+              ? (selectedCreatorParticipant.selectedOptionByQuestionId[question.questionId] ?? null)
+              : (payload.hasParticipantScope ? question.selectedOptionIndex : null);
+            const questionMarks = selectedCreatorParticipant
+              ? (selectedCreatorParticipant.marksByQuestionId[question.questionId]
+                  ?? (effectiveSelectedOptionIndex === question.correctOptionIndex ? correctMarks : -1))
+              : payload.hasParticipantScope
+                ? (question.marks !== undefined && question.marks !== null
+                    ? question.marks
+                    : effectiveSelectedOptionIndex === question.correctOptionIndex
+                      ? correctMarks
+                      : -1)
+                : null;
+            const isQuestionReported = reportedSet.has(question.questionId);
 
             return (
             <article className="test-results-question" key={question.questionId}>
               <div className="question-head">
                 <h3>{questionIndex + 1}. {question.prompt}</h3>
-                {questionMarks !== null ? <strong>{questionMarks >= 0 ? `+${questionMarks}` : questionMarks}</strong> : null}
+                <div className="inline-actions">
+                  {questionMarks !== null ? <strong>{questionMarks >= 0 ? `+${questionMarks}` : questionMarks}</strong> : null}
+                  {canReportQuestions ? (
+                    <button
+                      className={isQuestionReported ? "button small-button" : "button-secondary small-button"}
+                      disabled={isReporting}
+                      type="button"
+                      onClick={() => {
+                        if (reportingQuestionId === question.questionId) {
+                          setReportingQuestionId(null);
+                          setReportReason("");
+                        } else {
+                          setReportingQuestionId(question.questionId);
+                          setReportReason("");
+                        }
+                      }}
+                    >
+                      {isQuestionReported ? "Reported" : "Report"}
+                    </button>
+                  ) : null}
+                </div>
               </div>
+              {reportingQuestionId === question.questionId ? (
+                <div className="field-row align-end test-results-report-box">
+                  <div className="field grow-field">
+                    <label htmlFor={`report-reason-${question.questionId}`}>Reason (optional)</label>
+                    <input
+                      id={`report-reason-${question.questionId}`}
+                      placeholder="Describe the issue or error in this question"
+                      value={reportReason}
+                      onChange={(event) => setReportReason(event.target.value)}
+                    />
+                  </div>
+                  <button
+                    className="button small-button"
+                    disabled={isReporting}
+                    type="button"
+                    onClick={() => void handleSubmitQuestionReport(question.questionId)}
+                  >
+                    {isReporting ? "Submitting..." : "Submit report"}
+                  </button>
+                  <button
+                    className="button-secondary small-button"
+                    disabled={isReporting}
+                    type="button"
+                    onClick={() => {
+                      setReportingQuestionId(null);
+                      setReportReason("");
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : null}
               <div className="test-results-options">
                 {question.options.map((option, optionIndex) => {
                   const isCorrect = optionIndex === question.correctOptionIndex;
-                  const isSelected = payload.hasParticipantScope && optionIndex === question.selectedOptionIndex;
+                  const isSelected = canInspectParticipantResponses && optionIndex === effectiveSelectedOptionIndex;
 
                   return (
                     <div className={`test-results-option${isCorrect ? " is-correct" : ""}${isSelected && !isCorrect ? " is-incorrect" : ""}`} key={`${question.questionId}-${optionIndex}`}>
@@ -199,10 +323,37 @@ export function TestResultsContent({ payload }: { payload: TestResultsPayload })
           <h2>Final standings ({payload.summary.submittedCount}/{payload.summary.sharedCount})</h2>
           {payload.participants.length ? (
             <div className="game-leaderboard-list">
-              {payload.participants.map((participant, index) => (
-                <div className={`game-leaderboard-row test-results-leaderboard-row${participant.isCurrentParticipant ? " is-current-participant" : ""}`} aria-current={participant.isCurrentParticipant ? "true" : undefined} key={`${participant.rank}-${participant.manualName}-${index}`}>
+              {payload.participants.map((participant, index) => {
+                const creatorParticipant = payload.creatorParticipantResponses?.[index];
+                const displayManualName = payload.hasCreatorScope && creatorParticipant?.participantName
+                  ? creatorParticipant.participantName
+                  : participant.manualName;
+                const isSelectedRow = payload.hasCreatorScope
+                  ? (selectedParticipantIndex === index || (selectedParticipantIndex === null && participant.isCurrentParticipant))
+                  : participant.isCurrentParticipant;
+
+                return (
+                <div
+                  className={`game-leaderboard-row test-results-leaderboard-row${isSelectedRow ? " is-current-participant" : ""}`}
+                  aria-current={isSelectedRow ? "true" : undefined}
+                  key={`${participant.rank}-${participant.manualName}-${index}`}
+                  role={payload.hasCreatorScope ? "button" : undefined}
+                  tabIndex={payload.hasCreatorScope ? 0 : undefined}
+                  style={payload.hasCreatorScope ? { cursor: "pointer" } : undefined}
+                  onClick={payload.hasCreatorScope ? () => setSelectedParticipantIndex(index) : undefined}
+                  onKeyDown={
+                    payload.hasCreatorScope
+                      ? (event) => {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            setSelectedParticipantIndex(index);
+                          }
+                        }
+                      : undefined
+                  }
+                >
                   <div className="test-results-leaderboard-left">
-                    <strong>#{participant.rank} {participant.manualName}{participant.isCurrentParticipant ? " (You)" : ""}</strong>
+                    <strong>#{participant.rank} {displayManualName}{participant.isCurrentParticipant ? " (You)" : ""}</strong>
                     <span className="test-results-leaderboard-meta">{participant.maskedIdentifier}</span>
                     <span className="test-results-leaderboard-time">{formatElapsedTime(participant.elapsedMs)} ({duration})</span>
                   </div>
@@ -211,7 +362,8 @@ export function TestResultsContent({ payload }: { payload: TestResultsPayload })
                     <span className="test-results-leaderboard-meta">(+{participant.correctCount} / -{participant.incorrectCount + participant.unansweredCount})</span>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           ) : <p className="muted-text">No participants appeared.</p>}
         </aside>

@@ -1,6 +1,6 @@
 "use client";
 
-import { formatElapsedTime, shuffleWithSeed, type TestParticipantSession } from "@trapit/testing";
+import { formatElapsedTime, shuffleOptionIndexesWithSeed, shuffleWithSeed, type TestParticipantSession } from "@trapit/testing";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -69,7 +69,7 @@ export function VersionedTestRunner({ testId, identifier, authConfigured, initia
   const active = Boolean(test && payload.session && !payload.session.submittedAt && test.status === "live" && now >= Date.parse(test.startsAt) && now < endsAt);
   const orderedQuestions = test ? shuffleWithSeed(test.questions, `${testId}:${identifier}:questions`) : [];
   const question = orderedQuestions[index];
-  const optionIndexes = question ? shuffleWithSeed(question.options.map((_, optionIndex) => optionIndex), `${testId}:${identifier}:${question.id}`) : [];
+  const optionIndexes = question ? shuffleOptionIndexesWithSeed(question.options, `${testId}:${identifier}:${question.id}`) : [];
   const isInstant = test?.assessmentKind === "instant";
   const isLastQuestion = orderedQuestions.length > 0 && index === orderedQuestions.length - 1;
   const currentQuestionAnswered = Boolean(question && typeof answers[question.id] === "number");
@@ -229,11 +229,21 @@ export function VersionedTestRunner({ testId, identifier, authConfigured, initia
         <p>Results are available.{!payload.session ? " Absent." : " Your saved responses have been submitted."}</p>
         <a className="button" href={`/test-results/${encodeURIComponent(testId)}`}>View results</a>
       </> : submitted ? <p>Submitted. Results will be available when the test ends.</p> : <>
-        {!payload.session ? <div className="field">
-          <label htmlFor="participant-entry-name">Your name</label>
-          <input id="participant-entry-name" value={name} onChange={(event) => setName(event.target.value)} disabled={busy} />
-          <button className="button" type="button" disabled={busy || !name.trim() || Boolean(test.countdownStartedAt)} onClick={() => void action("session")}>Join test</button>
-        </div> : <p>Joined as {payload.session.participantName}</p>}
+        {!payload.session ? <>
+          <div className="pre-test-best-outcome-note" style={{ textAlign: "center", marginBottom: "1rem" }}>
+            <h2 style={{ fontWeight: 700, fontSize: "1.35rem", margin: "0 0 0.5rem" }}>For best outcome</h2>
+            <ul style={{ display: "inline-block", textAlign: "left", margin: 0, paddingLeft: "1.25rem" }}>
+              <li>Avoid cheating/taking help from others</li>
+              <li>Avoid doing guess work</li>
+              <li>Try to score purely based on your knowledge and learnings</li>
+            </ul>
+          </div>
+          <div className="field">
+            <label htmlFor="participant-entry-name">Your name</label>
+            <input id="participant-entry-name" value={name} onChange={(event) => setName(event.target.value)} disabled={busy} />
+            <button className="button" type="button" disabled={busy || !name.trim() || Boolean(test.countdownStartedAt)} onClick={() => void action("session")}>Join test</button>
+          </div>
+        </> : <p>Joined as {payload.session.participantName}</p>}
         {awaitingLaunch ? <>
           <p>{payload.acceptedCount} participants accepted. Waiting for the creator to start.</p>
           {payload.isCreator ? <button className="button" type="button" disabled={busy || payload.acceptedCount < 4} onClick={() => void action("start")}>Start test</button> : null}

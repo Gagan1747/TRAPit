@@ -5,7 +5,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const DEFAULT_PRODUCTION_DATA_DIR = path.join(path.sep, "var", "lib", "trapit");
-export const TERMS_CONSENT_VERSION = "2026-08-01";
+export const TERMS_CONSENT_VERSION = "2026-11-01";
 
 type TermsConsentRecord = {
   acceptedAt: string;

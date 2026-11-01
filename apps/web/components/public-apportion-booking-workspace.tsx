@@ -15,6 +15,7 @@ const IST_OFFSET_MINUTES = 5 * 60 + 30;
 type BookingPayload = {
   viewerIdentifier: string;
   canInvite: boolean;
+  canManageHolds?: boolean;
   addressOptions: Array<{
     key: string;
     location: BookingPayload["business"]["locations"][number];
@@ -57,6 +58,9 @@ type BookingPayload = {
       locations: Array<{ locationId: string; workingHours: string; workingHoursSecondWindow: string }>;
       weekday: number;
     }>;
+    canManageHolds?: boolean;
+    heldDateKeysByLocationId?: Record<string, string[]>;
+    heldSlotIsosByLocationId?: Record<string, string[]>;
     imageDataUrl: string | null;
     justAddToList: boolean;
     locations: Array<{
@@ -873,6 +877,44 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
     }
   }
 
+  async function handleToggleHold(target: { dateKey?: string; slotIso?: string }) {
+    if (!payload || !selectedLocationId) return;
+    try {
+      const updated = await readJson<{
+        heldDateKeysByLocationId: Record<string, string[]>;
+        heldSlotIsosByLocationId: Record<string, string[]>;
+      }>(
+        await fetch(`/api/apportion/${encodeURIComponent(shareCode)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ownerIdentifier: selectedOwnerIdentifier,
+            serviceId: selectedServiceId,
+            locationId: selectedLocationId,
+            ...target,
+          }),
+        }),
+      );
+      setPayload((current) =>
+        current
+          ? {
+              ...current,
+              business: {
+                ...current.business,
+                heldDateKeysByLocationId: updated.heldDateKeysByLocationId,
+                heldSlotIsosByLocationId: updated.heldSlotIsosByLocationId,
+              },
+            }
+          : current,
+      );
+      if (target.slotIso && selectedSlotIso === target.slotIso) {
+        setSelectedSlotIso(null);
+      }
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to update hold status.");
+    }
+  }
+
   if (isLoading) {
     return <div className="empty-state"><p className="muted-text">Loading appointment page...</p></div>;
   }
@@ -896,6 +938,10 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
     .map((slot) => [slot.dateKey, slot.count]));
   const maxBookableDate = new Date(today);
   maxBookableDate.setMonth(today.getMonth() + 6);
+  const canManageHolds = Boolean(payload.canManageHolds || payload.business.canManageHolds);
+  const heldDateKeysForSelectedLocation = new Set(payload.business.heldDateKeysByLocationId?.[selectedLocationId] ?? []);
+  const heldSlotIsosForSelectedLocation = new Set(payload.business.heldSlotIsosByLocationId?.[selectedLocationId] ?? []);
+  const isSelectedDateHeld = heldDateKeysForSelectedLocation.has(selectedDateKey);
   const closedDateKeys = new Set(payload.business.appointmentDateOverrides.closedDateKeys);
   const openedDateKeys = new Set(payload.business.appointmentDateOverrides.openedDateKeys);
   const weekStartDate = new Date(today);
@@ -915,9 +961,11 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
     const isPast = new Date(startsAt).getTime() <= Date.now();
     const bookedCount = slotCountsByIso[startsAt] ?? 0;
     const remainingCount = Math.max(0, payload.business.appointmentsPerSlot - bookedCount);
+    const isHeld = isSelectedDateHeld || heldSlotIsosForSelectedLocation.has(startsAt);
     return {
       dayOffset: slot.dayOffset,
       isAvailable: !isPast && bookedCount < payload.business.appointmentsPerSlot,
+      isHeld,
       label: slot.label,
       minutes: slot.minutes,
       remainingCount,
@@ -926,7 +974,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
   }).filter((slot) => slot.isAvailable) : [];
   const visibleSlots = availableSlots.slice(slotPage * 6, slotPage * 6 + 6);
   const pageCount = Math.ceil(availableSlots.length / 6);
-  const selectedSlot = availableSlots.find((slot) => slot.startsAt === selectedSlotIso) ?? null;
+  const selectedSlot = availableSlots.find((slot) => slot.startsAt === selectedSlotIso && !slot.isHeld) ?? null;
   const logoDataUrl = payload.providerProfile.imageDataUrl ? normalizeImageDataUrl(payload.providerProfile.imageDataUrl) : null;
   const profileImageDataUrl = payload.providerProfile.profileImageDataUrl ? normalizeImageDataUrl(payload.providerProfile.profileImageDataUrl) : null;
   const promotionalImageDataUrls = payload.providerProfile.promotionalImageDataUrls
@@ -1237,27 +1285,45 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                       workingHoursSecondWindow: effectiveDateLocation?.workingHoursSecondWindow ?? "",
                     }));
                     const hasSlotCapacity = payload.business.justAddToList || Boolean(effectiveDateLocation && buildSlotStartsForDate({ selectedDateKey: dateKey, slotDurationMinutes, workingHours: effectiveDateLocation.workingHours, workingHoursSecondWindow: effectiveDateLocation.workingHoursSecondWindow }).some((slot) => new Date(slot.startsAt).getTime() > clock && (slotCountsByIso[slot.startsAt] ?? 0) < payload.business.appointmentsPerSlot));
-                    const isAvailableDate = isDateInWindow && hasQueueCapacity && hasSlotCapacity;
-                    const disabledReason = date > maxBookableDate ? "Outside booking horizon" : !effectiveDateLocation ? "Closed or provider on leave" : date < today && !isAvailableDate ? "Past service day" : "No remaining availability";
+                    const isBaseAvailableDate = isDateInWindow && hasQueueCapacity && hasSlotCapacity;
+                    const isDateHeld = heldDateKeysForSelectedLocation.has(dateKey);
+                    const isAvailableDate = isBaseAvailableDate && !isDateHeld;
+                    const disabledReason = isDateHeld ? "On hold" : date > maxBookableDate ? "Outside booking horizon" : !effectiveDateLocation ? "Closed or provider on leave" : date < today && !isBaseAvailableDate ? "Past service day" : "No remaining availability";
                     const isSelected = dateKey === selectedDateKey;
 
                     return (
-                      <button
-                        className={`apportion-calendar-day${isAvailableDate ? " is-working" : " is-unavailable"}${isSelected && isAvailableDate ? " is-selected" : ""}`}
-                        aria-label={`${dateKey}${isAvailableDate ? "" : `: ${disabledReason}`}`}
-                        title={isAvailableDate ? dateKey : disabledReason}
-                        disabled={!isAvailableDate}
-                        key={dateKey}
-                        type="button"
-                        onClick={() => {
-                          setSelectedDateKey(dateKey);
-                          setSelectedSlotIso(null);
-                        }}
-                      >
-                        <small>{WEEKDAY_SHORT_NAMES[date.getDay()]}</small>
-                        <strong>{date.getDate()}</strong>
-                        {isSameDay(date, new Date()) ? <small>Today</small> : null}
-                      </button>
+                      <div className="apportion-calendar-day-wrap" key={dateKey} style={{ position: "relative" }}>
+                        <button
+                          className={`apportion-calendar-day${isAvailableDate ? " is-working" : " is-unavailable"}${isDateHeld ? " is-on-hold is-blocked" : ""}${isSelected && isAvailableDate ? " is-selected" : ""}`}
+                          aria-label={`${dateKey}${isAvailableDate ? "" : `: ${disabledReason}`}`}
+                          title={isAvailableDate ? dateKey : disabledReason}
+                          disabled={!isAvailableDate && !(canManageHolds && isBaseAvailableDate)}
+                          type="button"
+                          onClick={() => {
+                            if (isDateHeld && !canManageHolds) return;
+                            setSelectedDateKey(dateKey);
+                            setSelectedSlotIso(null);
+                          }}
+                        >
+                          <small>{WEEKDAY_SHORT_NAMES[date.getDay()]}</small>
+                          <strong>{date.getDate()}</strong>
+                          {isSameDay(date, new Date()) ? <small>Today</small> : null}
+                        </button>
+                        {canManageHolds && isBaseAvailableDate ? (
+                          <button
+                            aria-label={isDateHeld ? `Release hold on ${dateKey}` : `Hold ${dateKey}`}
+                            className="apportion-hold-cross-button"
+                            title={isDateHeld ? "Release date hold" : "Put date on hold"}
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleToggleHold({ dateKey });
+                            }}
+                          >
+                            ✕
+                          </button>
+                        ) : null}
+                      </div>
                     );
                   })}
                 </div>
@@ -1286,16 +1352,37 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                 {visibleSlots.length ? (
                   <div className="apportion-slot-grid" role="group" aria-label="Available appointment times">
                     {visibleSlots.map((slot) => (
-                      <button
-                        aria-pressed={selectedSlotIso === slot.startsAt}
-                        className={`apportion-slot-chip${selectedSlotIso === slot.startsAt ? " is-selected" : ""}`}
-                        key={slot.startsAt}
-                        type="button"
-                        onClick={() => { setSelectedSlotIso(slot.startsAt); if (recurrenceActive) setRecurringTime({ dayOffset: slot.dayOffset, minutes: slot.minutes }); setFeedback(null); }}
-                      >
-                        {slot.label}
-                        {payload.business.showRemainingBookings && payload.business.appointmentsPerSlot > 1 ? <span>{slot.remainingCount} left</span> : null}
-                      </button>
+                      <div className="apportion-slot-chip-wrap" key={slot.startsAt} style={{ position: "relative" }}>
+                        <button
+                          aria-pressed={selectedSlotIso === slot.startsAt && !slot.isHeld}
+                          className={`apportion-slot-chip${selectedSlotIso === slot.startsAt && !slot.isHeld ? " is-selected" : ""}${slot.isHeld ? " is-on-hold is-blocked" : ""}`}
+                          disabled={slot.isHeld}
+                          type="button"
+                          onClick={() => {
+                            if (slot.isHeld) return;
+                            setSelectedSlotIso(slot.startsAt);
+                            if (recurrenceActive) setRecurringTime({ dayOffset: slot.dayOffset, minutes: slot.minutes });
+                            setFeedback(null);
+                          }}
+                        >
+                          {slot.label}
+                          {payload.business.showRemainingBookings && payload.business.appointmentsPerSlot > 1 ? <span>{slot.remainingCount} left</span> : null}
+                        </button>
+                        {canManageHolds ? (
+                          <button
+                            aria-label={slot.isHeld ? `Release hold on ${slot.label}` : `Hold ${slot.label}`}
+                            className="apportion-hold-cross-button"
+                            title={slot.isHeld ? "Release slot hold" : "Put slot on hold"}
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleToggleHold({ slotIso: slot.startsAt });
+                            }}
+                          >
+                            ✕
+                          </button>
+                        ) : null}
+                      </div>
                     ))}
                   </div>
                 ) : <p className="muted-text apportion-queue-warning">No availability for this date.</p>}

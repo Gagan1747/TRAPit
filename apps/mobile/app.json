@@ -4,6 +4,7 @@
     "slug": "trapit-mobile",
     "scheme": "trapit",
     "version": "1.0.0",
+    "icon": "./trapit-logo.jpeg",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "experiments": {
@@ -16,10 +17,12 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "icon": "./trapit-logo.jpeg"
     },
     "android": {
       "adaptiveIcon": {
+        "foregroundImage": "./trapit-logo.jpeg",
         "backgroundColor": "#f5eadb"
       }
     }

@@ -769,7 +769,15 @@ export async function updateApportionPanel(actor: WorkspaceActor, input: Apporti
           entry.adminDelegateIdentifier && matches(entry.adminDelegateIdentifier, assignedIdentifier))) {
           throw new ApportionDirectoryError("An Admin cannot be assigned to a service.");
         }
-        const service: ApportionService = { id: incoming.id, name: incoming.name.trim(), active: incoming.locationIds.length > 0, assignedIdentifier, locationIds: [...new Set(incoming.locationIds)] };
+        const service: ApportionService = {
+          id: incoming.id,
+          name: incoming.name.trim(),
+          active: incoming.locationIds.length > 0,
+          assignedIdentifier,
+          locationIds: [...new Set(incoming.locationIds)],
+          ...(previous?.heldDateKeysByLocationId ? { heldDateKeysByLocationId: previous.heldDateKeysByLocationId } : {}),
+          ...(previous?.heldSlotIsosByLocationId ? { heldSlotIsosByLocationId: previous.heldSlotIsosByLocationId } : {}),
+        };
         const brandingKey = identifierKey(state.workspaceBrandingByActor, owner);
         const locations = brandingKey ? state.workspaceBrandingByActor[brandingKey].appointmentLocations ?? [] : [];
         if (service.id === "consultation") { service.locationIds = locations.map((location) => location.id); service.active = service.locationIds.length > 0; }
@@ -809,4 +817,60 @@ export async function updateApportionPanel(actor: WorkspaceActor, input: Apporti
   });
   if (input.operation === "set-leaves") await reconcileApportionProviderLeaves();
   return getApportionPanel(actor);
+}
+
+export async function toggleApportionBookingHold(input: {
+  actorIdentifier: string;
+  ownerIdentifier: string;
+  serviceId: string;
+  locationId: string;
+  dateKey?: string;
+  slotIso?: string;
+}) {
+  const actor = input.actorIdentifier.trim();
+  if (!actor) throw new ApportionDirectoryError("Signed-in access is required.", 403);
+
+  return withSerializedTestingMutation(async (state) => {
+    const values = directory(state);
+    const key = identifierKey(values.businesses, input.ownerIdentifier);
+    const business = key ? values.businesses[key] : undefined;
+    if (!business) throw new ApportionDirectoryError("Appointment business is unavailable.", 400);
+
+    const isOwner = matches(business.ownerIdentifier, actor);
+    const isAdmin = Boolean(business.adminDelegateIdentifier && matches(business.adminDelegateIdentifier, actor));
+    if (!isOwner && !isAdmin) {
+      throw new ApportionDirectoryError("Only the business owner or delegated admin can hold slots or dates.", 403);
+    }
+
+    const service = business.services.find((entry) => entry.id === input.serviceId);
+    if (!service) throw new ApportionDirectoryError("Service not found.", 400);
+
+    const locationId = input.locationId.trim();
+    if (!locationId || !service.locationIds.includes(locationId)) {
+      throw new ApportionDirectoryError("Location not found for this service.", 400);
+    }
+
+    if (input.dateKey?.trim()) {
+      const dateKey = input.dateKey.trim();
+      service.heldDateKeysByLocationId ??= {};
+      const current = service.heldDateKeysByLocationId[locationId] ?? [];
+      service.heldDateKeysByLocationId[locationId] = current.includes(dateKey)
+        ? current.filter((entry) => entry !== dateKey)
+        : [...current, dateKey];
+    }
+
+    if (input.slotIso?.trim()) {
+      const slotIso = input.slotIso.trim();
+      service.heldSlotIsosByLocationId ??= {};
+      const current = service.heldSlotIsosByLocationId[locationId] ?? [];
+      service.heldSlotIsosByLocationId[locationId] = current.includes(slotIso)
+        ? current.filter((entry) => entry !== slotIso)
+        : [...current, slotIso];
+    }
+
+    return {
+      heldDateKeysByLocationId: service.heldDateKeysByLocationId ?? {},
+      heldSlotIsosByLocationId: service.heldSlotIsosByLocationId ?? {},
+    };
+  });
 }

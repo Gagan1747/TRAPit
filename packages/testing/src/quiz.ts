@@ -80,6 +80,7 @@ export type QuestionImportSource = "manual" | "ocr-import" | "sample";
 export type PersistentQuestion = ObjectiveQuestion & {
   createdAt: string;
   createdBy: string | null;
+  isTaggedIncorrect?: boolean;
   poolIds: string[];
   source: QuestionImportSource;
   updatedAt: string;
@@ -232,6 +233,8 @@ export type ParticipantProfile = {
 };
 
 export type ParticipantGroup = {
+  adminIdentifiers?: string[];
+  adminShareCodesByIdentifier?: Record<string, string>;
   createdAt: string;
   description: string;
   id: string;
@@ -256,6 +259,8 @@ export type GroupJoinRequest = {
   adminGroupName: string;
   adminLabel: string;
   id: string;
+  introducedByAdminIdentifier?: string | null;
+  introducedByAdminLabel?: string | null;
   requestedAt: string;
   requesterId: string;
   requesterLabel: string;
@@ -272,12 +277,18 @@ export type GroupMembershipStatus =
   | "removed"
   | "rejected";
 
+export type GroupAttendanceStatus = "present" | "absent";
+
 export type GroupMembershipRecord = {
+  attendanceByDateKey?: Record<string, GroupAttendanceStatus>;
   createdAt: string;
   endedAt: string | null;
   groupId: string;
   groupName: string;
   id: string;
+  introducedByAdminIdentifier?: string | null;
+  introducedByAdminLabel?: string | null;
+  isGroupAdmin?: boolean;
   joinedAt: string | null;
   ownerIdentifier: string;
   ownerLabel: string;
@@ -804,6 +815,18 @@ function isTailLockedOption(option: string) {
   return /^(all\s+of\s+the\s+above|both\s+[a-e]\s+and\s+[a-e])\b/i.test(option.trim());
 }
 
+export function shuffleOptionIndexesWithSeed(options: string[], seedInput: string): number[] {
+  const fixedTailIndexes = options
+    .map((option, optionIndex) => ({ option, optionIndex }))
+    .filter(({ option }) => isTailLockedOption(option))
+    .map(({ optionIndex }) => optionIndex);
+  const movableIndexes = options
+    .map((_, optionIndex) => optionIndex)
+    .filter((optionIndex) => !fixedTailIndexes.includes(optionIndex));
+
+  return [...shuffleWithSeed(movableIndexes, seedInput), ...fixedTailIndexes];
+}
+
 export type PresentedQuestion = {
   correctOptionIndex: number;
   displayOptions: string[];
@@ -928,6 +951,7 @@ export function createPersistentQuestion(
     ...baseQuestion,
     createdAt: timestamp,
     createdBy: config?.createdBy ?? null,
+    isTaggedIncorrect: false,
     poolIds: config?.poolIds ?? [],
     source: config?.source ?? "manual",
     updatedAt: timestamp,

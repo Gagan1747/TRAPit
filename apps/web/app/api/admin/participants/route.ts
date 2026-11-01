@@ -8,15 +8,18 @@ import {
   addGroupMemberDirect,
   createGroup,
   createParticipant,
+  declareGroupIntroducingAdmin,
   leaveParticipantGroup,
   listGroupJoinRequestsForAdmin,
   listGroupMembershipsForActor,
   listParticipantGroupsForOwner,
   listParticipantGroups,
   listParticipants,
+  markGroupMemberAttendance,
   removeGroupMember,
   resolveGroupJoinRequest,
   syncParticipants,
+  toggleGroupMemberAdmin,
   updateGroup,
 } from "../../../../lib/testing-store";
 
@@ -63,6 +66,25 @@ type ParticipantBody =
       groupId?: string;
       membershipId?: string;
       mode?: "leave-group";
+    }
+  | {
+      groupId?: string;
+      memberIdentifier?: string;
+      mode?: "toggle-group-admin";
+    }
+  | {
+      dateKey?: string;
+      groupId?: string;
+      memberIdentifier?: string;
+      membershipId?: string;
+      mode?: "mark-group-attendance";
+      status?: "present" | "absent" | null;
+    }
+  | {
+      adminPhoneNumber?: string;
+      groupId?: string;
+      membershipId?: string;
+      mode?: "declare-group-admin";
     };
 
 function isCreateGroupBody(
@@ -286,6 +308,64 @@ export async function POST(request: Request) {
         groupId: body.groupId,
         membershipId: body.membershipId,
         userIdentifier: actor.identifier,
+      });
+
+      return NextResponse.json(await buildParticipantsPayload(actor.identifier));
+    }
+
+    if (body.mode === "toggle-group-admin") {
+      if (!body.groupId?.trim() || !body.memberIdentifier?.trim()) {
+        return NextResponse.json({ error: "Group id and member identifier are required." }, { status: 400 });
+      }
+
+      if (!actor.identifier) {
+        return NextResponse.json({ error: "Owner identifier is required." }, { status: 400 });
+      }
+
+      await toggleGroupMemberAdmin({
+        groupId: body.groupId,
+        memberIdentifier: body.memberIdentifier,
+        ownerIdentifier: actor.identifier,
+      });
+
+      return NextResponse.json(await buildParticipantsPayload(actor.identifier));
+    }
+
+    if (body.mode === "mark-group-attendance") {
+      if (!body.groupId?.trim() || !body.memberIdentifier?.trim() || !body.dateKey?.trim()) {
+        return NextResponse.json({ error: "Group id, member identifier, and date are required." }, { status: 400 });
+      }
+
+      if (!actor.identifier) {
+        return NextResponse.json({ error: "Owner identifier is required." }, { status: 400 });
+      }
+
+      await markGroupMemberAttendance({
+        dateKey: body.dateKey,
+        groupId: body.groupId,
+        memberIdentifier: body.memberIdentifier,
+        membershipId: body.membershipId,
+        ownerIdentifier: actor.identifier,
+        status: body.status ?? null,
+      });
+
+      return NextResponse.json(await buildParticipantsPayload(actor.identifier));
+    }
+
+    if (body.mode === "declare-group-admin") {
+      if (!body.groupId?.trim() || !body.adminPhoneNumber?.trim()) {
+        return NextResponse.json({ error: "Group id and complete admin phone number are required." }, { status: 400 });
+      }
+
+      if (!actor.identifier) {
+        return NextResponse.json({ error: "User identifier is required." }, { status: 400 });
+      }
+
+      await declareGroupIntroducingAdmin({
+        adminPhoneNumber: body.adminPhoneNumber,
+        groupId: body.groupId,
+        memberIdentifier: actor.identifier,
+        membershipId: body.membershipId,
       });
 
       return NextResponse.json(await buildParticipantsPayload(actor.identifier));

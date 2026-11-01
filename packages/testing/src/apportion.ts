@@ -27,6 +27,8 @@ export type ApportionService = {
   active: boolean;
   assignedIdentifier: string | null;
   locationIds: string[];
+  heldDateKeysByLocationId?: Record<string, string[]>;
+  heldSlotIsosByLocationId?: Record<string, string[]>;
 };
 
 export type ApportionBusiness = {

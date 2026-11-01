@@ -86,11 +86,23 @@ export async function GET(request: Request, context: { params: { gameId: string 
     };
   });
 
+  const creatorAnswersByParticipant = isCreator && completed
+    ? Object.fromEntries(
+        game.participants.map((entry) => [
+          entry.identifier,
+          game.answers.filter((answer) =>
+            participantIdentifiersMatch(answer.participantIdentifier, entry.identifier),
+          ),
+        ]),
+      )
+    : undefined;
+
   return NextResponse.json({
     game: {
       acceptedCount: game.acceptedCount,
       canStart: isCreator && Boolean(game.creatorRole) && game.acceptedCount >= 4,
       countdownDeadline: game.countdownDeadline,
+      ...(creatorAnswersByParticipant ? { creatorAnswersByParticipant } : {}),
       creatorRole: game.creatorRole ?? null,
       currentQuestion: question && (!rapid || isAccepted)
         ? { id: question.id, options: question.options, prompt: question.prompt }
@@ -152,4 +164,38 @@ export async function GET(request: Request, context: { params: { gameId: string 
     },
     serverNow: new Date().toISOString(),
   });
+}
+
+export async function POST(request: Request, context: { params: { gameId: string } }) {
+  const actor = await getUserActor(request);
+
+  if (!actor) {
+    return NextResponse.json({ error: "User access is required." }, { status: 403 });
+  }
+
+  try {
+    const body = (await request.json()) as {
+      questionId?: string;
+      reason?: string;
+    };
+
+    if (!body.questionId?.trim()) {
+      return NextResponse.json({ error: "Question ID is required." }, { status: 400 });
+    }
+
+    const { reportPostGameQuestion } = await import("../../../../../lib/testing-store");
+    await reportPostGameQuestion({
+      gameId: context.params.gameId,
+      questionId: body.questionId.trim(),
+      reason: body.reason ?? null,
+      reporterIdentifier: actor.identifier,
+    });
+
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to report question." },
+      { status: 400 },
+    );
+  }
 }

@@ -17,6 +17,17 @@ function canInviteForOwner(viewerIdentifier: string | null, linkedOwnerIdentifie
     && matchApportionIdentity(linkedOwnerIdentifier, ownerIdentifier));
 }
 
+function canManageHoldsForBusiness(
+  viewerIdentifier: string | null,
+  ownerContext: Awaited<ReturnType<typeof getApportionBusinessContext>>,
+  ownerIdentifier: string,
+) {
+  if (!viewerIdentifier) return false;
+  if (matchApportionIdentity(viewerIdentifier, ownerIdentifier)) return true;
+  const delegate = ownerContext?.business.adminDelegateIdentifier;
+  return Boolean(delegate && matchApportionIdentity(viewerIdentifier, delegate));
+}
+
 async function resolveRegisteredTarget(phone: string) {
   const normalizedPhone = phone.trim().replace(/[\s()-]/g, "");
   if (!/^(?:\+[1-9]\d{7,14}|\d{10})$/.test(normalizedPhone)) {
@@ -471,6 +482,9 @@ export async function GET(
             name: serviceBusiness.branding.instituteName,
             ownerIdentifier: serviceBusiness.ownerIdentifier,
             canInvite: canInviteForOwner(viewerIdentifier, linkedBusiness.ownerIdentifier, serviceBusiness.ownerIdentifier),
+            canManageHolds: canManageHoldsForBusiness(viewerIdentifier, serviceBusiness.ownerContext, serviceBusiness.ownerIdentifier),
+            heldDateKeysByLocationId: serviceBusiness.service.heldDateKeysByLocationId ?? {},
+            heldSlotIsosByLocationId: serviceBusiness.service.heldSlotIsosByLocationId ?? {},
             recurringBookingLimit: canInviteForOwner(viewerIdentifier, linkedBusiness.ownerIdentifier, serviceBusiness.ownerIdentifier) ? 6 : null,
             recurringBookingsEnabled: canInviteForOwner(viewerIdentifier, linkedBusiness.ownerIdentifier, serviceBusiness.ownerIdentifier),
             serviceId: option.id,
@@ -526,9 +540,12 @@ export async function GET(
     return { count, dateKey, locationId };
   });
 
+  const canManageHolds = canManageHoldsForBusiness(viewerIdentifier, business.ownerContext, business.ownerIdentifier);
+
   return NextResponse.json({
     viewerIdentifier,
     canInvite,
+    canManageHolds,
     addressOptions,
     services: directServices,
     serviceId,
@@ -555,6 +572,9 @@ export async function GET(
       name: business.branding.instituteName,
       ownerIdentifier: business.ownerIdentifier,
       canInvite,
+      canManageHolds,
+      heldDateKeysByLocationId: business.service.heldDateKeysByLocationId ?? {},
+      heldSlotIsosByLocationId: business.service.heldSlotIsosByLocationId ?? {},
       recurringBookingLimit: canInvite ? 6 : null,
       recurringBookingsEnabled: canInvite,
       showRemainingBookings: business.branding.showRemainingBookings,
@@ -638,6 +658,11 @@ export async function POST(
   }
 
   const slotDateKey = body.slotDateKey?.trim() || getIstDateKey(new Date());
+  const heldDateKeysForLocation = new Set(business.service.heldDateKeysByLocationId?.[location.id] ?? []);
+  const heldSlotIsosForLocation = new Set(business.service.heldSlotIsosByLocationId?.[location.id] ?? []);
+  if (heldDateKeysForLocation.has(slotDateKey) || (body.startsAt && heldSlotIsosForLocation.has(body.startsAt.trim()))) {
+    return NextResponse.json({ error: "This slot or date is currently on hold." }, { status: 400 });
+  }
   const getLocationBranding = (serviceDateKey: string): WorkspaceBranding => {
     if (providerClosedDates(business.ownerContext, business.providerIdentifier).includes(serviceDateKey)) {
       throw new Error("Provider unavailable on the selected date.");
@@ -910,4 +935,57 @@ export async function POST(
     appointmentCount: appointments.length,
     caution: cautionMessages.size ? Array.from(cautionMessages).join(" ") : null,
   });
+}
+
+export async function PATCH(
+  request: Request,
+  { params }: { params: { shareCode: string } },
+) {
+  const session = await getWebSession(request);
+
+  if (!session) {
+    return NextResponse.json({ error: "Sign in to manage booking holds." }, { status: 403 });
+  }
+
+  const viewerIdentifier = getSessionIdentifier(session) ?? session.phoneNumber ?? session.email ?? null;
+  if (!viewerIdentifier) {
+    return NextResponse.json({ error: "Signed-in phone access is required." }, { status: 403 });
+  }
+
+  const linkedBusiness = await getWorkspaceBrandingByAppointmentShareCode(params.shareCode);
+  if (!linkedBusiness) {
+    return NextResponse.json({ error: "Business booking page not found." }, { status: 404 });
+  }
+
+  try {
+    const body = (await request.json()) as {
+      ownerIdentifier?: string;
+      serviceId?: string;
+      locationId?: string;
+      dateKey?: string;
+      slotIso?: string;
+    };
+
+    const ownerIdentifier = body.ownerIdentifier?.trim() || linkedBusiness.ownerIdentifier;
+    const serviceId = body.serviceId?.trim() || "consultation";
+    const locationId = body.locationId?.trim() || "";
+
+    const { toggleApportionBookingHold } = await import("../../../../lib/apportion-directory");
+    const result = await toggleApportionBookingHold({
+      actorIdentifier: viewerIdentifier,
+      ownerIdentifier,
+      serviceId,
+      locationId,
+      dateKey: body.dateKey,
+      slotIso: body.slotIso,
+    });
+
+    publishWorkspaceEvent("apportion");
+    return NextResponse.json(result);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to update booking hold." },
+      { status: 400 },
+    );
+  }
 }

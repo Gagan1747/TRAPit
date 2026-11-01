@@ -1,0 +1,22 @@
+{
+  "name": "TRAPit.in",
+  "short_name": "TRAPit",
+  "description": "Tests, Apportions, and Polls Simplified, Smart, and Precise",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5eadb",
+  "theme_color": "#173b4f",
+  "icons": [
+    {
+      "src": "/trapit-logo.jpeg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

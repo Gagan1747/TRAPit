@@ -383,14 +383,24 @@ export function UserTestRunner({
             </span>
             <span className="status-chip success">Answered {answeredCount} of {test.questions.length}</span>
           </div>
-          <div className="field">
-            <label htmlFor="test-runner-participant-name">Your name for this test</label>
-            <input
-              id="test-runner-participant-name"
-              value={participantName}
-              onChange={(event) => setParticipantName(event.target.value)}
-            />
-          </div>
+            {!participantName.trim() ? (
+              <div className="pre-test-best-outcome-note" style={{ textAlign: "center", marginBottom: "1rem" }}>
+                <h2 style={{ fontWeight: 700, fontSize: "1.35rem", margin: "0 0 0.5rem" }}>For best outcome</h2>
+                <ul style={{ display: "inline-block", textAlign: "left", margin: 0, paddingLeft: "1.25rem" }}>
+                  <li>Avoid cheating/taking help from others</li>
+                  <li>Avoid doing guess work</li>
+                  <li>Try to score purely based on your knowledge and learnings</li>
+                </ul>
+              </div>
+            ) : null}
+            <div className="field">
+              <label htmlFor="test-runner-participant-name">Your name for this test</label>
+              <input
+                id="test-runner-participant-name"
+                value={participantName}
+                onChange={(event) => setParticipantName(event.target.value)}
+              />
+            </div>
           {feedback ? <p className="muted-text">{feedback}</p> : null}
         </article>
 

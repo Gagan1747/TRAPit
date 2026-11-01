@@ -34,7 +34,8 @@ self.addEventListener("push", (event) => {
   const options = {
     body: "Sign in to view your TRAPit.in update.",
     data: { url: safeNotificationUrl(payload?.data?.url) },
-    icon: "/favicon.ico",
+    icon: "/trapit-logo.jpeg",
+    badge: "/trapit-logo.jpeg",
     tag: payload?.data?.deliveryKey || `trapit:${Date.now()}`,
   };
 

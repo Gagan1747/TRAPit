@@ -9,6 +9,7 @@ import {
   importQuestions,
   listQuestions,
   listPoolsForActor,
+  updateQuestionsBulk,
 } from "../../../../lib/testing-store";
 
 function decorateQuestion<T extends { createdBy: string | null }>(
@@ -197,4 +198,33 @@ export async function DELETE(request: Request) {
     { error: "Select specific questions to remove." },
     { status: 400 },
   );
+}
+
+export async function PATCH(request: Request) {
+  const actor = await requireWorkspaceActor();
+
+  if (!actor) {
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
+  }
+
+  try {
+    const body = (await request.json()) as {
+      updates?: Array<{ questionId: string; draft: QuestionDraft }>;
+    };
+
+    const questions = await updateQuestionsBulk(
+      body.updates ?? [],
+      actor.sub,
+      actor.identifier,
+    );
+
+    return NextResponse.json({
+      questions: questions.map((question) => decorateQuestion(question, actor.sub)),
+    });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Unable to save question updates." },
+      { status: 400 },
+    );
+  }
 }

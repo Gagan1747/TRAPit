@@ -50,12 +50,47 @@ describe("completed results presentation", () => {
     expect(source).toContain("Apportion: Business Panel (services per address)");
     expect(source).toContain("Poll: Schedule Polls (open to all polls)");
     expect(source).toContain("Flat-1144, ATS Marigold, Sector 89A, Gurugram, Haryana (122505)");
-    expect(source).toContain("gagan_cvrmech@yahoo.co.in");
+    expect(source).toContain("trapitdotin@gmail.com");
     expect(source).toContain("+91-8800797123");
-    expect(source).toContain("<th>Request Received</th>");
+    expect(source).toContain("<th>S.N.</th>");
     expect(source).toContain("<th>Days Remaining</th>");
     expect(source).toContain("Download Group QR Code");
     expect(source).toContain("Copy Group Link");
     expect(source).not.toContain("merged-test-");
+    expect(source).toContain('<option value="__create_new_pool__">Create new pool</option>');
+    expect(source).toContain('{question.isTaggedIncorrect ? "Untag" : "Tag"}');
+    expect(source).toContain('aria-label="Remove question"');
+    expect(source).not.toContain("The pool is created when valid questions are imported.");
+    expect(source).not.toContain("Select or create a pool first, then use OCR import to preview and clean pasted text before saving.");
+    expect(source).not.toContain("No description added for this pool yet.");
+    expect(source).not.toContain("Choose users who should be able to open and use this pool.");
+    expect(source).not.toContain("This pool is not shared with anyone yet.");
+    expect(source).not.toContain("Enter the complete phone number to reveal a user before sharing this pool.");
+    expect(source).not.toContain("Enter the full phone number to search.");
+    expect(source).toContain('{hasPendingProRequest ? "+ Upgrade (Pro)" : "Upgrade (Pro)"}');
+    expect(source).toContain('{hasPendingProMaxRequest ? "+ Upgrade (Pro max)" : "Upgrade (Pro max)"}');
+    expect(source).toContain('{isMemberAdmin ? "Admin" : "Make Admin"}');
+    expect(source).toContain("group-attendance-strip");
+  });
+
+  it("enforces updated Terms (01-Nov-2026), Pre-Test note, Add Appointment cards, and Booking slot holds", () => {
+    const authSource = readFileSync(new URL("../../../apps/web/components/auth-form.tsx", import.meta.url), "utf8");
+    expect(authSource).toContain("Effective Date: 01-Nov-2026");
+    expect(authSource).toContain("3. Peer-to-Peer (P2P) Transactions & User-to-User Payments");
+    expect(authSource).toContain("7. Disclaimers & Limitation of Liability");
+
+    const runnerSource = readFileSync(new URL("../../../apps/web/components/versioned-test-runner.tsx", import.meta.url), "utf8");
+    expect(runnerSource).toContain("For best outcome");
+    expect(runnerSource).toContain("Avoid cheating/taking help from others");
+    expect(runnerSource).toContain("Avoid doing guess work");
+    expect(runnerSource).toContain("Try to score purely based on your knowledge and learnings");
+
+    const searchSource = readFileSync(new URL("../../../apps/web/components/apportion-business-search.tsx", import.meta.url), "utf8");
+    expect(searchSource).toContain("apportion-business-card-grid");
+    expect(searchSource).toContain("apportion-business-card-avatar");
+
+    const bookingSource = readFileSync(new URL("../../../apps/web/components/public-apportion-booking-workspace.tsx", import.meta.url), "utf8");
+    expect(bookingSource).toContain("apportion-hold-cross-button");
+    expect(bookingSource).toContain("is-on-hold");
   });
 });
