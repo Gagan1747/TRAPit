@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 
 export type AssessmentLogRow = {
@@ -28,11 +28,14 @@ type AssessmentLogTableProps = {
 
 export function AssessmentLogTable({ emptyMessage = "No tests or games match this view yet.", rows }: AssessmentLogTableProps) {
   const [page, setPage] = useState(0);
+  const sortedRows = useMemo(
+    () => [...rows].sort((left, right) => right.sortTime - left.sortTime),
+    [rows],
+  );
   if (!rows.length) {
     return <p className="muted-text">{emptyMessage}</p>;
   }
 
-  const sortedRows = [...rows].sort((left, right) => right.sortTime - left.sortTime);
   const pageCount = Math.ceil(sortedRows.length / 6);
   const currentPage = Math.min(page, pageCount - 1);
   const visibleRows = sortedRows.slice(currentPage * 6, (currentPage + 1) * 6);

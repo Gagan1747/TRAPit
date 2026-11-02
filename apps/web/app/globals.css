@@ -1460,7 +1460,14 @@ main {
 .apportion-calendar {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 10px;
+  gap: 5px;
+}
+
+.apportion-calendar-day-wrap {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 14px;
 }
 
 .apportion-calendar-weekday {
@@ -1493,15 +1500,17 @@ main {
 .apportion-calendar-day {
   display: grid;
   justify-items: center;
-  gap: 4px;
+  gap: 3px;
+  width: 100%;
   min-height: 76px;
   min-width: 0;
-  padding: 10px 6px;
+  padding: 20px 4px 8px;
   border: 1px solid rgba(28, 20, 15, 0.12);
-  border-radius: 18px;
+  border-radius: 14px;
   background: rgba(28, 20, 15, 0.05);
   color: rgba(28, 20, 15, 0.42);
   font: inherit;
+  box-sizing: border-box;
   transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
 }
 
@@ -4966,6 +4975,17 @@ button:disabled {
   border: 1px solid var(--line);
 }
 
+.apportion-business-card-avatar.is-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(24, 59, 67, 0.1);
+  color: #183b43;
+  font-weight: 800;
+  font-size: 1.1rem;
+  user-select: none;
+}
+
 .apportion-business-card-details {
   display: grid;
   gap: 4px;
@@ -4996,18 +5016,19 @@ button:disabled {
   position: absolute;
   top: 4px;
   right: 4px;
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   border-radius: 999px;
   border: 1px solid rgba(28, 20, 15, 0.22);
   background: #fff;
   color: var(--ink);
-  font-size: 0.72rem;
+  font-size: 0.66rem;
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
+  z-index: 2;
   cursor: pointer;
 }
 
@@ -5017,16 +5038,89 @@ button:disabled {
   font-weight: 700;
 }
 
+.manage-upgrades-table tbody tr.is-upgrade-requested td {
+  background: rgba(245, 158, 11, 0.18);
+  border-top-color: rgba(217, 119, 6, 0.35);
+  border-bottom-color: rgba(217, 119, 6, 0.35);
+}
+
+.manage-upgrades-table tbody tr.is-upgrade-requested td:first-child {
+  box-shadow: inset 4px 0 0 #d97706;
+  font-weight: 700;
+}
+
+.question-pool-organized-summary {
+  display: grid;
+  gap: 12px;
+}
+
+.question-pool-top-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+
+.question-pool-name-box-wrap {
+  display: grid;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.question-pool-prominent-name-input {
+  width: 100%;
+  min-height: 40px;
+  padding: 6px 12px;
+  border: 1px solid rgba(24, 59, 67, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  font: inherit;
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.question-pool-prominent-name-input[readonly] {
+  cursor: default;
+  background: rgba(24, 59, 67, 0.05);
+}
+
+.question-pool-prominent-name-input.is-editing {
+  background: #fff;
+  border-color: #183b43;
+}
+
+.question-pool-top-right-actions {
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.question-pool-action-toolbar,
+.question-pool-counters-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.group-attendance-column-cell {
+  min-width: 340px;
+  vertical-align: middle;
+}
+
 .group-attendance-strip {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 0;
+  gap: 6px;
+  padding: 4px 0;
 }
 
 .group-attendance-days {
   display: grid;
-  grid-template-columns: repeat(7, minmax(64px, 1fr));
+  grid-template-columns: repeat(7, minmax(46px, 1fr));
   gap: 6px;
   flex: 1;
   overflow-x: auto;
@@ -5035,23 +5129,61 @@ button:disabled {
 .group-attendance-day {
   display: grid;
   justify-items: center;
+  align-content: center;
   gap: 2px;
-  padding: 6px 8px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.7);
-  color: var(--ink);
+  min-width: 44px;
+  min-height: 44px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(24, 59, 67, 0.2);
+  background: #fff;
+  color: #183b43;
   font: inherit;
+  font-weight: 650;
+  cursor: pointer;
 }
 
-.group-attendance-day.is-present {
-  border-color: rgba(22, 163, 74, 0.45);
-  background: rgba(22, 163, 74, 0.12);
+span.group-attendance-day {
+  cursor: default;
 }
 
+.group-attendance-day-weekday {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1.1;
+}
+
+.group-attendance-day small {
+  font-size: 0.68rem;
+  line-height: 1.1;
+}
+
+.group-attendance-day.is-present,
 .group-attendance-day.is-absent {
-  border-color: rgba(220, 38, 38, 0.45);
-  background: rgba(220, 38, 38, 0.12);
+  border-color: #183b43;
+  background: #183b43;
+  color: #fff;
+}
+
+.group-attendance-day.is-present small,
+.group-attendance-day.is-present .group-attendance-day-weekday,
+.group-attendance-day.is-absent small,
+.group-attendance-day.is-absent .group-attendance-day-weekday {
+  color: #fff;
+}
+
+.group-attendance-mark {
+  font-size: 0.78rem;
+  line-height: 1;
+}
+
+.group-attendance-mark.is-tick {
+  color: #fff;
+}
+
+.group-attendance-mark.is-cross {
+  color: #ef4444;
 }
 
 .joined-group-admin-search {
@@ -5066,4 +5198,9 @@ button:disabled {
   border: 1px solid rgba(28, 20, 15, 0.18);
   border-radius: 8px;
   background: #fff;
+}
+
+.joined-group-not-admin {
+  font-size: 0.82rem;
+  font-weight: 600;
 }

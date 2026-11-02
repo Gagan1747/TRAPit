@@ -54,8 +54,15 @@ describe("completed results presentation", () => {
     expect(source).toContain("+91-8800797123");
     expect(source).toContain("<th>S.N.</th>");
     expect(source).toContain("<th>Days Remaining</th>");
+    expect(source).toContain("<th>Member Details</th>");
     expect(source).toContain("Download Group QR Code");
     expect(source).toContain("Copy Group Link");
+    expect(source).toContain("not an admin");
+    expect(source).toContain("Remove Admin");
+    expect(source).toContain("is-upgrade-requested");
+    expect(source).toContain("question-pool-prominent-name-input");
+    expect(source).toContain("question-pool-action-toolbar");
+    expect(source).toContain("question-pool-counters-row");
     expect(source).not.toContain("merged-test-");
     expect(source).toContain('<option value="__create_new_pool__">Create new pool</option>');
     expect(source).toContain('{question.isTaggedIncorrect ? "Untag" : "Tag"}');
@@ -88,6 +95,8 @@ describe("completed results presentation", () => {
     const searchSource = readFileSync(new URL("../../../apps/web/components/apportion-business-search.tsx", import.meta.url), "utf8");
     expect(searchSource).toContain("apportion-business-card-grid");
     expect(searchSource).toContain("apportion-business-card-avatar");
+    expect(searchSource).not.toContain("/trapit-logo.jpeg");
+    expect(searchSource).toContain("is-placeholder");
 
     const bookingSource = readFileSync(new URL("../../../apps/web/components/public-apportion-booking-workspace.tsx", import.meta.url), "utf8");
     expect(bookingSource).toContain("apportion-hold-cross-button");

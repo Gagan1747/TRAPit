@@ -76,7 +76,8 @@ export function ApportionBusinessSearch({ businesses, onClose }: { businesses: B
           </div>
           <ul className="apportion-business-search-results apportion-business-card-grid">
             {results.map((business) => {
-              const avatarSrc = business.profileImageDataUrl || business.imageDataUrl || "/trapit-logo.jpeg";
+              const avatarSrc = business.profileImageDataUrl || business.imageDataUrl || null;
+              const businessInitial = (business.name.trim()[0] ?? "B").toUpperCase();
               return (
                 <li className="apportion-business-card-item" key={`${business.ownerIdentifier}::${business.appointmentShareCode}`}>
                   <a
@@ -85,11 +86,20 @@ export function ApportionBusinessSearch({ businesses, onClose }: { businesses: B
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    <img
-                      alt={business.name}
-                      className="apportion-business-card-avatar"
-                      src={avatarSrc}
-                    />
+                    {avatarSrc ? (
+                      <img
+                        alt={business.name}
+                        className="apportion-business-card-avatar"
+                        src={avatarSrc}
+                      />
+                    ) : (
+                      <span
+                        aria-hidden="true"
+                        className="apportion-business-card-avatar is-placeholder"
+                      >
+                        {businessInitial}
+                      </span>
+                    )}
                     <span className="apportion-business-card-details">
                       <strong>{business.name}</strong>
                       <span>{formatPhoneNumberForDisplay(business.ownerIdentifier, { showFullPhoneNumber: true })}</span>

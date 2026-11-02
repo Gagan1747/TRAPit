@@ -19,6 +19,7 @@ import {
   removeGroupMember,
   resolveGroupJoinRequest,
   syncParticipants,
+  toggleGroupAttendanceTracking,
   toggleGroupMemberAdmin,
   updateGroup,
 } from "../../../../lib/testing-store";
@@ -71,6 +72,11 @@ type ParticipantBody =
       groupId?: string;
       memberIdentifier?: string;
       mode?: "toggle-group-admin";
+    }
+  | {
+      enabled?: boolean;
+      groupId?: string;
+      mode?: "toggle-group-attendance-tracking";
     }
   | {
       dateKey?: string;
@@ -144,6 +150,9 @@ async function buildParticipantsPayload(actorIdentifier: string | null, particip
   };
 }
 
+let lastDirectorySyncMs = 0;
+const DIRECTORY_SYNC_TTL_MS = 120_000;
+
 export async function GET() {
   const actor = await getWorkspaceActor();
 
@@ -153,10 +162,11 @@ export async function GET() {
 
   let syncedParticipants: Awaited<ReturnType<typeof listParticipants>> | undefined;
 
-  if (isWebAuthConfigured()) {
+  if (isWebAuthConfigured() && Date.now() - lastDirectorySyncMs > DIRECTORY_SYNC_TTL_MS) {
     try {
       const directoryUsers = await listRegisteredDirectoryUsers();
       syncedParticipants = await syncParticipants(directoryUsers);
+      lastDirectorySyncMs = Date.now();
     } catch {
       syncedParticipants = undefined;
     }
@@ -325,6 +335,24 @@ export async function POST(request: Request) {
       await toggleGroupMemberAdmin({
         groupId: body.groupId,
         memberIdentifier: body.memberIdentifier,
+        ownerIdentifier: actor.identifier,
+      });
+
+      return NextResponse.json(await buildParticipantsPayload(actor.identifier));
+    }
+
+    if (body.mode === "toggle-group-attendance-tracking") {
+      if (!body.groupId?.trim()) {
+        return NextResponse.json({ error: "Group id is required." }, { status: 400 });
+      }
+
+      if (!actor.identifier) {
+        return NextResponse.json({ error: "Owner identifier is required." }, { status: 400 });
+      }
+
+      await toggleGroupAttendanceTracking({
+        enabled: body.enabled,
+        groupId: body.groupId,
         ownerIdentifier: actor.identifier,
       });
 

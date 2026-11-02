@@ -544,6 +544,7 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       ...group,
       adminIdentifiers: dedupe((group.adminIdentifiers ?? []).map((id) => normalizeParticipantIdentifier(id)).filter(Boolean)),
       adminShareCodesByIdentifier: group.adminShareCodesByIdentifier ?? {},
+      attendanceTrackingEnabled: Boolean(group.attendanceTrackingEnabled),
       inviteJoinMode: group.inviteJoinMode ?? "approval-required",
       ownerIdentifier: group.ownerIdentifier?.trim() || null,
       ownerLabel: group.ownerLabel?.trim() || null,
@@ -3019,7 +3020,7 @@ export async function leaveParticipantGroup(input: {
 }
 
 export async function listGroupMembershipsForActor(actorIdentifier: string) {
-  const state = await readStore();
+  const state = await readStoreSnapshot();
   const records = reconcileGroupMemberships(state);
   const creatorGroupIds = new Set(
     state.participantGroups
@@ -3045,6 +3046,42 @@ export async function listGroupMembershipsForActor(actorIdentifier: string) {
     joinedGroupMemberships,
     ownedGroupMemberships,
   };
+}
+
+export async function toggleGroupAttendanceTracking(input: {
+  enabled?: boolean;
+  groupId: string;
+  ownerIdentifier: string;
+}) {
+  const state = await readStore();
+  reconcileGroupMemberships(state);
+  const group = state.participantGroups.find((entry) => entry.id === input.groupId);
+
+  if (!group) {
+    throw new Error("Group not found.");
+  }
+
+  if (!group.ownerIdentifier || !identifiersMatch(group.ownerIdentifier, input.ownerIdentifier)) {
+    throw new Error("Only the group creator can update attendance tracking.");
+  }
+
+  const nextEnabled = typeof input.enabled === "boolean"
+    ? input.enabled
+    : !Boolean(group.attendanceTrackingEnabled);
+  const timestamp = new Date().toISOString();
+
+  state.participantGroups = state.participantGroups.map((entry) =>
+    entry.id === group.id
+      ? {
+          ...entry,
+          attendanceTrackingEnabled: nextEnabled,
+          updatedAt: timestamp,
+        }
+      : entry,
+  );
+
+  await writeStore(state);
+  return state.participantGroups;
 }
 
 export async function toggleGroupMemberAdmin(input: {
@@ -3095,6 +3132,38 @@ export async function toggleGroupMemberAdmin(input: {
       : entry,
   );
 
+  if (isCurrentlyAdmin) {
+    state.groupMemberships = (state.groupMemberships ?? []).map((record) => {
+      if (
+        record.groupId === group.id
+        && record.introducedByAdminIdentifier
+        && identifiersMatch(record.introducedByAdminIdentifier, normalizedMember)
+      ) {
+        return {
+          ...record,
+          introducedByAdminIdentifier: null,
+          introducedByAdminLabel: null,
+          updatedAt: timestamp,
+        };
+      }
+      return record;
+    });
+    state.groupJoinRequests = (state.groupJoinRequests ?? []).map((request) => {
+      if (
+        request.adminGroupId === group.id
+        && request.introducedByAdminIdentifier
+        && identifiersMatch(request.introducedByAdminIdentifier, normalizedMember)
+      ) {
+        return {
+          ...request,
+          introducedByAdminIdentifier: null,
+          introducedByAdminLabel: null,
+        };
+      }
+      return request;
+    });
+  }
+
   reconcileGroupMemberships(state);
   await writeStore(state);
   return state.participantGroups;
@@ -3123,6 +3192,25 @@ export async function markGroupMemberAttendance(input: {
   const dateKey = input.dateKey.trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) {
     throw new Error("Valid attendance date is required.");
+  }
+
+  const [year, month, day] = dateKey.split("-").map((part) => Number.parseInt(part, 10));
+  const targetDate = new Date(year, month - 1, day);
+  targetDate.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  if (targetDate > today) {
+    throw new Error("Attendance cannot be marked for future dates.");
+  }
+
+  const groupCreatedDate = new Date(group.createdAt);
+  if (!Number.isNaN(groupCreatedDate.getTime())) {
+    const earliestMonthStart = new Date(groupCreatedDate.getFullYear(), groupCreatedDate.getMonth(), 1);
+    earliestMonthStart.setHours(0, 0, 0, 0);
+    if (targetDate < earliestMonthStart) {
+      throw new Error("Attendance cannot be marked before the month in which the group was created.");
+    }
   }
 
   const timestamp = new Date().toISOString();
@@ -3172,16 +3260,27 @@ export async function declareGroupIntroducingAdmin(input: {
   }
 
   const normalizedPhone = normalizeParticipantIdentifier(rawPhone);
-  const eligibleAdminIdentifiers = dedupe([
-    ...(group.adminIdentifiers ?? []),
-    ...(group.ownerIdentifier ? [group.ownerIdentifier] : []),
-  ]);
+  const eligibleAdminIdentifiers = dedupe(
+    (group.adminIdentifiers ?? []).filter(
+      (adminId) => !group.ownerIdentifier || !identifiersMatch(adminId, group.ownerIdentifier),
+    ),
+  );
   const matchedAdminIdentifier = eligibleAdminIdentifiers.find((adminId) =>
     identifiersMatch(adminId, normalizedPhone) || adminId.replace(/\D/g, "").slice(-10) === digits.slice(-10),
   );
 
   if (!matchedAdminIdentifier) {
-    throw new Error("No group admin found with this phone number.");
+    throw new Error("not an admin");
+  }
+
+  const targetRecord = (state.groupMemberships ?? []).find((record) =>
+    input.membershipId
+      ? record.id === input.membershipId
+      : record.groupId === group.id && identifiersMatch(record.userIdentifier, input.memberIdentifier),
+  );
+
+  if (targetRecord?.introducedByAdminIdentifier) {
+    throw new Error("An admin has already been assigned for this group.");
   }
 
   const adminProfile = state.participants.find((participant) =>

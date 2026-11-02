@@ -235,6 +235,7 @@ export type ParticipantProfile = {
 export type ParticipantGroup = {
   adminIdentifiers?: string[];
   adminShareCodesByIdentifier?: Record<string, string>;
+  attendanceTrackingEnabled?: boolean;
   createdAt: string;
   description: string;
   id: string;
@@ -1257,6 +1258,7 @@ export function createParticipantProfile(input: {
 }
 
 export function createParticipantGroup(input: {
+  attendanceTrackingEnabled?: boolean;
   description?: string;
   inviteJoinMode?: ParticipantGroupInviteJoinMode;
   name: string;
@@ -1268,6 +1270,7 @@ export function createParticipantGroup(input: {
   const timestamp = new Date().toISOString();
 
   return {
+    attendanceTrackingEnabled: Boolean(input.attendanceTrackingEnabled),
     createdAt: timestamp,
     description: input.description?.trim() ?? "",
     id: createEntityId("group"),

@@ -42,10 +42,10 @@ import {
   type TestResult,
   type WorkspaceBranding,
 } from "@trapit/testing";
-import { Fragment, type DragEvent, useEffect, useRef, useState } from "react";
+import { Fragment, type DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { usePathname } from "next/navigation";
-import { ArrowLeft, ArrowRight, Check, Copy, ExternalLink, LoaderCircle, QrCode, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Copy, ExternalLink, LoaderCircle, QrCode, Trash2, X } from "lucide-react";
 import QRCode from "qrcode";
 import { readJsonResponse } from "../lib/read-json-response";
 import { createRefreshQueue } from "../lib/refresh-queue";
@@ -1870,6 +1870,9 @@ export function AdminQuestionWorkspace({
   const [poolFeedback, setPoolFeedback] = useState<string | null>(null);
   const [poolName, setPoolName] = useState("");
   const [poolRenameName, setPoolRenameName] = useState("");
+  const [isPoolNameEditing, setIsPoolNameEditing] = useState(false);
+  const poolRenameInputRef = useRef<HTMLInputElement | null>(null);
+  const lastLocalMutationMsRef = useRef(0);
   const [poolShareSearch, setPoolShareSearch] = useState("");
   const [pools, setPools] = useState<WorkspaceQuestionPool[]>([]);
   const [poolCreationCapability, setPoolCreationCapability] = useState<PoolsResponse["creationCapability"] | null>(null);
@@ -1986,11 +1989,39 @@ export function AdminQuestionWorkspace({
     }
 
     try {
-      const [brandingResult, apportionResult] =
-        await Promise.allSettled([
-          fetch("/api/admin/branding").then(readJson<BrandingResponse>),
-          fetch("/api/user/apportion").then(readJson<ApportionDashboardResponse>),
-        ]);
+      const brandingAndApportionPromise = Promise.allSettled([
+        fetch("/api/admin/branding").then(readJson<BrandingResponse>),
+        fetch("/api/user/apportion").then(readJson<ApportionDashboardResponse>),
+      ]);
+      const userDashboardBatchPromise = Promise.all([
+        fetch("/api/user/dashboard").then(readJson<UserDashboardResponse>),
+        currentActorRole === "user"
+          ? fetch("/api/admin/participants").then(readJson<ParticipantsResponse>)
+          : Promise.resolve<ParticipantsResponse | null>(null),
+        !isSuperAdmin
+          ? fetch("/api/user/category").then(readJson<UserCategorySnapshotResponse>).catch(() => null)
+          : Promise.resolve<UserCategorySnapshotResponse | null>(null),
+        isSuperAdmin
+          ? fetch("/api/admin/user-categories").then(readJson<SuperAdminCategoryManagementResponse>)
+          : Promise.resolve<SuperAdminCategoryManagementResponse | null>(null),
+      ]);
+      const roleBatchPromise = currentActorRole === "user"
+        ? Promise.all([
+            fetch("/api/admin/questions").then(readJson<QuestionApiResponse>),
+            fetch("/api/admin/pools").then(readJson<PoolsResponse>),
+            fetch("/api/admin/tests").then(readJson<ScheduledTestsResponse>),
+            fetch("/api/admin/polls").then(readJson<PollsResponse>).catch(() => ({ pollQuestions: [] as PersistentPollQuestion[], scheduledPolls: [] as ScheduledPoll[] })),
+          ])
+        : Promise.all([
+            fetch("/api/admin/questions").then(readJson<QuestionApiResponse>),
+            fetch("/api/admin/pools").then(readJson<PoolsResponse>),
+            fetch("/api/admin/participants").then(readJson<ParticipantsResponse>),
+            fetch("/api/admin/tests").then(readJson<ScheduledTestsResponse>),
+            fetch("/api/admin/history").then(readJson<HistoryResponse>),
+            fetch("/api/admin/polls").then(readJson<PollsResponse>),
+          ]);
+
+      const [brandingResult, apportionResult] = await brandingAndApportionPromise;
 
       if (brandingResult.status === "fulfilled") {
         setWorkspaceBranding(brandingResult.value.branding);
@@ -2019,18 +2050,7 @@ export function AdminQuestionWorkspace({
       }
 
       const [userDashboardPayload, userParticipantsPayload, categorySnapshotPayload, categoryManagementPayload] =
-        await Promise.all([
-          fetch("/api/user/dashboard").then(readJson<UserDashboardResponse>),
-          currentActorRole === "user"
-            ? fetch("/api/admin/participants").then(readJson<ParticipantsResponse>)
-            : Promise.resolve<ParticipantsResponse | null>(null),
-          !isSuperAdmin
-            ? fetch("/api/user/category").then(readJson<UserCategorySnapshotResponse>).catch(() => null)
-            : Promise.resolve<UserCategorySnapshotResponse | null>(null),
-          isSuperAdmin
-            ? fetch("/api/admin/user-categories").then(readJson<SuperAdminCategoryManagementResponse>)
-            : Promise.resolve<SuperAdminCategoryManagementResponse | null>(null),
-        ]);
+        await userDashboardBatchPromise;
 
       setOutgoingGroupJoinRequests(userDashboardPayload.groupJoinRequests);
       setAvailableGames(userDashboardPayload.availableGames);
@@ -2042,12 +2062,8 @@ export function AdminQuestionWorkspace({
       setCategoryManagement(categoryManagementPayload);
 
       if (currentActorRole === "user") {
-        const [questionsPayload, poolsPayload, testsPayload, pollsPayload] = await Promise.all([
-          fetch("/api/admin/questions").then(readJson<QuestionApiResponse>),
-          fetch("/api/admin/pools").then(readJson<PoolsResponse>),
-          fetch("/api/admin/tests").then(readJson<ScheduledTestsResponse>),
-          fetch("/api/admin/polls").then(readJson<PollsResponse>).catch(() => ({ pollQuestions: [] as PersistentPollQuestion[], scheduledPolls: [] as ScheduledPoll[] })),
-        ]);
+        const [questionsPayload, poolsPayload, testsPayload, pollsPayload] =
+          await (roleBatchPromise as Promise<[QuestionApiResponse, PoolsResponse, ScheduledTestsResponse, PollsResponse]>);
 
         setQuestions(questionsPayload.questions);
         setPools(poolsPayload.pools);
@@ -2069,14 +2085,7 @@ export function AdminQuestionWorkspace({
       }
 
       const [questionsPayload, poolsPayload, participantsPayload, testsPayload, historyPayload, pollsPayload] =
-        await Promise.all([
-          fetch("/api/admin/questions").then(readJson<QuestionApiResponse>),
-          fetch("/api/admin/pools").then(readJson<PoolsResponse>),
-          fetch("/api/admin/participants").then(readJson<ParticipantsResponse>),
-          fetch("/api/admin/tests").then(readJson<ScheduledTestsResponse>),
-          fetch("/api/admin/history").then(readJson<HistoryResponse>),
-          fetch("/api/admin/polls").then(readJson<PollsResponse>),
-        ]);
+        await (roleBatchPromise as Promise<[QuestionApiResponse, PoolsResponse, ParticipantsResponse, ScheduledTestsResponse, HistoryResponse, PollsResponse]>);
 
       setQuestions(questionsPayload.questions);
       setPools(poolsPayload.pools);
@@ -2118,12 +2127,20 @@ export function AdminQuestionWorkspace({
     }
 
     let intervalId: number | null = null;
+    let sseDebounceTimer: number | null = null;
     const source = new EventSource("/api/internal/events");
 
     source.onmessage = (event) => {
       const payload = JSON.parse(event.data) as { initial?: boolean };
       if (payload.initial) return;
-      void loadWorkspace({ silent: true });
+      if (Date.now() - lastLocalMutationMsRef.current < 2000) return;
+      if (sseDebounceTimer !== null) {
+        window.clearTimeout(sseDebounceTimer);
+      }
+      sseDebounceTimer = window.setTimeout(() => {
+        sseDebounceTimer = null;
+        void loadWorkspace({ silent: true });
+      }, 300);
     };
 
     source.onerror = () => {
@@ -2138,6 +2155,9 @@ export function AdminQuestionWorkspace({
 
     return () => {
       source.close();
+      if (sseDebounceTimer !== null) {
+        window.clearTimeout(sseDebounceTimer);
+      }
 
       if (intervalId !== null) {
         window.clearInterval(intervalId);
@@ -3646,21 +3666,37 @@ export function AdminQuestionWorkspace({
   }
 
   function handleToggleQuestionTag(questionId: string, nextTaggedState: boolean) {
-    void mutateWorkspace(async () => {
-      await readJson<QuestionApiResponse>(
-        await fetch(`/api/admin/questions/${questionId}`, {
-          body: JSON.stringify({ isTaggedIncorrect: nextTaggedState }),
-          headers: {
-            "Content-Type": "application/json",
-          },
-          method: "PATCH",
-        }),
-      );
+    lastLocalMutationMsRef.current = Date.now();
+    setQuestions((current) =>
+      current.map((question) =>
+        question.id === questionId ? { ...question, isTaggedIncorrect: nextTaggedState } : question,
+      ),
+    );
+    setFeedback(nextTaggedState ? "Question tagged and excluded from tests." : "Question untagged.");
 
-      setFeedback(nextTaggedState ? "Question tagged and excluded from tests." : "Question untagged.");
-    }).catch((error) => {
-      setFeedback(error instanceof Error ? error.message : "Unable to update question tag.");
-    });
+    void (async () => {
+      try {
+        const payload = await readJson<QuestionApiResponse>(
+          await fetch(`/api/admin/questions/${questionId}`, {
+            body: JSON.stringify({ isTaggedIncorrect: nextTaggedState }),
+            headers: {
+              "Content-Type": "application/json",
+            },
+            method: "PATCH",
+          }),
+        );
+        if (payload.questions) {
+          setQuestions(payload.questions);
+        }
+      } catch (error) {
+        setQuestions((current) =>
+          current.map((question) =>
+            question.id === questionId ? { ...question, isTaggedIncorrect: !nextTaggedState } : question,
+          ),
+        );
+        setFeedback(error instanceof Error ? error.message : "Unable to update question tag.");
+      }
+    })();
   }
 
   function handleStartEditingQuestion(question: PersistentQuestion) {
@@ -3745,7 +3781,20 @@ export function AdminQuestionWorkspace({
   }
 
   function handleRenamePool() {
-    if (!selectedQuestionBankPool?.canManage || !poolRenameName.trim()) {
+    if (!selectedQuestionBankPool?.canManage) {
+      return;
+    }
+    if (!isPoolNameEditing) {
+      setPoolRenameName(selectedQuestionBankPool.name);
+      setIsPoolNameEditing(true);
+      setPoolFeedback(null);
+      window.setTimeout(() => {
+        poolRenameInputRef.current?.focus();
+        poolRenameInputRef.current?.select();
+      }, 0);
+      return;
+    }
+    if (!poolRenameName.trim()) {
       setPoolFeedback("Enter a pool name.");
       return;
     }
@@ -3754,21 +3803,25 @@ export function AdminQuestionWorkspace({
       return;
     }
 
-    void mutateWorkspace(async () => {
-      const payload = await readJson<PoolsResponse>(
-        await fetch("/api/admin/pools", {
-          body: JSON.stringify({ name: poolRenameName, poolId: selectedQuestionBankPool.id }),
-          headers: { "Content-Type": "application/json" },
-          method: "PATCH",
-        }),
-      );
+    lastLocalMutationMsRef.current = Date.now();
+    void (async () => {
+      try {
+        const payload = await readJson<PoolsResponse>(
+          await fetch("/api/admin/pools", {
+            body: JSON.stringify({ name: poolRenameName, poolId: selectedQuestionBankPool.id }),
+            headers: { "Content-Type": "application/json" },
+            method: "PATCH",
+          }),
+        );
 
-      setPools(payload.pools);
-      setPoolCreationCapability(payload.creationCapability);
-      setPoolFeedback("Pool name updated.");
-    }).catch((error) => {
-      setPoolFeedback(error instanceof Error ? error.message : "Unable to rename the pool.");
-    });
+        setPools(payload.pools);
+        setPoolCreationCapability(payload.creationCapability);
+        setIsPoolNameEditing(false);
+        setPoolFeedback("Pool name updated.");
+      } catch (error) {
+        setPoolFeedback(error instanceof Error ? error.message : "Unable to rename the pool.");
+      }
+    })();
   }
 
   function handleDeletePool() {
@@ -3777,6 +3830,7 @@ export function AdminQuestionWorkspace({
       return;
     }
 
+    lastLocalMutationMsRef.current = Date.now();
     void mutateWorkspace(async () => {
       const payload = await readJson<PoolsResponse>(
         await fetch("/api/admin/pools", {
@@ -3790,6 +3844,7 @@ export function AdminQuestionWorkspace({
       setPoolCreationCapability(payload.creationCapability);
       setSelectedQuestionBankPoolId(null);
       setPoolRenameName("");
+      setIsPoolNameEditing(false);
       setPoolFeedback("Pool deleted. Its questions were kept.");
     }).catch((error) => {
       setPoolFeedback(error instanceof Error ? error.message : "Unable to delete the pool.");
@@ -4974,30 +5029,88 @@ export function AdminQuestionWorkspace({
 
   function handleToggleGroupMemberAdmin(groupId: string, memberIdentifier: string) {
     setGroupFeedback(null);
-    void mutateWorkspace(async () => {
-      const payload = await readJson<ParticipantsResponse>(
-        await fetch("/api/admin/participants", {
-          body: JSON.stringify({
-            groupId,
-            memberIdentifier,
-            mode: "toggle-group-admin",
-          }),
-          headers: {
-            "Content-Type": "application/json",
-          },
-          method: "POST",
-        }),
-      );
+    lastLocalMutationMsRef.current = Date.now();
+    setParticipantGroups((current) =>
+      current.map((group) => {
+        if (group.id !== groupId) return group;
+        const admins = group.adminIdentifiers ?? [];
+        const isCurrentlyAdmin = admins.some((adminId) => participantIdentifiersMatch(adminId, memberIdentifier));
+        return {
+          ...group,
+          adminIdentifiers: isCurrentlyAdmin
+            ? admins.filter((adminId) => !participantIdentifiersMatch(adminId, memberIdentifier))
+            : [...admins, memberIdentifier],
+        };
+      }),
+    );
 
-      setParticipants(payload.participants);
-      setParticipantGroups(payload.participantGroups);
-      setGroupJoinRequests(payload.groupJoinRequests);
-      setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
-      setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
-      setGroupFeedback("Group admin role updated.");
-    }).catch((error) => {
-      handleWorkspaceActionError(error, "Unable to update group admin role.", setGroupFeedback);
-    });
+    void (async () => {
+      try {
+        const payload = await readJson<ParticipantsResponse>(
+          await fetch("/api/admin/participants", {
+            body: JSON.stringify({
+              groupId,
+              memberIdentifier,
+              mode: "toggle-group-admin",
+            }),
+            headers: {
+              "Content-Type": "application/json",
+            },
+            method: "POST",
+          }),
+        );
+
+        setParticipants(payload.participants);
+        setParticipantGroups(payload.participantGroups);
+        setGroupJoinRequests(payload.groupJoinRequests);
+        setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
+        setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
+        setGroupFeedback("Group admin role updated.");
+      } catch (error) {
+        handleWorkspaceActionError(error, "Unable to update group admin role.", setGroupFeedback);
+      }
+    })();
+  }
+
+  function handleToggleGroupAttendanceTracking(groupId: string, nextEnabled: boolean) {
+    setGroupFeedback(null);
+    lastLocalMutationMsRef.current = Date.now();
+    setParticipantGroups((current) =>
+      current.map((group) =>
+        group.id === groupId ? { ...group, attendanceTrackingEnabled: nextEnabled } : group,
+      ),
+    );
+
+    void (async () => {
+      try {
+        const payload = await readJson<ParticipantsResponse>(
+          await fetch("/api/admin/participants", {
+            body: JSON.stringify({
+              enabled: nextEnabled,
+              groupId,
+              mode: "toggle-group-attendance-tracking",
+            }),
+            headers: {
+              "Content-Type": "application/json",
+            },
+            method: "POST",
+          }),
+        );
+
+        setParticipants(payload.participants);
+        setParticipantGroups(payload.participantGroups);
+        setGroupJoinRequests(payload.groupJoinRequests);
+        setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
+        setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
+      } catch (error) {
+        setParticipantGroups((current) =>
+          current.map((group) =>
+            group.id === groupId ? { ...group, attendanceTrackingEnabled: !nextEnabled } : group,
+          ),
+        );
+        handleWorkspaceActionError(error, "Unable to update attendance tracking.", setGroupFeedback);
+      }
+    })();
   }
 
   function handleCycleGroupMemberAttendance(groupId: string, record: GroupMembershipRecord, dateKey: string) {
@@ -5005,32 +5118,58 @@ export function AdminQuestionWorkspace({
     const nextStatus: "present" | "absent" | null =
       currentStatus === "present" ? "absent" : currentStatus === "absent" ? null : "present";
 
-    void mutateWorkspace(async () => {
-      const payload = await readJson<ParticipantsResponse>(
-        await fetch("/api/admin/participants", {
-          body: JSON.stringify({
-            dateKey,
-            groupId,
-            memberIdentifier: record.userIdentifier,
-            membershipId: record.id,
-            mode: "mark-group-attendance",
-            status: nextStatus,
-          }),
-          headers: {
-            "Content-Type": "application/json",
-          },
-          method: "POST",
-        }),
-      );
-
-      setParticipants(payload.participants);
-      setParticipantGroups(payload.participantGroups);
-      setGroupJoinRequests(payload.groupJoinRequests);
-      setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
-      setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
-    }).catch((error) => {
-      handleWorkspaceActionError(error, "Unable to update attendance.", setGroupFeedback);
+    lastLocalMutationMsRef.current = Date.now();
+    setOwnedGroupMemberships((current) => {
+      const hasRecord = current.some((entry) => entry.id === record.id);
+      if (!hasRecord) {
+        const nextAttendance = { ...(record.attendanceByDateKey ?? {}) };
+        if (nextStatus === null) {
+          delete nextAttendance[dateKey];
+        } else {
+          nextAttendance[dateKey] = nextStatus;
+        }
+        return [...current, { ...record, attendanceByDateKey: nextAttendance }];
+      }
+      return current.map((entry) => {
+        if (entry.id !== record.id) return entry;
+        const nextAttendance = { ...(entry.attendanceByDateKey ?? {}) };
+        if (nextStatus === null) {
+          delete nextAttendance[dateKey];
+        } else {
+          nextAttendance[dateKey] = nextStatus;
+        }
+        return { ...entry, attendanceByDateKey: nextAttendance };
+      });
     });
+
+    void (async () => {
+      try {
+        const payload = await readJson<ParticipantsResponse>(
+          await fetch("/api/admin/participants", {
+            body: JSON.stringify({
+              dateKey,
+              groupId,
+              memberIdentifier: record.userIdentifier,
+              membershipId: record.id.startsWith("creator-") ? undefined : record.id,
+              mode: "mark-group-attendance",
+              status: nextStatus,
+            }),
+            headers: {
+              "Content-Type": "application/json",
+            },
+            method: "POST",
+          }),
+        );
+
+        setParticipants(payload.participants);
+        setParticipantGroups(payload.participantGroups);
+        setGroupJoinRequests(payload.groupJoinRequests);
+        setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
+        setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
+      } catch (error) {
+        handleWorkspaceActionError(error, "Unable to update attendance.", setGroupFeedback);
+      }
+    })();
   }
 
   function isCompletePhoneNumberSearch(value: string) {
@@ -5044,47 +5183,93 @@ export function AdminQuestionWorkspace({
     }
 
     setGroupFeedback(null);
-    void mutateWorkspace(async () => {
-      const payload = await readJson<ParticipantsResponse>(
-        await fetch("/api/admin/participants", {
-          body: JSON.stringify({
-            adminPhoneNumber: adminPhoneNumber.trim(),
-            groupId,
-            membershipId,
-            mode: "declare-group-admin",
+    lastLocalMutationMsRef.current = Date.now();
+    void (async () => {
+      try {
+        const payload = await readJson<ParticipantsResponse>(
+          await fetch("/api/admin/participants", {
+            body: JSON.stringify({
+              adminPhoneNumber: adminPhoneNumber.trim(),
+              groupId,
+              membershipId,
+              mode: "declare-group-admin",
+            }),
+            headers: {
+              "Content-Type": "application/json",
+            },
+            method: "POST",
           }),
-          headers: {
-            "Content-Type": "application/json",
-          },
-          method: "POST",
-        }),
-      );
+        );
 
-      setParticipants(payload.participants);
-      setParticipantGroups(payload.participantGroups);
-      setGroupJoinRequests(payload.groupJoinRequests);
-      setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
-      setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
-      setGroupIntroAdminPhoneByRecordId((current) => ({ ...current, [membershipId]: "" }));
-      setGroupFeedback("Introducing admin updated.");
-    }).catch((error) => {
-      handleWorkspaceActionError(error, "Unable to update introducing admin.", setGroupFeedback);
-    });
+        setParticipants(payload.participants);
+        setParticipantGroups(payload.participantGroups);
+        setGroupJoinRequests(payload.groupJoinRequests);
+        setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
+        setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
+        setGroupIntroAdminPhoneByRecordId((current) => ({ ...current, [membershipId]: "" }));
+        setGroupFeedback("Introducing admin updated.");
+      } catch (error) {
+        handleWorkspaceActionError(error, "Unable to update introducing admin.", setGroupFeedback);
+      }
+    })();
   }
 
-  function buildGroupAttendanceDates(offsetWeeks = 0) {
+  function buildGroupAttendanceCalendarWindow(offsetWeeks = 0, groupCreatedAt?: string | null) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    return Array.from({ length: 7 }, (_, index) => {
-      const date = new Date(today);
-      date.setDate(today.getDate() - (6 - index) + offsetWeeks * 7);
+    const currentWeekSunday = new Date(today);
+    currentWeekSunday.setDate(today.getDate() - today.getDay());
+    currentWeekSunday.setHours(0, 0, 0, 0);
+
+    const parsedCreatedAt = groupCreatedAt ? new Date(groupCreatedAt) : null;
+    const earliestAllowedDate = parsedCreatedAt && !Number.isNaN(parsedCreatedAt.getTime())
+      ? new Date(parsedCreatedAt.getFullYear(), parsedCreatedAt.getMonth(), 1)
+      : new Date(today.getFullYear(), today.getMonth(), 1);
+    earliestAllowedDate.setHours(0, 0, 0, 0);
+
+    const earliestWeekSunday = new Date(earliestAllowedDate);
+    earliestWeekSunday.setDate(earliestAllowedDate.getDate() - earliestAllowedDate.getDay());
+    earliestWeekSunday.setHours(0, 0, 0, 0);
+
+    const minOffsetWeeks = Math.min(
+      0,
+      Math.round((earliestWeekSunday.getTime() - currentWeekSunday.getTime()) / (7 * 24 * 60 * 60 * 1000)),
+    );
+    const clampedOffsetWeeks = Math.max(minOffsetWeeks, Math.min(0, offsetWeeks));
+
+    const weekStartSunday = new Date(currentWeekSunday);
+    weekStartSunday.setDate(currentWeekSunday.getDate() + clampedOffsetWeeks * 7);
+
+    const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+    const days = Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(weekStartSunday);
+      date.setDate(weekStartSunday.getDate() + index);
+      date.setHours(0, 0, 0, 0);
       const year = date.getFullYear();
       const month = String(date.getMonth() + 1).padStart(2, "0");
       const day = String(date.getDate()).padStart(2, "0");
       const dateKey = `${year}-${month}-${day}`;
-      const label = date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
-      return { dateKey, label };
-    });
+      const weekdayLabel = weekdayLabels[date.getDay()] ?? "Sun";
+      const dateLabel = date.toLocaleDateString("en-IN", { day: "2-digit", month: "short" });
+      const isFuture = date > today;
+      const isBeforeCreationMonth = date < earliestAllowedDate;
+      return {
+        dateKey,
+        dateLabel,
+        isBeforeCreationMonth,
+        isFuture,
+        isOutOfBounds: isFuture || isBeforeCreationMonth,
+        label: `${weekdayLabel} ${dateLabel}`,
+        weekdayLabel,
+      };
+    }).filter((entry) => !entry.isOutOfBounds);
+
+    return {
+      canGoNext: clampedOffsetWeeks < 0,
+      canGoPrevious: clampedOffsetWeeks > minOffsetWeeks,
+      clampedOffsetWeeks,
+      days,
+    };
   }
 
   const isScheduleSelfTestSelected = scheduleParticipantGroupIds.includes(SELF_TEST_GROUP_OPTION_ID);
@@ -5305,14 +5490,26 @@ export function AdminQuestionWorkspace({
 
     return new Date(rightTest.startsAt).getTime() - new Date(leftTest.startsAt).getTime();
   });
-  const filteredQuestionBankQuestions = selectedQuestionBankPoolId
-    ? questions.filter((question) => question.poolIds.includes(selectedQuestionBankPoolId))
-    : [];
-  const filteredQuestionBankQuestionIds = filteredQuestionBankQuestions
-    .filter((question) => question.canManage)
-    .map((question) => question.id);
-  const selectedVisibleQuestionIds = filteredQuestionBankQuestionIds.filter((questionId) =>
-    selectedQuestionIds.includes(questionId),
+  const filteredQuestionBankQuestions = useMemo(
+    () =>
+      selectedQuestionBankPoolId
+        ? questions.filter((question) => question.poolIds.includes(selectedQuestionBankPoolId))
+        : [],
+    [questions, selectedQuestionBankPoolId],
+  );
+  const filteredQuestionBankQuestionIds = useMemo(
+    () =>
+      filteredQuestionBankQuestions
+        .filter((question) => question.canManage)
+        .map((question) => question.id),
+    [filteredQuestionBankQuestions],
+  );
+  const selectedVisibleQuestionIds = useMemo(
+    () =>
+      filteredQuestionBankQuestionIds.filter((questionId) =>
+        selectedQuestionIds.includes(questionId),
+      ),
+    [filteredQuestionBankQuestionIds, selectedQuestionIds],
   );
   const areAllVisibleQuestionsSelected =
     filteredQuestionBankQuestionIds.length > 0 &&
@@ -5322,49 +5519,61 @@ export function AdminQuestionWorkspace({
     .filter((questionId) => selectedPollQuestionIds.includes(questionId));
   const areAllPollQuestionsSelected =
     pollQuestions.length > 0 && pollQuestions.every((question) => selectedPollQuestionIds.includes(question.id));
-  const questionBankQuestionPositionById = new Map(
-    filteredQuestionBankQuestions.map((question, index) => [question.id, index + 1]),
+  const questionBankQuestionPositionById = useMemo(
+    () =>
+      new Map(
+        filteredQuestionBankQuestions.map((question, index) => [question.id, index + 1]),
+      ),
+    [filteredQuestionBankQuestions],
   );
-  const duplicateQuestionGroupsBySignature = new Map<string, WorkspaceQuestion[]>();
+  const { duplicateQuestionGroups, removableDuplicateQuestionIds, duplicateQuestionGroupByQuestionId } = useMemo(() => {
+    const groupsBySig = new Map<string, WorkspaceQuestion[]>();
 
-  for (const question of filteredQuestionBankQuestions) {
-    const signature = createQuestionDuplicateSignature(question);
-    const existingQuestions = duplicateQuestionGroupsBySignature.get(signature);
+    for (const question of filteredQuestionBankQuestions) {
+      const signature = createQuestionDuplicateSignature(question);
+      const existingQuestions = groupsBySig.get(signature);
 
-    if (existingQuestions) {
-      existingQuestions.push(question);
-    } else {
-      duplicateQuestionGroupsBySignature.set(signature, [question]);
+      if (existingQuestions) {
+        existingQuestions.push(question);
+      } else {
+        groupsBySig.set(signature, [question]);
+      }
     }
-  }
 
-  const duplicateQuestionGroups = Array.from(duplicateQuestionGroupsBySignature.entries())
-    .filter(([, duplicateQuestions]) => duplicateQuestions.length > 1)
-    .map(([signature, duplicateQuestions]) => ({
-      questions: duplicateQuestions,
-      signature,
-    }));
-  const removableDuplicateQuestionIds = Array.from(new Set(
-    duplicateQuestionGroups.flatMap((duplicateGroup) =>
-      duplicateGroup.questions
-        .slice(1)
-        .filter((question) => question.canManage)
-        .map((question) => question.id),
-    ),
-  ));
-  const duplicateQuestionGroupByQuestionId = new Map<
-    string,
-    {
-      questions: WorkspaceQuestion[];
-      signature: string;
-    }
-  >();
+    const groups = Array.from(groupsBySig.entries())
+      .filter(([, duplicateQuestions]) => duplicateQuestions.length > 1)
+      .map(([signature, duplicateQuestions]) => ({
+        questions: duplicateQuestions,
+        signature,
+      }));
+    const removableIds = Array.from(new Set(
+      groups.flatMap((duplicateGroup) =>
+        duplicateGroup.questions
+          .slice(1)
+          .filter((question) => question.canManage)
+          .map((question) => question.id),
+      ),
+    ));
+    const byQuestionId = new Map<
+      string,
+      {
+        questions: WorkspaceQuestion[];
+        signature: string;
+      }
+    >();
 
-  for (const duplicateGroup of duplicateQuestionGroups) {
-    for (const question of duplicateGroup.questions) {
-      duplicateQuestionGroupByQuestionId.set(question.id, duplicateGroup);
+    for (const duplicateGroup of groups) {
+      for (const question of duplicateGroup.questions) {
+        byQuestionId.set(question.id, duplicateGroup);
+      }
     }
-  }
+
+    return {
+      duplicateQuestionGroupByQuestionId: byQuestionId,
+      duplicateQuestionGroups: groups,
+      removableDuplicateQuestionIds: removableIds,
+    };
+  }, [filteredQuestionBankQuestions]);
 
   const filteredShareableParticipants = participants.filter((participant) => {
     if (currentAdminIdentifier && participantIdentifiersMatch(participant.identifier, currentAdminIdentifier)) {
@@ -6692,9 +6901,10 @@ export function AdminQuestionWorkspace({
                         && superAdminUpgradePendingRow.targetCategory === "trapit-pro-max";
                       const hasPendingProRequest = user.pendingRequest?.requestedCategory === "trapit-pro";
                       const hasPendingProMaxRequest = user.pendingRequest?.requestedCategory === "trapit-pro-max";
+                      const hasPendingUpgradeRequest = Boolean(user.pendingRequest);
 
                       return (
-                        <tr key={user.identifier}>
+                        <tr className={hasPendingUpgradeRequest ? "is-upgrade-requested" : undefined} key={user.identifier}>
                           <td>{index + 1}</td>
                           <td>
                             <strong>{user.displayName || "—"}</strong>
@@ -7054,20 +7264,25 @@ export function AdminQuestionWorkspace({
                         <th>Group Name &amp; Created By</th>
                         <th>Admin</th>
                         <th>Action</th>
+                        <th>Attendance</th>
                       </tr>
                     </thead>
                     <tbody>
                       {joinedGroupMemberships.length ? (
                         joinedGroupMemberships.map((record, index) => {
                           const offsetWeeks = groupAttendanceOffsetByRecordId[record.id] ?? 0;
-                          const attendanceDates = buildGroupAttendanceDates(offsetWeeks);
-                          const introSearchValue = (groupIntroAdminPhoneByRecordId[record.id] ?? "").trim();
                           const joinedGroupObj = participantGroups.find((entry) => entry.id === record.groupId);
+                          const isAttendanceEnabled = Boolean(joinedGroupObj?.attendanceTrackingEnabled);
+                          const attendanceWindow = buildGroupAttendanceCalendarWindow(
+                            offsetWeeks,
+                            joinedGroupObj?.createdAt ?? record.createdAt,
+                          );
+                          const introSearchValue = (groupIntroAdminPhoneByRecordId[record.id] ?? "").trim();
                           const matchingIntroAdmin = isCompletePhoneNumberSearch(introSearchValue)
                             ? participants.find((participant) => {
                                 const isEligibleAdmin = Boolean(
-                                  (joinedGroupObj?.ownerIdentifier && participantIdentifiersMatch(participant.identifier, joinedGroupObj.ownerIdentifier))
-                                  || (joinedGroupObj?.adminIdentifiers ?? []).some((adminId) => participantIdentifiersMatch(participant.identifier, adminId)),
+                                  (!joinedGroupObj?.ownerIdentifier || !participantIdentifiersMatch(participant.identifier, joinedGroupObj.ownerIdentifier))
+                                  && (joinedGroupObj?.adminIdentifiers ?? []).some((adminId) => participantIdentifiersMatch(participant.identifier, adminId)),
                                 );
                                 if (!isEligibleAdmin) return false;
                                 return (
@@ -7120,14 +7335,9 @@ export function AdminQuestionWorkspace({
                                             {matchingIntroAdmin.label}
                                           </button>
                                         ) : (
-                                          <button
-                                            className="button-secondary small-button"
-                                            disabled={isMutating}
-                                            type="button"
-                                            onClick={() => handleDeclareGroupIntroducingAdmin(record.groupId, record.id, introSearchValue)}
-                                          >
-                                            Declare admin
-                                          </button>
+                                          <span className="muted-text joined-group-not-admin" role="status">
+                                            not an admin
+                                          </span>
                                         )
                                       ) : null}
                                     </div>
@@ -7178,51 +7388,58 @@ export function AdminQuestionWorkspace({
                                     </div>
                                   )}
                                 </td>
-                              </tr>
-                              <tr className="group-attendance-calendar-row">
-                                <td colSpan={4}>
-                                  <div className="group-attendance-strip">
-                                    <button
-                                      aria-label="Previous attendance dates"
-                                      className="button-secondary small-button"
-                                      type="button"
-                                      onClick={() =>
-                                        setGroupAttendanceOffsetByRecordId((current) => ({
-                                          ...current,
-                                          [record.id]: (current[record.id] ?? 0) - 1,
-                                        }))
-                                      }
-                                    >
-                                      ◀
-                                    </button>
-                                    <div className="group-attendance-days">
-                                      {attendanceDates.map((day) => {
-                                        const mark = record.attendanceByDateKey?.[day.dateKey] ?? null;
-                                        return (
-                                          <span
-                                            className={`group-attendance-day${mark === "present" ? " is-present" : mark === "absent" ? " is-absent" : ""}`}
-                                            key={`${record.id}-${day.dateKey}`}
-                                          >
-                                            <small>{day.label}</small>
-                                            <strong>{mark === "present" ? "✓" : mark === "absent" ? "✗" : "—"}</strong>
-                                          </span>
-                                        );
-                                      })}
+                                <td className="group-attendance-column-cell">
+                                  {isAttendanceEnabled ? (
+                                    <div className="group-attendance-strip">
+                                      <button
+                                        aria-label="Previous attendance dates"
+                                        className="button-secondary small-button"
+                                        disabled={!attendanceWindow.canGoPrevious}
+                                        type="button"
+                                        onClick={() =>
+                                          setGroupAttendanceOffsetByRecordId((current) => ({
+                                            ...current,
+                                            [record.id]: attendanceWindow.clampedOffsetWeeks - 1,
+                                          }))
+                                        }
+                                      >
+                                        ◀
+                                      </button>
+                                      <div className="group-attendance-days">
+                                        {attendanceWindow.days.map((day) => {
+                                          const mark = record.attendanceByDateKey?.[day.dateKey] ?? null;
+                                          return (
+                                            <span
+                                              className={`group-attendance-day${mark === "present" ? " is-present" : mark === "absent" ? " is-absent" : ""}`}
+                                              key={`${record.id}-${day.dateKey}`}
+                                            >
+                                              <span className="group-attendance-day-weekday">{day.weekdayLabel}</span>
+                                              <small>{day.dateLabel}</small>
+                                              {mark === "present" ? (
+                                                <strong className="group-attendance-mark is-tick">✓</strong>
+                                              ) : mark === "absent" ? (
+                                                <strong className="group-attendance-mark is-cross">✕</strong>
+                                              ) : null}
+                                            </span>
+                                          );
+                                        })}
+                                      </div>
+                                      <button
+                                        aria-label="Next attendance dates"
+                                        className="button-secondary small-button"
+                                        disabled={!attendanceWindow.canGoNext}
+                                        type="button"
+                                        onClick={() =>
+                                          setGroupAttendanceOffsetByRecordId((current) => ({
+                                            ...current,
+                                            [record.id]: Math.min(0, attendanceWindow.clampedOffsetWeeks + 1),
+                                          }))
+                                        }
+                                      >
+                                        ▶
+                                      </button>
                                     </div>
-                                    <button
-                                      aria-label="Next attendance dates"
-                                      className="button-secondary small-button"
-                                      type="button"
-                                      onClick={() =>
-                                        setGroupAttendanceOffsetByRecordId((current) => ({
-                                          ...current,
-                                          [record.id]: (current[record.id] ?? 0) + 1,
-                                        }))
-                                      }
-                                    >
-                                      ▶
-                                    </button>
-                                  </div>
+                                  ) : null}
                                 </td>
                               </tr>
                             </Fragment>
@@ -7230,7 +7447,7 @@ export function AdminQuestionWorkspace({
                         })
                       ) : (
                         <tr>
-                          <td colSpan={4} className="muted-text">No joined groups yet.</td>
+                          <td colSpan={5} className="muted-text">No joined groups yet.</td>
                         </tr>
                       )}
                     </tbody>
@@ -7303,6 +7520,10 @@ export function AdminQuestionWorkspace({
                           }).slice(0, 8)
                         : [];
 
+                      const isAttendanceEnabled = Boolean(group.attendanceTrackingEnabled);
+                      const creatorOffsetWeeks = groupAttendanceOffsetByRecordId[creatorRecord.id] ?? 0;
+                      const creatorAttendanceWindow = buildGroupAttendanceCalendarWindow(creatorOffsetWeeks, group.createdAt);
+
                       return (
                         <div className="leaderboard-table-wrap workspace-result-table-wrap created-group-table-wrap" key={group.id}>
                           <table className="leaderboard-table created-group-table">
@@ -7336,35 +7557,59 @@ export function AdminQuestionWorkspace({
                                     }}
                                   />
                                 </th>
-                                <th>
+                                <th colSpan={isAttendanceEnabled ? 2 : 1}>
                                   <div className="inline-actions created-group-header-actions">
+                                    {isGroupCreator ? (
+                                      <button
+                                        aria-pressed={isAttendanceEnabled}
+                                        className={isAttendanceEnabled ? "button small-button" : "button-secondary small-button"}
+                                        disabled={isMutating}
+                                        type="button"
+                                        onClick={() => handleToggleGroupAttendanceTracking(group.id, !isAttendanceEnabled)}
+                                      >
+                                        Attendance
+                                      </button>
+                                    ) : null}
                                     {groupQrDataUrl ? (
                                       <a
                                         aria-label="Download Group QR Code"
-                                        className="button-secondary small-button"
+                                        className="button-secondary small-button icon-button"
                                         download={`trapit-group-${slugifyGroupName(draftGroupName || group.name) || "invite"}-qr.png`}
                                         href={groupQrDataUrl}
+                                        title="Download Group QR Code"
                                       >
-                                        Download Group QR Code
+                                        <QrCode aria-hidden="true" className="apportion-action-icon" />
                                       </a>
                                     ) : (
-                                      <button className="button-secondary small-button" disabled type="button">
-                                        Download Group QR Code
+                                      <button
+                                        aria-label="Download Group QR Code"
+                                        className="button-secondary small-button icon-button"
+                                        disabled
+                                        title="Download Group QR Code"
+                                        type="button"
+                                      >
+                                        <QrCode aria-hidden="true" className="apportion-action-icon" />
                                       </button>
                                     )}
                                     <button
-                                      className="button-secondary small-button"
+                                      aria-label={copiedLinkKey === `group-${group.id}` ? "Group link copied" : "Copy Group Link"}
+                                      className="button-secondary small-button icon-button"
                                       disabled={!groupShareUrl}
+                                      title={copiedLinkKey === `group-${group.id}` ? "Copied" : "Copy Group Link"}
                                       type="button"
                                       onClick={() => void handleCopyLink(`group-${group.id}`, groupShareUrl)}
                                     >
-                                      {copiedLinkKey === `group-${group.id}` ? "Copied" : "Copy Group Link"}
+                                      {copiedLinkKey === `group-${group.id}` ? (
+                                        <Check aria-hidden="true" className="apportion-action-icon" />
+                                      ) : (
+                                        <Copy aria-hidden="true" className="apportion-action-icon" />
+                                      )}
                                     </button>
                                   </div>
                                 </th>
                               </tr>
                               <tr className="created-group-header-row-2">
-                                <th colSpan={3}>
+                                <th colSpan={isAttendanceEnabled ? 4 : 3}>
                                   <div className="created-group-user-search">
                                     <input
                                       aria-label="Search users by complete phone number"
@@ -7402,8 +7647,9 @@ export function AdminQuestionWorkspace({
                               </tr>
                               <tr>
                                 <th>S.N.</th>
-                                <th>Member Name and Complete Phone Number</th>
+                                <th>Member Details</th>
                                 <th>Action</th>
+                                {isAttendanceEnabled ? <th>Attendance</th> : null}
                               </tr>
                             </thead>
                             <tbody>
@@ -7423,10 +7669,66 @@ export function AdminQuestionWorkspace({
                                     </span>
                                   </div>
                                 </td>
+                                {isAttendanceEnabled ? (
+                                  <td className="group-attendance-column-cell">
+                                    <div className="group-attendance-strip">
+                                      <button
+                                        aria-label="Previous attendance dates"
+                                        className="button-secondary small-button"
+                                        disabled={!creatorAttendanceWindow.canGoPrevious}
+                                        type="button"
+                                        onClick={() =>
+                                          setGroupAttendanceOffsetByRecordId((current) => ({
+                                            ...current,
+                                            [creatorRecord.id]: creatorAttendanceWindow.clampedOffsetWeeks - 1,
+                                          }))
+                                        }
+                                      >
+                                        ◀
+                                      </button>
+                                      <div className="group-attendance-days">
+                                        {creatorAttendanceWindow.days.map((day) => {
+                                          const mark = creatorRecord.attendanceByDateKey?.[day.dateKey] ?? null;
+                                          return (
+                                            <button
+                                              className={`group-attendance-day${mark === "present" ? " is-present" : mark === "absent" ? " is-absent" : ""}`}
+                                              disabled={!isGroupCreator || isMutating}
+                                              key={`${creatorRecord.id}-${day.dateKey}`}
+                                              type="button"
+                                              onClick={() => handleCycleGroupMemberAttendance(group.id, creatorRecord, day.dateKey)}
+                                            >
+                                              <span className="group-attendance-day-weekday">{day.weekdayLabel}</span>
+                                              <small>{day.dateLabel}</small>
+                                              {mark === "present" ? (
+                                                <strong className="group-attendance-mark is-tick">✓</strong>
+                                              ) : mark === "absent" ? (
+                                                <strong className="group-attendance-mark is-cross">✕</strong>
+                                              ) : null}
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                      <button
+                                        aria-label="Next attendance dates"
+                                        className="button-secondary small-button"
+                                        disabled={!creatorAttendanceWindow.canGoNext}
+                                        type="button"
+                                        onClick={() =>
+                                          setGroupAttendanceOffsetByRecordId((current) => ({
+                                            ...current,
+                                            [creatorRecord.id]: Math.min(0, creatorAttendanceWindow.clampedOffsetWeeks + 1),
+                                          }))
+                                        }
+                                      >
+                                        ▶
+                                      </button>
+                                    </div>
+                                  </td>
+                                ) : null}
                               </tr>
                               {memberAndRequestRecords.map((record, index) => {
                                 const offsetWeeks = groupAttendanceOffsetByRecordId[record.id] ?? 0;
-                                const attendanceDates = buildGroupAttendanceDates(offsetWeeks);
+                                const attendanceWindow = buildGroupAttendanceCalendarWindow(offsetWeeks, group.createdAt);
                                 const isMemberAdmin = Boolean(
                                   record.isGroupAdmin
                                   || (group.adminIdentifiers ?? []).some((adminId) => participantIdentifiersMatch(adminId, record.userIdentifier)),
@@ -7456,6 +7758,16 @@ export function AdminQuestionWorkspace({
                                                   >
                                                     {isMemberAdmin ? "Admin" : "Make Admin"}
                                                   </button>
+                                                  {isMemberAdmin ? (
+                                                    <button
+                                                      className="button-secondary small-button"
+                                                      disabled={isMutating}
+                                                      type="button"
+                                                      onClick={() => handleToggleGroupMemberAdmin(group.id, record.userIdentifier)}
+                                                    >
+                                                      Remove Admin
+                                                    </button>
+                                                  ) : null}
                                                   <button
                                                     className="button-secondary small-button"
                                                     disabled={isMutating}
@@ -7524,55 +7836,62 @@ export function AdminQuestionWorkspace({
                                           </div>
                                         )}
                                       </td>
-                                    </tr>
-                                    <tr className="group-attendance-calendar-row">
-                                      <td colSpan={3}>
-                                        <div className="group-attendance-strip">
-                                          <button
-                                            aria-label="Previous attendance dates"
-                                            className="button-secondary small-button"
-                                            type="button"
-                                            onClick={() =>
-                                              setGroupAttendanceOffsetByRecordId((current) => ({
-                                                ...current,
-                                                [record.id]: (current[record.id] ?? 0) - 1,
-                                              }))
-                                            }
-                                          >
-                                            ◀
-                                          </button>
-                                          <div className="group-attendance-days">
-                                            {attendanceDates.map((day) => {
-                                              const mark = record.attendanceByDateKey?.[day.dateKey] ?? null;
-                                              return (
-                                                <button
-                                                  className={`group-attendance-day${mark === "present" ? " is-present" : mark === "absent" ? " is-absent" : ""}`}
-                                                  disabled={!isGroupCreator || isMutating}
-                                                  key={`${record.id}-${day.dateKey}`}
-                                                  type="button"
-                                                  onClick={() => handleCycleGroupMemberAttendance(group.id, record, day.dateKey)}
-                                                >
-                                                  <small>{day.label}</small>
-                                                  <strong>{mark === "present" ? "✓" : mark === "absent" ? "✗" : "—"}</strong>
-                                                </button>
-                                              );
-                                            })}
+                                      {isAttendanceEnabled ? (
+                                        <td className="group-attendance-column-cell">
+                                          <div className="group-attendance-strip">
+                                            <button
+                                              aria-label="Previous attendance dates"
+                                              className="button-secondary small-button"
+                                              disabled={!attendanceWindow.canGoPrevious}
+                                              type="button"
+                                              onClick={() =>
+                                                setGroupAttendanceOffsetByRecordId((current) => ({
+                                                  ...current,
+                                                  [record.id]: attendanceWindow.clampedOffsetWeeks - 1,
+                                                }))
+                                              }
+                                            >
+                                              ◀
+                                            </button>
+                                            <div className="group-attendance-days">
+                                              {attendanceWindow.days.map((day) => {
+                                                const mark = record.attendanceByDateKey?.[day.dateKey] ?? null;
+                                                return (
+                                                  <button
+                                                    className={`group-attendance-day${mark === "present" ? " is-present" : mark === "absent" ? " is-absent" : ""}`}
+                                                    disabled={!isGroupCreator || isMutating}
+                                                    key={`${record.id}-${day.dateKey}`}
+                                                    type="button"
+                                                    onClick={() => handleCycleGroupMemberAttendance(group.id, record, day.dateKey)}
+                                                  >
+                                                    <span className="group-attendance-day-weekday">{day.weekdayLabel}</span>
+                                                    <small>{day.dateLabel}</small>
+                                                    {mark === "present" ? (
+                                                      <strong className="group-attendance-mark is-tick">✓</strong>
+                                                    ) : mark === "absent" ? (
+                                                      <strong className="group-attendance-mark is-cross">✕</strong>
+                                                    ) : null}
+                                                  </button>
+                                                );
+                                              })}
+                                            </div>
+                                            <button
+                                              aria-label="Next attendance dates"
+                                              className="button-secondary small-button"
+                                              disabled={!attendanceWindow.canGoNext}
+                                              type="button"
+                                              onClick={() =>
+                                                setGroupAttendanceOffsetByRecordId((current) => ({
+                                                  ...current,
+                                                  [record.id]: Math.min(0, attendanceWindow.clampedOffsetWeeks + 1),
+                                                }))
+                                              }
+                                            >
+                                              ▶
+                                            </button>
                                           </div>
-                                          <button
-                                            aria-label="Next attendance dates"
-                                            className="button-secondary small-button"
-                                            type="button"
-                                            onClick={() =>
-                                              setGroupAttendanceOffsetByRecordId((current) => ({
-                                                ...current,
-                                                [record.id]: (current[record.id] ?? 0) + 1,
-                                              }))
-                                            }
-                                          >
-                                            ▶
-                                          </button>
-                                        </div>
-                                      </td>
+                                        </td>
+                                      ) : null}
                                     </tr>
                                   </Fragment>
                                 );
@@ -7792,6 +8111,7 @@ export function AdminQuestionWorkspace({
                     onClick={() => {
                       setSelectedQuestionBankPoolId(pool.id);
                       setPoolRenameName(pool.name);
+                      setIsPoolNameEditing(false);
                       setPoolFeedback(null);
                       setIsEditingQuestionPool(false);
                       setPoolQuestionDrafts({});
@@ -7808,57 +8128,79 @@ export function AdminQuestionWorkspace({
             </div>
 
             {selectedQuestionBankPool ? (
-              <div className="question-bank-summary">
-                <div>
-                  <strong>{selectedQuestionBankPool.name}</strong>
-                  {selectedQuestionBankPool.description ? (
-                    <p className="muted-text question-bank-summary-copy">
-                      {selectedQuestionBankPool.description}
-                    </p>
-                  ) : null}
-                  <div className="inline-actions question-bank-summary-chips">
-                    {selectedQuestionBankPool.isShared ? (
-                      <span className="status-chip">Shared with you</span>
+              <div className="question-bank-summary question-pool-organized-summary">
+                <div className="question-pool-top-header">
+                  <div className="question-pool-name-box-wrap">
+                    <input
+                      aria-label="Pool name"
+                      className={`question-pool-prominent-name-input${isPoolNameEditing ? " is-editing" : ""}`}
+                      id="pool-rename-name"
+                      maxLength={poolRenameName === selectedQuestionBankPool.name ? Math.max(30, poolRenameName.length) : 30}
+                      readOnly={!selectedQuestionBankPool.canManage || !isPoolNameEditing}
+                      ref={poolRenameInputRef}
+                      type="text"
+                      value={selectedQuestionBankPool.canManage ? poolRenameName : selectedQuestionBankPool.name}
+                      onChange={(event) => {
+                        if (!isPoolNameEditing) return;
+                        setPoolRenameName(event.target.value);
+                      }}
+                    />
+                    {selectedQuestionBankPool.description ? (
+                      <p className="muted-text question-bank-summary-copy">
+                        {selectedQuestionBankPool.description}
+                      </p>
                     ) : null}
-                    {duplicateQuestionGroups.length ? (
-                      <span className="status-chip warning">
-                        {duplicateQuestionGroups.length} duplicate set{duplicateQuestionGroups.length === 1 ? "" : "s"}
-                      </span>
+                    {selectedQuestionBankPool.isShared || duplicateQuestionGroups.length ? (
+                      <div className="inline-actions question-bank-summary-chips">
+                        {selectedQuestionBankPool.isShared ? (
+                          <span className="status-chip">Shared with you</span>
+                        ) : null}
+                        {duplicateQuestionGroups.length ? (
+                          <span className="status-chip warning">
+                            {duplicateQuestionGroups.length} duplicate set{duplicateQuestionGroups.length === 1 ? "" : "s"}
+                          </span>
+                        ) : null}
+                      </div>
                     ) : null}
                   </div>
-                </div>
-                <div className="inline-actions">
                   {selectedQuestionBankPool.canManage ? (
-                    <>
-                      <label className="field compact-field" htmlFor="pool-rename-name">
-                        <span>Pool name</span>
-                        <input
-                          id="pool-rename-name"
-                          maxLength={poolRenameName === selectedQuestionBankPool.name ? Math.max(30, poolRenameName.length) : 30}
-                          value={poolRenameName}
-                          onChange={(event) => setPoolRenameName(event.target.value)}
-                        />
-                      </label>
+                    <div className="inline-actions question-pool-top-right-actions">
                       <button
                         className="button-secondary small-button"
-                        disabled={isMutating || !poolRenameName.trim() || poolRenameName.trim() === selectedQuestionBankPool.name}
+                        disabled={
+                          isMutating
+                          || (isPoolNameEditing
+                            && (!poolRenameName.trim() || poolRenameName.trim() === selectedQuestionBankPool.name))
+                        }
                         type="button"
                         onClick={handleRenamePool}
                       >
                         Rename
                       </button>
                       <button
-                        className="button-secondary small-button"
-                        disabled={isMutating || !filteredQuestionBankQuestions.some((question) => question.canManage)}
+                        aria-label="Delete pool"
+                        className="button-secondary small-button icon-button"
+                        disabled={isMutating}
+                        title="Delete pool"
                         type="button"
-                        onClick={() => (isEditingQuestionPool ? handleCancelEditingQuestionPool() : handleStartEditingQuestionPool())}
+                        onClick={handleDeletePool}
                       >
-                        {isEditingQuestionPool ? "Cancel" : "Edit"}
+                        <Trash2 aria-hidden="true" size={16} />
                       </button>
-                      <button className="button-secondary small-button" disabled={isMutating} type="button" onClick={handleDeletePool}>
-                        Delete pool
-                      </button>
-                    </>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="inline-actions question-pool-action-toolbar">
+                  {selectedQuestionBankPool.canManage ? (
+                    <button
+                      className="button-secondary small-button"
+                      disabled={isMutating || !filteredQuestionBankQuestions.some((question) => question.canManage)}
+                      type="button"
+                      onClick={() => (isEditingQuestionPool ? handleCancelEditingQuestionPool() : handleStartEditingQuestionPool())}
+                    >
+                      {isEditingQuestionPool ? "Cancel" : "Edit"}
+                    </button>
                   ) : null}
                   <button
                     className="button-secondary small-button"
@@ -7868,14 +8210,19 @@ export function AdminQuestionWorkspace({
                   >
                     Copy all questions
                   </button>
-                  <button
-                    className="button-secondary small-button"
-                    disabled={!removableDuplicateQuestionIds.length || isMutating}
-                    type="button"
-                    onClick={() => handleDeleteSelectedQuestions(removableDuplicateQuestionIds)}
-                  >
-                    Remove duplicates
-                  </button>
+                  {selectedQuestionBankPool.canManage ? (
+                    <button
+                      className="button-secondary small-button"
+                      disabled={!removableDuplicateQuestionIds.length || isMutating}
+                      type="button"
+                      onClick={() => handleDeleteSelectedQuestions(removableDuplicateQuestionIds)}
+                    >
+                      Remove duplicates
+                    </button>
+                  ) : null}
+                </div>
+
+                <div className="inline-actions question-pool-counters-row">
                   <label className="radio-chip">
                     <input
                       checked={areAllVisibleQuestionsSelected}
@@ -7885,14 +8232,16 @@ export function AdminQuestionWorkspace({
                     />
                     Select all
                   </label>
-                  <button
-                    className="button-secondary small-button"
-                    disabled={!selectedVisibleQuestionIds.length || isMutating}
-                    type="button"
-                    onClick={() => handleDeleteSelectedQuestions(selectedVisibleQuestionIds)}
-                  >
-                    Remove selected
-                  </button>
+                  {selectedQuestionBankPool.canManage ? (
+                    <button
+                      className="button-secondary small-button"
+                      disabled={!selectedVisibleQuestionIds.length || isMutating}
+                      type="button"
+                      onClick={() => handleDeleteSelectedQuestions(selectedVisibleQuestionIds)}
+                    >
+                      Remove selected
+                    </button>
+                  ) : null}
                   <span className="status-chip success">
                     {filteredQuestionBankQuestions.length} visible
                   </span>
@@ -8050,9 +8399,8 @@ export function AdminQuestionWorkspace({
                               type="checkbox"
                               onChange={() => toggleQuestionSelection(question.id)}
                             />
-                            {question.canManage ? "Select" : "Read-only"}
+                            {`Q${index + 1}`}
                           </label>
-                          <strong>Q{index + 1}</strong>
                         </div>
                         <div className="inline-actions question-card-top-right-actions">
                           {question.canManage ? (
