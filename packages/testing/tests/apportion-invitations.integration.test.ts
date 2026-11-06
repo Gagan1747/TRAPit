@@ -519,4 +519,77 @@ describe("Apportion invitations", () => {
     expect(remaining.filter((notice) => !notice.webPushEligible)).toHaveLength(1);
     expect(remaining.filter((notice) => notice.webPushEligible)).toHaveLength(1);
   });
+  it("dispatches WhatsApp templates to assigned staff or owner on booking and to the target user on invitation", async () => {
+    vi.stubEnv("WHATSAPP_PHONE_NUMBER_ID", "123456789012345");
+    vi.stubEnv("WHATSAPP_ACCESS_TOKEN", "test-access-token");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ messages: [{ id: "wamid.test1" }] }),
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    try {
+      await book("2026-10-05", TARGET);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const staffBookingCall = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(staffBookingCall).toMatchObject({
+        messaging_product: "whatsapp",
+        to: "919222222222",
+        type: "template",
+        template: {
+          name: "appointment_booked_on_trapit",
+          language: { code: "en" },
+        },
+      });
+      expect(staffBookingCall.template.components[0].parameters).toEqual([
+        { type: "text", parameter_name: "owner_staff_name", text: "Therapist" },
+        expect.objectContaining({ type: "text", parameter_name: "date_and_time" }),
+        { type: "text", parameter_name: "requester_name", text: "Other" },
+        { type: "text", parameter_name: "requester_phone_number", text: "+919444444444" },
+        { type: "text", parameter_name: "address", text: "Main, Main Street" },
+      ]);
+
+      fetchMock.mockClear();
+      await store.createApportionAppointment({
+        ownerIdentifier: OWNER,
+        requesterIdentifier: TARGET,
+        requesterName: "Customer One",
+        requesterPhone: TARGET,
+        serviceId: "unassigned",
+        locationId: "location-1",
+        locationName: "Main",
+        ...occurrence("2026-10-06"),
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const ownerBookingCall = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(ownerBookingCall.to).toBe("919111111111");
+
+      fetchMock.mockClear();
+      await store.createApportionInvitation(input(["2026-10-07"]));
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const invitationCall = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(invitationCall).toMatchObject({
+        messaging_product: "whatsapp",
+        to: "919444444444",
+        type: "template",
+        template: {
+          name: "appointment_invitation_on_trapit",
+          language: { code: "en" },
+        },
+      });
+      expect(invitationCall.template.components[0].parameters).toEqual([
+        { type: "text", parameter_name: "requester_name", text: "Customer" },
+        { type: "text", parameter_name: "owner_staff_name", text: "Clinic" },
+        expect.objectContaining({ type: "text", parameter_name: "date_and_time" }),
+        { type: "text", parameter_name: "service_name", text: "Therapy" },
+        { type: "text", parameter_name: "location_name", text: "Main, Main Street" },
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      vi.stubEnv("WHATSAPP_PHONE_NUMBER_ID", "");
+      vi.stubEnv("WHATSAPP_ACCESS_TOKEN", "");
+    }
+  });
 });

@@ -6,6 +6,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getApportionBusinessContext, getApportionBusinessContexts, resolveApportionProviderContact, type ApportionBusinessContext } from "./apportion-directory";
 import { getApportionLifecycleBoundaries, getApportionSlotExpiry, resolveAppointmentLocationSchedule, validateAppointmentLocationSlot } from "./appointment-locations";
+import { sendAppointmentBookedWhatsAppNotification, sendAppointmentInvitationWhatsAppNotification } from "./whatsapp";
 
 const DEFAULT_PRODUCTION_DATA_DIR = ["", "var", "lib", "trapit"].join(path.sep);
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
@@ -941,14 +942,16 @@ type ApportionAppointmentInput = {
 };
 
 export async function createApportionAppointment(input: ApportionAppointmentInput) {
-  return withAppointmentLock(async () => {
+  const appointment = await withAppointmentLock(async () => {
     const state = await readState();
-    const appointment = await buildApportionAppointment(state, input);
-    state.appointments.push(appointment);
+    const created = await buildApportionAppointment(state, input);
+    state.appointments.push(created);
     state.appointments = normalizeAppointments(state.appointments);
     await writeState(state);
-    return appointment;
+    return created;
   });
+  await sendAppointmentBookedWhatsAppNotification(appointment);
+  return appointment;
 }
 
 async function buildApportionAppointment(state: ApportionState, input: ApportionAppointmentInput, allowStartedSlot = false, validatedBooking?: Awaited<ReturnType<typeof resolveBookingContext>>) {
@@ -1220,7 +1223,10 @@ export async function createApportionInvitation(input: {
     addInvitationNotifications(invitation, "Appointment invitation", `${invitation.serviceName} at ${invitation.locationName}: ${occurrences.length} appointment(s) awaiting acceptance.`, timestamp);
     state.invitations.push(invitation);
     await writeState(state);
-    return invitationProjection(invitation, input.actorIdentifier);
+    return { invitation, projected: invitationProjection(invitation, input.actorIdentifier) };
+  }).then(async ({ invitation, projected }) => {
+    await sendAppointmentInvitationWhatsAppNotification(invitation);
+    return projected;
   });
 }
 

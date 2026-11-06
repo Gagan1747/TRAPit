@@ -94,6 +94,7 @@ The current scaffold now includes real Cognito-backed handlers:
 
 - Slot Selection and Queue Only bookings both use the location calendar and support dates up to six months ahead.
 - Queue Only dates are disabled when the location is closed or the day's working-window capacity is full. Today's estimate starts from the current IST time; future estimates start from opening time.
+- When `WHATSAPP_PHONE_NUMBER_ID` and `WHATSAPP_ACCESS_TOKEN` are configured, new customer bookings send the `appointment_booked_on_trapit` WhatsApp template to the assigned staff member (or the business owner when no staff is assigned), and appointment invitations send the `appointment_invitation_on_trapit` WhatsApp template to the invited user.
 
 ### Apportion roles, services and addresses
 
