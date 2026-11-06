@@ -33,6 +33,7 @@ export type WhatsAppSendResult = {
 
 type CachedTemplateMetadata = {
   fetchedAt: number;
+  status?: string;
   language: string;
   parameterFormat: "NAMED" | "POSITIONAL";
   bodyParamNames: string[];
@@ -40,6 +41,7 @@ type CachedTemplateMetadata = {
 
 const templateMetadataCache = new Map<string, CachedTemplateMetadata>();
 const TEMPLATE_CACHE_TTL_MS = 10 * 60 * 1000;
+const PENDING_TEMPLATE_CACHE_TTL_MS = 30 * 1000;
 
 function getWhatsAppConfig() {
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID?.trim() || "";
@@ -146,7 +148,10 @@ async function resolveTemplateMetadataFromWaba(
   }
 
   const cached = templateMetadataCache.get(templateName);
-  if (cached && Date.now() - cached.fetchedAt < TEMPLATE_CACHE_TTL_MS) {
+  const ttl = cached?.status === "APPROVED" && cached.bodyParamNames.length >= 5
+    ? TEMPLATE_CACHE_TTL_MS
+    : PENDING_TEMPLATE_CACHE_TTL_MS;
+  if (cached && Date.now() - cached.fetchedAt < ttl) {
     return cached;
   }
 
@@ -167,9 +172,16 @@ async function resolveTemplateMetadataFromWaba(
     const payload = (await response.json()) as {
       data?: Array<{
         name?: string;
+        status?: string;
         language?: string;
         parameter_format?: string;
-        components?: Array<{ type?: string; text?: string }>;
+        components?: Array<{
+          type?: string;
+          text?: string;
+          example?: {
+            body_text_named_params?: Array<{ param_name?: string }>;
+          };
+        }>;
       }>;
     };
 
@@ -179,13 +191,18 @@ async function resolveTemplateMetadataFromWaba(
     }
 
     const bodyComponent = match.components?.find((comp) => comp.type?.toUpperCase() === "BODY");
+    const explicitNamedParams = (bodyComponent?.example?.body_text_named_params ?? [])
+      .map((entry) => entry.param_name?.trim() || "")
+      .filter(Boolean);
     const bodyText = bodyComponent?.text ?? "";
-    const variableMatches = Array.from(bodyText.matchAll(/\{\{\s*([^}]+?)\s*\}\}/g)).map((item) => item[1].trim());
+    const regexMatches = Array.from(bodyText.matchAll(/\{\{\s*([a-z0-9_]+)\s*\}\}/g)).map((item) => item[1].trim());
+    const variableMatches = explicitNamedParams.length > 0 ? explicitNamedParams : regexMatches;
     const isPositional = match.parameter_format?.toUpperCase() === "POSITIONAL"
       || (variableMatches.length > 0 && variableMatches.every((name) => /^\d+$/.test(name)));
 
     const metadata: CachedTemplateMetadata = {
       fetchedAt: Date.now(),
+      status: match.status?.toUpperCase(),
       language: match.language || config.templateLanguage,
       parameterFormat: isPositional ? "POSITIONAL" : "NAMED",
       bodyParamNames: variableMatches,
@@ -301,12 +318,22 @@ export async function sendWhatsAppTemplateMessage(input: {
 
   try {
     const discovered = await resolveTemplateMetadataFromWaba(input.templateName, config);
+    if (discovered?.status && discovered.status !== "APPROVED") {
+      console.warn(
+        `WhatsApp template "${input.templateName}" currently has status "${discovered.status}" in Meta (must be APPROVED before Meta can deliver it).`,
+      );
+    }
     const initialLanguage = input.languageCode?.trim() || discovered?.language || config.templateLanguage;
     const initialFormat = discovered?.parameterFormat || config.parameterFormat;
-    const resolvedParameters = input.parameters.map((param, index) => ({
-      name: discovered?.bodyParamNames[index] || param.name,
-      value: param.value,
-    }));
+    const resolvedParameters = discovered
+      ? discovered.bodyParamNames.map((discoveredName, index) => {
+          const byExactName = input.parameters.find((param) => param.name === discoveredName);
+          return {
+            name: discoveredName,
+            value: byExactName?.value ?? input.parameters[index]?.value ?? "—",
+          };
+        })
+      : input.parameters;
 
     let attempt = await postWhatsAppTemplateMessage({
       config,
@@ -332,9 +359,9 @@ export async function sendWhatsAppTemplateMessage(input: {
       }
     }
 
-    // Fallback if template uses positional parameters ({{1}}, {{2}}) instead of named parameters — Error #132000 / #100
-    if (!attempt.ok && initialFormat === "NAMED" && (attempt.errorCode === 132000 || attempt.errorCode === 100)) {
-      attempt = await postWhatsAppTemplateMessage({
+    // Only fallback to POSITIONAL when WABA metadata wasn't available to confirm NAMED format
+    if (!attempt.ok && !discovered && initialFormat === "NAMED" && (attempt.errorCode === 132000 || attempt.errorCode === 100)) {
+      const positionalAttempt = await postWhatsAppTemplateMessage({
         config,
         languageCode: initialLanguage,
         parameterFormat: "POSITIONAL",
@@ -342,6 +369,9 @@ export async function sendWhatsAppTemplateMessage(input: {
         templateName: input.templateName,
         to: normalizedPhone,
       });
+      if (positionalAttempt.ok) {
+        attempt = positionalAttempt;
+      }
     }
 
     if (attempt.ok) {
