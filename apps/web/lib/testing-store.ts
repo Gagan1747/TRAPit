@@ -4,6 +4,11 @@ import { isAppointmentBusinessProfileComplete } from "./appointment-locations";
 import { matchesGroupShareCode } from "./group-invite-path";
 import { reconcileBrowserNotificationIntents, type BrowserSchedule } from "./notification-store";
 import { formatPhoneNumberForDisplay } from "./privacy";
+import {
+  sendInstantTestScheduledWhatsAppNotification,
+  sendRapidTestScheduledWhatsAppNotification,
+  sendStandardTestScheduledWhatsAppNotification,
+} from "./whatsapp";
 
 import {
   buildPollRecurrenceCycles,
@@ -264,7 +269,7 @@ async function ensureStoreDirectory() {
 }
 
 function dedupe(values: string[]) {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+  return Array.from(new Set((values ?? []).map((value) => (value ?? "").trim()).filter(Boolean)));
 }
 
 type CreateScheduledPollStoreInput = {
@@ -413,7 +418,7 @@ function replaceFuturePollSeriesRecords(
 }
 
 function normalizeParticipantIdentifier(value: string) {
-  return value.trim().toLowerCase();
+  return (value ?? "").trim().toLowerCase();
 }
 
 function normalizeBrandingActorKey(value: string | null | undefined) {
@@ -1837,6 +1842,7 @@ export async function updateQuestion(
         ? {
             ...question,
             correctOptionIndex: normalizedDraft.correctOptionIndex,
+            ...(normalizedDraft.imageDataUrl !== undefined ? { imageDataUrl: normalizedDraft.imageDataUrl } : {}),
             options: normalizedDraft.options,
             prompt: normalizedDraft.prompt,
             updatedAt: timestamp,
@@ -1924,6 +1930,7 @@ export async function updateQuestionsBulk(
     return {
       ...question,
       correctOptionIndex: nextDraft.correctOptionIndex,
+      ...(nextDraft.imageDataUrl !== undefined ? { imageDataUrl: nextDraft.imageDataUrl } : {}),
       options: nextDraft.options,
       prompt: nextDraft.prompt,
       updatedAt: timestamp,
@@ -3821,11 +3828,18 @@ async function createScheduledTestWithoutNotifications(input: {
   participantIds: string[];
   poolId: string;
   questionCount: number;
+  sendWhatsAppNotification?: boolean;
   startsAt: string;
   title?: string | null;
   titleSuffix?: string | null;
 }) {
-  return withSerializedTestingMutation((state) => {
+  let whatsappRecipients: Array<{ name: string; phone: string }> = [];
+  let createdScheduledTest: ScheduledTest | null = null;
+  let groupNamesLabel = "Group";
+  let creatorNameLabel = "Test Creator";
+  let creatorNumberLabel = input.actorIdentifier?.trim() || "—";
+
+  const scheduledTestsResult = await withSerializedTestingMutation((state) => {
   assertAssessmentName(input.title ?? "", "Test name");
   const kind = input.assessmentKind ?? "standard";
   assertNewTestConfiguration(state, { ...input, assessmentKind: kind });
@@ -3863,8 +3877,13 @@ async function createScheduledTestWithoutNotifications(input: {
   }
 
   const timestamp = new Date().toISOString();
-  const baseTitle = input.title?.trim() || `${pool.name} test`;
+  const baseTitle = (input.title ?? "").trim() || `${pool.name} test`;
   const title = baseTitle;
+  const shouldSendImmediateStandardReminder = Boolean(
+    input.sendWhatsAppNotification
+    && kind === "standard"
+    && Date.parse(input.startsAt) - Date.now() <= 20 * 60 * 1000,
+  );
   const scheduledTest: ScheduledTest = {
     assessmentKind: kind,
     rulesVersion: 2,
@@ -3889,17 +3908,72 @@ async function createScheduledTestWithoutNotifications(input: {
       [input.poolId, input.startsAt, resolvedParticipantIdentifiers.join(",")].join(":"),
     ),
     resolvedParticipantIdentifiers,
+    sendWhatsAppNotification: Boolean(input.sendWhatsAppNotification),
     shareCode: null,
     startsAt: input.startsAt,
     status: kind === "instant" || new Date(input.startsAt).getTime() - 60_000 > Date.now() ? "scheduled" : "live",
     title,
     updatedAt: timestamp,
+    whatsAppReminderSentAt: shouldSendImmediateStandardReminder ? timestamp : null,
   };
+
+  createdScheduledTest = scheduledTest;
+  groupNamesLabel = participantGroupIds
+    .map((groupId) => state.participantGroups.find((group) => group.id === groupId)?.name)
+    .filter(Boolean)
+    .join(", ") || "Group";
+  const creatorProfile = state.participants.find((participant) =>
+    scheduledTest.creatorIdentifier
+    && identifiersMatch(participant.identifier, scheduledTest.creatorIdentifier),
+  );
+  creatorNameLabel = scheduledTest.creatorDisplayName
+    || creatorProfile?.label?.trim()
+    || scheduledTest.creatorIdentifier
+    || "Test Creator";
+  creatorNumberLabel = scheduledTest.creatorIdentifier || "—";
+
+  if (input.sendWhatsAppNotification && (kind === "instant" || shouldSendImmediateStandardReminder)) {
+    whatsappRecipients = resolvedParticipantIdentifiers.map((identifier) => {
+      const profile = state.participants.find((entry) => identifiersMatch(entry.identifier, identifier));
+      return {
+        name: profile?.label?.trim() || identifier,
+        phone: identifier,
+      };
+    });
+  }
 
   state.scheduledTests = [scheduledTest, ...state.scheduledTests];
 
   return filterScheduledTestsForActor(hydrateScheduledTests(state), input.createdBy);
   });
+
+  if (input.sendWhatsAppNotification && createdScheduledTest && whatsappRecipients.length > 0) {
+    const testRecord = createdScheduledTest as ScheduledTest;
+    void Promise.allSettled(
+      whatsappRecipients.map((recipient) =>
+        testRecord.assessmentKind === "instant"
+          ? sendInstantTestScheduledWhatsAppNotification({
+              participantName: recipient.name,
+              participantPhone: recipient.phone,
+              testCreatorName: creatorNameLabel,
+              testCreatorNumber: creatorNumberLabel,
+              testGroup: groupNamesLabel,
+              testName: testRecord.title,
+            })
+          : sendStandardTestScheduledWhatsAppNotification({
+              participantName: recipient.name,
+              participantPhone: recipient.phone,
+              startsAt: testRecord.startsAt,
+              testCreatorName: creatorNameLabel,
+              testCreatorNumber: creatorNumberLabel,
+              testGroup: groupNamesLabel,
+              testName: testRecord.title,
+            }),
+      ),
+    );
+  }
+
+  return scheduledTestsResult;
 }
 
 export async function updateScheduledTest(input: Parameters<typeof updateScheduledTestWithoutNotifications>[0]) {
@@ -5221,7 +5295,7 @@ function testSessionPayload(state: TestingWorkspaceState, test: ScheduledTest, i
       questions: canReadQuestions
         ? test.questionIds.map((id) => state.questions.find((question) => question.id === id))
           .filter((question): question is PersistentQuestion => Boolean(question))
-          .map(({ id, prompt, options }) => ({ id, prompt, options }))
+          .map(({ id, prompt, options, imageDataUrl }) => ({ id, prompt, options, ...(imageDataUrl ? { imageDataUrl } : {}) }))
         : [],
     },
     session,
@@ -5593,43 +5667,45 @@ export async function reportPostTestQuestion(input: {
   }
 
   const timestamp = new Date().toISOString();
-  const reason = input.reason?.trim() || (hasCreatorScope ? "Reported by admin." : "Reported by participant.");
+  const trimmedReason = (input.reason ?? "").trim();
+  if (Array.from(trimmedReason).length > 20) {
+    throw new Error("Review description must not exceed 20 characters.");
+  }
+  const reason = trimmedReason || (hasCreatorScope ? "Submitted for review by admin." : "Submitted for review by participant.");
   const reporterKey = normalizedReporterIdentifier || input.actorId || "admin";
-  const existingReport = state.questionReports.find(
+  const alreadyReviewedForQuestion = state.questionReports.find(
     (report) => report.testId === input.testId
       && report.questionId === input.questionId
+      && report.status === "open",
+  ) || Boolean(state.questions.find((q) => q.id === input.questionId)?.isTaggedIncorrect);
+
+  if (alreadyReviewedForQuestion) {
+    throw new Error("This question has already been submitted for review.");
+  }
+
+  const userReportsInTest = state.questionReports.filter(
+    (report) => report.testId === input.testId
       && identifiersMatch(report.reporterIdentifier, reporterKey),
   );
 
-  if (existingReport) {
-    state.questionReports = state.questionReports.map((report) =>
-      report.id === existingReport.id
-        ? {
-            ...report,
-            createdAt: timestamp,
-            reason,
-            reporterLabel: input.reporterLabel?.trim() || report.reporterLabel,
-            resolvedAt: null,
-            status: "open",
-          }
-        : report,
-    );
-  } else {
-    state.questionReports = [
-      {
-        createdAt: timestamp,
-        id: createEntityId("question-report"),
-        questionId: input.questionId,
-        reason,
-        reporterIdentifier: reporterKey,
-        reporterLabel: input.reporterLabel?.trim() || null,
-        resolvedAt: null,
-        status: "open",
-        testId: input.testId,
-      },
-      ...state.questionReports,
-    ];
+  if (userReportsInTest.length >= 2) {
+    throw new Error("You can submit a maximum of 2 questions for review.");
   }
+
+  state.questionReports = [
+    {
+      createdAt: timestamp,
+      id: createEntityId("question-report"),
+      questionId: input.questionId,
+      reason,
+      reporterIdentifier: reporterKey,
+      reporterLabel: input.reporterLabel?.trim() || null,
+      resolvedAt: null,
+      status: "open",
+      testId: input.testId,
+    },
+    ...state.questionReports,
+  ];
 
   state.questions = state.questions.map((question) =>
     question.id === input.questionId
@@ -5660,7 +5736,7 @@ export async function reportPostGameQuestion(input: {
   const game = state.games.find((entry) => entry.id === input.gameId);
 
   if (!game || hydrateGame(game).status !== "completed") {
-    throw new Error("Questions can only be reported after the game is completed.");
+    throw new Error("Questions can only be submitted for review after the game is completed.");
   }
 
   const normalizedReporterIdentifier = normalizeParticipantIdentifier(input.reporterIdentifier);
@@ -5670,7 +5746,7 @@ export async function reportPostGameQuestion(input: {
   );
 
   if (!isCreator && !isParticipant) {
-    throw new Error("You do not have access to report questions in this game.");
+    throw new Error("You do not have access to review questions in this game.");
   }
 
   if (!game.questionIds.includes(input.questionId)) {
@@ -5678,41 +5754,44 @@ export async function reportPostGameQuestion(input: {
   }
 
   const timestamp = new Date().toISOString();
-  const reason = input.reason?.trim() || (isCreator ? "Reported by admin." : "Reported by participant.");
-  const existingReport = state.questionReports.find(
+  const trimmedReason = (input.reason ?? "").trim();
+  if (Array.from(trimmedReason).length > 20) {
+    throw new Error("Review description must not exceed 20 characters.");
+  }
+  const reason = trimmedReason || (isCreator ? "Submitted for review by admin." : "Submitted for review by participant.");
+  const alreadyReviewedForQuestion = state.questionReports.find(
     (report) => report.testId === input.gameId
       && report.questionId === input.questionId
+      && report.status === "open",
+  ) || Boolean(state.questions.find((q) => q.id === input.questionId)?.isTaggedIncorrect);
+
+  if (alreadyReviewedForQuestion) {
+    throw new Error("This question has already been submitted for review.");
+  }
+
+  const userReportsInGame = state.questionReports.filter(
+    (report) => report.testId === input.gameId
       && identifiersMatch(report.reporterIdentifier, normalizedReporterIdentifier),
   );
 
-  if (existingReport) {
-    state.questionReports = state.questionReports.map((report) =>
-      report.id === existingReport.id
-        ? {
-            ...report,
-            createdAt: timestamp,
-            reason,
-            resolvedAt: null,
-            status: "open",
-          }
-        : report,
-    );
-  } else {
-    state.questionReports = [
-      {
-        createdAt: timestamp,
-        id: createEntityId("question-report"),
-        questionId: input.questionId,
-        reason,
-        reporterIdentifier: normalizedReporterIdentifier,
-        reporterLabel: null,
-        resolvedAt: null,
-        status: "open",
-        testId: input.gameId,
-      },
-      ...state.questionReports,
-    ];
+  if (userReportsInGame.length >= 2) {
+    throw new Error("You can submit a maximum of 2 questions for review.");
   }
+
+  state.questionReports = [
+    {
+      createdAt: timestamp,
+      id: createEntityId("question-report"),
+      questionId: input.questionId,
+      reason,
+      reporterIdentifier: normalizedReporterIdentifier,
+      reporterLabel: null,
+      resolvedAt: null,
+      status: "open",
+      testId: input.gameId,
+    },
+    ...state.questionReports,
+  ];
 
   state.questions = state.questions.map((question) =>
     question.id === input.questionId
@@ -5999,6 +6078,11 @@ export async function getTestResults(input: {
     ...openReportsForTest.map((report) => report.questionId),
     ...scheduledTest.questionIds.filter((questionId) => Boolean(questionMap.get(questionId)?.isTaggedIncorrect)),
   ]);
+  const reporterKey = normalizedParticipantIdentifier || input.actorId || "admin";
+  const myReportedQuestionCount = state.questionReports.filter(
+    (report) => report.testId === scheduledTest.id
+      && identifiersMatch(report.reporterIdentifier, reporterKey),
+  ).length;
   const creatorParticipantResponses = hasCreatorScope
     ? visibleEntries.map((entry) => {
         const entryAttempt = attempts.find((attempt) =>
@@ -6041,6 +6125,7 @@ export async function getTestResults(input: {
     groupNames,
     hasCreatorScope,
     hasParticipantScope,
+    myReportedQuestionCount,
     overallMarks,
     reportedQuestionIds,
     participantResult: participantEntry
@@ -6094,6 +6179,7 @@ export async function getTestResults(input: {
 
         return {
           correctOptionIndex: question.correctOptionIndex,
+          ...(question.imageDataUrl ? { imageDataUrl: question.imageDataUrl } : {}),
           marks: questionMarks,
           optionSelectionCounts,
           options: question.options,
@@ -6476,9 +6562,16 @@ export async function createScheduledGame(input: {
   participantGroupId?: string;
   participantGroupIds?: string[];
   poolId: string;
+  sendWhatsAppNotification?: boolean;
   title?: string | null;
 }) {
-  return withSerializedGameMutation((state) => {
+  let whatsappRecipients: Array<{ name: string; phone: string }> = [];
+  let groupNamesLabel = "Group";
+  let creatorNameLabel = "Test Creator";
+  let creatorNumberLabel = input.actorIdentifier?.trim() || "—";
+  let gameTitleLabel = "Rapid Test";
+
+  const createdGame = await withSerializedGameMutation((state) => {
     const actorIdentifier = normalizeParticipantIdentifier(input.actorIdentifier);
     const pool = ensureActorOwnsPool(state, input.poolId, input.createdBy, actorIdentifier);
     const groupIds = dedupe(input.participantGroupIds?.length ? input.participantGroupIds : input.participantGroupId ? [input.participantGroupId] : []);
@@ -6492,7 +6585,7 @@ export async function createScheduledGame(input: {
     if (!group || groups.some((entry) => !entry || !isGroupOwnedBy(entry, actorIdentifier))) {
       throw new Error("Choose groups you manage.");
     }
-    const title = input.title?.trim() || "Rapid test";
+    const title = (input.title ?? "").trim() || "Rapid test";
     if (title.length > 30) throw new Error("Rapid test titles must be 30 characters or fewer.");
 
     const participantMap = getParticipantMap(state);
@@ -6532,6 +6625,7 @@ export async function createScheduledGame(input: {
     ).map((entry) => ({
       correctOptionIndex: entry.correctOptionIndex,
       id: entry.question.id,
+        ...(entry.question.imageDataUrl ? { imageDataUrl: entry.question.imageDataUrl } : {}),
       options: entry.displayOptions,
       originalOptionIndexes: entry.originalOptionIndexes,
       prompt: entry.question.prompt,
@@ -6575,14 +6669,115 @@ export async function createScheduledGame(input: {
       questionStartedAt: [],
       questionIds: presentedQuestions.map((question) => question.id),
       rulesVersion: 4,
+      sendWhatsAppNotification: Boolean(input.sendWhatsAppNotification),
       startedAt: null,
       title,
       updatedAt: timestamp,
     };
 
+    groupNamesLabel = groups.map((g) => g?.name).filter(Boolean).join(", ") || "Group";
+    const creatorProfile = state.participants.find((entry) => identifiersMatch(entry.identifier, actorIdentifier));
+    creatorNameLabel = input.actorLabel?.trim() || creatorProfile?.label?.trim() || actorIdentifier || "Test Creator";
+    creatorNumberLabel = actorIdentifier || "—";
+    gameTitleLabel = title;
+    if (input.sendWhatsAppNotification) {
+      whatsappRecipients = participants.map((participant) => ({
+        name: participant.label || participant.identifier,
+        phone: participant.identifier,
+      }));
+    }
+
     state.games = [game, ...state.games];
     return hydrateGame(game);
   });
+
+  if (input.sendWhatsAppNotification && whatsappRecipients.length > 0) {
+    void Promise.allSettled(
+      whatsappRecipients.map((recipient) =>
+        sendRapidTestScheduledWhatsAppNotification({
+          participantName: recipient.name,
+          participantPhone: recipient.phone,
+          testCreatorName: creatorNameLabel,
+          testCreatorNumber: creatorNumberLabel,
+          testGroup: groupNamesLabel,
+          testName: gameTitleLabel,
+        }),
+      ),
+    );
+  }
+
+  return createdGame;
+}
+
+export async function dispatchDueScheduledTestWhatsAppReminders(nowMs = Date.now()) {
+  const snapshot = await readStoreSnapshot();
+  const dueTestIds = snapshot.scheduledTests
+    .filter((test) => {
+      if ((test.assessmentKind ?? "standard") !== "standard") return false;
+      if (!test.sendWhatsAppNotification || test.whatsAppReminderSentAt) return false;
+      const startsAtMs = Date.parse(test.startsAt);
+      if (!Number.isFinite(startsAtMs)) return false;
+      const remainingMs = startsAtMs - nowMs;
+      return remainingMs > 0 && remainingMs <= 20 * 60 * 1000;
+    })
+    .map((test) => test.id);
+
+  if (!dueTestIds.length) {
+    return 0;
+  }
+
+  const jobs: Array<{
+    participantName: string;
+    participantPhone: string;
+    startsAt: string;
+    testCreatorName: string;
+    testCreatorNumber: string;
+    testGroup: string;
+    testName: string;
+  }> = [];
+
+  await withSerializedTestingMutation((state) => {
+    const timestamp = new Date(nowMs).toISOString();
+    for (const test of state.scheduledTests) {
+      if (!dueTestIds.includes(test.id) || test.whatsAppReminderSentAt || !test.sendWhatsAppNotification) {
+        continue;
+      }
+      test.whatsAppReminderSentAt = timestamp;
+      const groupNames = (test.participantGroupIds ?? [])
+        .map((groupId) => state.participantGroups.find((g) => g.id === groupId)?.name)
+        .filter(Boolean)
+        .join(", ") || "Group";
+      const creatorProfile = state.participants.find((p) =>
+        test.creatorIdentifier && identifiersMatch(p.identifier, test.creatorIdentifier),
+      );
+      const creatorName = test.creatorDisplayName?.trim()
+        || creatorProfile?.label?.trim()
+        || test.creatorIdentifier
+        || "Test Creator";
+      const creatorNumber = test.creatorIdentifier || "—";
+      const recipients = resolveParticipantIdentifiers(state, test.participantIds ?? [], test.participantGroupIds ?? []);
+      for (const recipientIdentifier of recipients) {
+        const profile = state.participants.find((p) => identifiersMatch(p.identifier, recipientIdentifier));
+        jobs.push({
+          participantName: profile?.label?.trim() || recipientIdentifier,
+          participantPhone: recipientIdentifier,
+          startsAt: test.startsAt,
+          testCreatorName: creatorName,
+          testCreatorNumber: creatorNumber,
+          testGroup: groupNames,
+          testName: test.title,
+        });
+      }
+    }
+  });
+
+  if (jobs.length > 0) {
+    await Promise.allSettled(
+      jobs.map((job) => sendStandardTestScheduledWhatsAppNotification(job)),
+    );
+  }
+
+  return jobs.length;
 }
 
 function gameNeedsLifecycleWrite(state: TestingWorkspaceState, game: ScheduledGame, now: Date) {
@@ -7013,6 +7208,16 @@ export async function getGameRouteMetadata(game: ScheduledGame, viewerIdentifier
     groupName,
     overallGamePoints,
     poolName,
+    reportedQuestionIds: dedupe([
+      ...snapshot.questionReports
+        .filter((report) => report.testId === game.id && report.status === "open")
+        .map((report) => report.questionId),
+      ...game.questionIds.filter((questionId) => Boolean(snapshot.questions.find((q) => q.id === questionId)?.isTaggedIncorrect)),
+    ]),
+    myReportedQuestionCount: snapshot.questionReports.filter(
+      (report) => report.testId === game.id
+        && identifiersMatch(report.reporterIdentifier, normalizeParticipantIdentifier(viewerIdentifier)),
+    ).length,
   };
 }
 
@@ -7041,6 +7246,8 @@ export async function getGamePayloadForViewer(gameId: string, viewerIdentifier: 
     ? game.questionIds.map((questionId, questionIndex) => {
       const reviewQuestion = game.presentedQuestions?.[questionIndex]
         ?? metadata.fallbackQuestions.get(questionId);
+    const fallbackQuestion = metadata.fallbackQuestions.get(questionId);
+    const imageDataUrl = reviewQuestion?.imageDataUrl ?? fallbackQuestion?.imageDataUrl ?? null;
         const answer = ownAnswers.find((entry) => entry.questionIndex === questionIndex) ?? null;
 
         return reviewQuestion
@@ -7048,6 +7255,7 @@ export async function getGamePayloadForViewer(gameId: string, viewerIdentifier: 
               answer,
               correctOptionIndex: reviewQuestion.correctOptionIndex,
               id: reviewQuestion.id,
+            ...(imageDataUrl ? { imageDataUrl } : {}),
               options: reviewQuestion.options,
               prompt: reviewQuestion.prompt,
               questionIndex,
@@ -7084,12 +7292,21 @@ export async function getGamePayloadForViewer(gameId: string, viewerIdentifier: 
     countdownDeadline: game.countdownDeadline,
     creatorRole: game.creatorRole ?? null,
     currentQuestion: question && (!rapid || isAccepted)
-      ? { id: question.id, options: question.options, prompt: question.prompt }
+      ? {
+          id: question.id,
+          ...((question.imageDataUrl ?? metadata.fallbackQuestions.get(question.id)?.imageDataUrl)
+            ? { imageDataUrl: question.imageDataUrl ?? metadata.fallbackQuestions.get(question.id)?.imageDataUrl }
+            : {}),
+          options: question.options,
+          prompt: question.prompt,
+        }
       : null,
     currentQuestionIndex: game.currentQuestionIndex,
     displayName: participant?.label ?? viewerIdentifier,
     globalDeadline: game.globalDeadline,
+    myReportedQuestionCount: metadata.myReportedQuestionCount,
     questionStartedAt: game.participantQuestionStartedAt,
+    reportedQuestionIds: metadata.reportedQuestionIds,
     rulesVersion: game.rulesVersion,
     isAccepted,
     isCreator,

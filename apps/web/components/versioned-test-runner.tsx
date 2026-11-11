@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { readJsonResponse } from "../lib/read-json-response";
 
-type Question = { id: string; prompt: string; options: string[] };
+type Question = { id: string; imageDataUrl?: string | null; prompt: string; options: string[] };
 type LiveLeaderboardEntry = {
   rank: number;
   participantName: string;
@@ -216,47 +216,82 @@ export function VersionedTestRunner({ testId, identifier, authConfigured, initia
         <span className="eyebrow">Participant</span>
         <strong>{payload.session?.participantName || name || identifier}</strong>
       </div>
+      {active && question ? (
+        <div className="test-runner-timer" aria-live="polite">
+          <span>Time left</span>
+          <strong>{countdown(endsAt - now)}</strong>
+        </div>
+      ) : null}
       <div className="game-user-points">
         <span className="eyebrow">Overall marks</span>
         <strong>{payload.overallMarks ?? 0}</strong>
       </div>
     </header>
-    <section className="workspace-card">
-      <h1>{test.title} ({test.questionCount})</h1>
-      <p>{test.assessmentKind === "instant" ? "Instant Test" : "Test"} · {test.questionCount} questions · {test.durationMinutes} min</p>
-      {error ? <p role="alert">{error}</p> : null}
-      {finished ? <>
-        <p>Results are available.{!payload.session ? " Absent." : " Your saved responses have been submitted."}</p>
-        <a className="button" href={`/test-results/${encodeURIComponent(testId)}`}>View results</a>
-      </> : submitted ? <p>Submitted. Results will be available when the test ends.</p> : <>
-        {!payload.session ? <>
-          <div className="pre-test-best-outcome-note" style={{ textAlign: "center", marginBottom: "1rem" }}>
-            <h2 style={{ fontWeight: 700, fontSize: "1.35rem", margin: "0 0 0.5rem" }}>For best outcome</h2>
-            <ul style={{ display: "inline-block", textAlign: "left", margin: 0, paddingLeft: "1.25rem" }}>
-              <li>Avoid cheating/taking help from others</li>
-              <li>Avoid doing guess work</li>
-              <li>Try to score purely based on your knowledge and learnings</li>
-            </ul>
+    <div className={awaitingLaunch ? "game-runner-layout" : undefined}>
+      <section className="workspace-card pre-test-unified-card">
+        <h1 className="pre-test-centered-title">{test.title} ({test.questionCount})</h1>
+        <p className="pre-test-centered-meta">{test.assessmentKind === "instant" ? "Instant Test" : "Test"} · {test.questionCount} questions · {test.durationMinutes} min</p>
+        {error ? <p role="alert">{error}</p> : null}
+        {finished ? <>
+          <p>Results are available.{!payload.session ? " Absent." : " Your saved responses have been submitted."}</p>
+          <a className="button" href={`/test-results/${encodeURIComponent(testId)}`}>View results</a>
+        </> : submitted ? <p>Submitted. Results will be available when the test ends.</p> : <>
+          <div className="pre-test-guidance-rules-row">
+            <div className="pre-test-guidance-column">
+              <h2>For best outcome</h2>
+              <ul>
+                <li>Avoid cheating or taking help from others or doing guess work</li>
+                <li>Respond purely based on your knowledge</li>
+              </ul>
+            </div>
+            <div className="pre-test-rules-column">
+              <h2>Rules</h2>
+              <ul>
+                {test.assessmentKind === "instant" ? (
+                  <>
+                    <li>Correct answer: +4 marks.</li>
+                    <li>Incorrect or unanswered: -1 marks.</li>
+                  </>
+                ) : (
+                  <>
+                    <li>Correct answer: +1 marks.</li>
+                    <li>Incorrect or unanswered: -1 marks.</li>
+                  </>
+                )}
+              </ul>
+            </div>
           </div>
-          <div className="field">
-            <label htmlFor="participant-entry-name">Your name</label>
-            <input id="participant-entry-name" value={name} onChange={(event) => setName(event.target.value)} disabled={busy} />
-            <button className="button" type="button" disabled={busy || !name.trim() || Boolean(test.countdownStartedAt)} onClick={() => void action("session")}>Join test</button>
-          </div>
-        </> : <p>Joined as {payload.session.participantName}</p>}
-        {awaitingLaunch ? <>
-          <p>{payload.acceptedCount} participants accepted. Waiting for the creator to start.</p>
-          {payload.isCreator ? <button className="button" type="button" disabled={busy || payload.acceptedCount < 4} onClick={() => void action("start")}>Start test</button> : null}
-        </> : waitingForQuestions ? <p className="status-chip">Questions begin in {countdown(Date.parse(test.startsAt) - now)}</p> : null}
-      </>}
-      <a className="button-secondary" href="/user?view=tests">Back to tests</a>
-    </section>
+          {!payload.session ? (
+            <div className="field">
+              <label htmlFor="participant-entry-name">Your name</label>
+              <input id="participant-entry-name" value={name} onChange={(event) => setName(event.target.value)} disabled={busy} />
+              <button className="button" type="button" disabled={busy || !name.trim() || Boolean(test.countdownStartedAt)} onClick={() => void action("session")}>Join test</button>
+            </div>
+          ) : <p>Joined as {payload.session.participantName}</p>}
+          {awaitingLaunch ? <>
+            <p>{payload.acceptedCount} participants accepted. Waiting for the creator to start.</p>
+            {payload.isCreator ? <button className="button" type="button" disabled={busy || payload.acceptedCount < 4} onClick={() => void action("start")}>Start test</button> : null}
+          </> : waitingForQuestions ? <p className="status-chip">Questions begin in {countdown(Date.parse(test.startsAt) - now)}</p> : null}
+        </>}
+        <a className="button-secondary" href="/user?view=tests">Back to tests</a>
+      </section>
+      {awaitingLaunch ? (
+        <aside className="workspace-card game-leaderboard-panel">
+          <p className="eyebrow">Test Waiting Room</p>
+          <h2>{payload.acceptedCount} ready</h2>
+        </aside>
+      ) : null}
+    </div>
     {active && question ? <>
-      <div className="test-runner-timer"><span>Time left</span><strong>{countdown(endsAt - now)}</strong></div>
       <div className={isInstant ? "game-runner-layout" : undefined}>
         <article className="question-card">
           <div className="question-head"><strong>Question {index + 1} of {orderedQuestions.length}</strong><span role="status">{saveState === "saved" ? "Saved" : saveState === "saving" ? "Saving…" : "Not saved — retrying"}</span></div>
           <p>{question.prompt}</p>
+          {question.imageDataUrl ? (
+            <div className="question-image-container">
+              <img alt={`Question ${index + 1} illustration`} className="question-illustration-image" src={question.imageDataUrl} />
+            </div>
+          ) : null}
           <div className="answer-grid">{optionIndexes.map((optionIndex) => <label className="role-option" key={optionIndex}>
             <input type="radio" name={question.id} checked={answers[question.id] === optionIndex} disabled={busy} onChange={() => selectAnswer(question.id, optionIndex)} />
             {question.options[optionIndex]}

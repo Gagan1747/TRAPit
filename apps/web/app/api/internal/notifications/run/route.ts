@@ -4,7 +4,9 @@ import { createHash } from "node:crypto";
 import { participantIdentifiersMatch } from "@trapit/testing";
 import { listApportionPendingNotifications, markApportionNotificationDelivered, reconcileApportionLifecycle } from "../../../../../lib/apportion-store";
 import { listPendingApportionScheduleNotifications, markApportionScheduleNotificationDelivered, reconcileApportionAddressOptOuts, reconcileApportionProviderLeaves } from "../../../../../lib/apportion-directory";
+import { getWhatsAppNotificationPreference } from "../../../../../lib/notification-store";
 import { publishWorkspaceEvent } from "../../../../../lib/realtime-events";
+import { getWorkspaceActor } from "../../../../../lib/workspace-actor";
 
 import {
   hasNotificationDelivery,
@@ -16,6 +18,7 @@ import {
   removeWebPushSubscription,
 } from "../../../../../lib/notification-store";
 import {
+  dispatchDueScheduledTestWhatsAppReminders,
   listAvailablePollsForParticipant,
   listAvailableTestsForParticipant,
   listBrowserNotificationSchedules,
@@ -136,6 +139,19 @@ function buildPollReminder(poll: { id: string; shareCode: string | null; startsA
 
 const workerGlobal = globalThis as typeof globalThis & { __trapitNotificationWorkerQueue?: Promise<void> };
 
+export async function GET(request: Request) {
+  const actor = await getWorkspaceActor(request);
+  if (!actor) {
+    return NextResponse.json({ error: "Signed-in access is required." }, { status: 403 });
+  }
+  const whatsappRemindersSent = await dispatchDueScheduledTestWhatsAppReminders();
+  const whatsappEnabled = await getWhatsAppNotificationPreference({
+    identifier: actor.identifier,
+    sub: actor.sub,
+  });
+  return NextResponse.json({ whatsappEnabled, whatsappRemindersSent });
+}
+
 export async function POST(request: Request) {
   if (!isAuthorized(request)) return NextResponse.json({ error: "Notification worker access is required." }, { status: 401 });
   const previous = workerGlobal.__trapitNotificationWorkerQueue ?? Promise.resolve();
@@ -154,6 +170,7 @@ async function runNotificationWorker(request: Request) {
   if (await reconcileApportionLifecycle()) publishWorkspaceEvent("apportion");
   if (await reconcileExpiredGames()) publishWorkspaceEvent("game");
   await reconcileExpiredTestSessions();
+  const whatsappRemindersSent = await dispatchDueScheduledTestWhatsAppReminders?.() ?? 0;
   const [pushTokens, webPushSubscriptions, appointmentNotifications, scheduleNotifications] = await Promise.all([
     listPushTokens(),
     listWebPushSubscriptions(),
@@ -343,6 +360,7 @@ async function runNotificationWorker(request: Request) {
     mobileSent: queuedMessages.length,
     sent: queuedMessages.length + webSent + apportionSent,
     tokensChecked: pushTokens.length,
+    whatsappRemindersSent,
     webPushConfigured: Boolean(process.env.NEXT_PUBLIC_WEB_PUSH_PUBLIC_KEY?.trim() && process.env.WEB_PUSH_PRIVATE_KEY?.trim()),
     errors: [...new Set(errors)],
   }, { status: errors.length ? 503 : 200 });

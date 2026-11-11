@@ -83,6 +83,7 @@ export async function POST(request: Request) {
       questionCount?: number;
       recurrenceStartsAt?: string[];
       repeatMode?: TestRepeatMode;
+      sendWhatsAppNotification?: boolean;
       startsAt?: string;
       title?: string;
     };
@@ -148,6 +149,7 @@ export async function POST(request: Request) {
         participantIds: body.participantIds ?? [],
         poolId: body.poolId,
         questionCount: body.questionCount,
+        sendWhatsAppNotification: Boolean(body.sendWhatsAppNotification),
         startsAt,
         title: body.title,
         titleSuffix: startsAtValues.length > 1 ? `- ${index + 1} of ${startsAtValues.length}` : null,

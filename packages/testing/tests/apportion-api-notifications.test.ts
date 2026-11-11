@@ -25,12 +25,14 @@ vi.mock("../../../apps/web/lib/apportion-directory", () => ({
   markApportionScheduleNotificationDelivered: fixtures.markSchedule,
 }));
 vi.mock("../../../apps/web/lib/testing-store", () => ({
+  dispatchDueScheduledTestWhatsAppReminders: async () => 0,
   reconcileExpiredGames: fixtures.reconcileGames,
   reconcileExpiredTestSessions: fixtures.reconcileTests,
   listAvailableTestsForParticipant: async () => [], listAvailablePollsForParticipant: async () => [],
   listBrowserNotificationSchedules: async () => fixtures.schedules,
 }));
 vi.mock("../../../apps/web/lib/notification-store", () => ({
+  getWhatsAppNotificationPreference: async () => true,
   listPushTokens: async () => fixtures.tokens, listWebPushSubscriptions: async () => fixtures.subscriptions,
   hasNotificationDelivery: async (key: string, id: string) => fixtures.delivered.has(`${key}:${id}`),
   recordNotificationDelivery: async (key: string, id: string) => { fixtures.delivered.add(`${key}:${id}`); },

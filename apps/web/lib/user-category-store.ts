@@ -29,7 +29,9 @@ export type StoredUserCategoryAssignment = {
   category: NormalUserCategory;
   expiresAt: string | null;
   id: string;
-  reason: "manual" | "upgrade-request";
+  paymentId?: string | null;
+  paymentOrderId?: string | null;
+  reason: "manual" | "upgrade-request" | "razorpay";
   status: UserCategoryAssignmentStatus;
   userIdentifier: string | null;
   userSub: string | null;
@@ -452,6 +454,82 @@ export async function resolveUserCategoryUpgradeRequest(input: {
   }
 
   return listUserCategoryManagementState();
+}
+
+export function calculateOneMonthSubscriptionExpiry(fromDate = new Date()): Date {
+  const nextMonthSameDate = new Date(fromDate);
+  const originalDay = nextMonthSameDate.getDate();
+  nextMonthSameDate.setDate(1);
+  nextMonthSameDate.setMonth(nextMonthSameDate.getMonth() + 1);
+  const daysInNextMonth = new Date(nextMonthSameDate.getFullYear(), nextMonthSameDate.getMonth() + 1, 0).getDate();
+  nextMonthSameDate.setDate(Math.min(originalDay, daysInNextMonth));
+  // 1 month ends on one day before the same date in the next month
+  nextMonthSameDate.setDate(nextMonthSameDate.getDate() - 1);
+  nextMonthSameDate.setHours(23, 59, 59, 999);
+  return nextMonthSameDate;
+}
+
+export async function assignPaidUserCategoryFromRazorpay(input: {
+  category: NormalUserCategory;
+  displayName: string | null;
+  paymentId: string;
+  paymentOrderId: string;
+  userIdentifier: string | null;
+  userSub: string | null;
+}) {
+  if (input.category === defaultNormalUserCategory) {
+    throw new Error("Paid upgrade requires Pro or Pro Max category.");
+  }
+
+  const state = await readState();
+  replaceActiveAssignmentsForUser(state, {
+    identifier: input.userIdentifier,
+    sub: input.userSub,
+  });
+
+  const assignedAt = new Date();
+  const expiresAt = calculateOneMonthSubscriptionExpiry(assignedAt);
+  const resolvedAt = assignedAt.toISOString();
+
+  state.requests = state.requests.map((request) =>
+    request.status === "pending" && matchesUser(request, { identifier: input.userIdentifier, sub: input.userSub })
+      ? {
+          ...request,
+          approvedDurationMonths: null,
+          resolvedAt,
+          reviewerDisplayName: "Razorpay",
+          reviewerIdentifier: input.paymentId,
+          status: "accepted",
+        }
+      : request,
+  );
+
+  state.assignments = [
+    {
+      assignedAt: assignedAt.toISOString(),
+      assignedByDisplayName: "Razorpay",
+      assignedByIdentifier: input.paymentId,
+      category: input.category,
+      expiresAt: expiresAt.toISOString(),
+      id: createEntityId("user-category-assignment"),
+      paymentId: input.paymentId,
+      paymentOrderId: input.paymentOrderId,
+      reason: "razorpay",
+      status: "active",
+      userIdentifier: input.userIdentifier?.trim() || null,
+      userSub: input.userSub?.trim() || null,
+    },
+    ...state.assignments,
+  ];
+
+  await writeState(state);
+
+  return getUserCategorySnapshot({
+    currentCategory: input.category,
+    displayName: input.displayName,
+    identifier: input.userIdentifier,
+    sub: input.userSub,
+  });
 }
 
 export async function listActiveUserCategoryAssignments() {

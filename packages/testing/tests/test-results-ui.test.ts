@@ -44,12 +44,12 @@ describe("completed results presentation", () => {
 
   it("enforces the updated pricing matrix, Contact Us details, Super Admin Manage Upgrades table, and 3-section Groups Management UI", () => {
     const source = readFileSync(new URL("../../../apps/web/components/admin-question-workspace.tsx", import.meta.url), "utf8");
-    expect(source).toContain("Pro (10,000 / 12 months)");
-    expect(source).toContain("Pro Max (20,000 / 12 months)");
+    expect(source).toContain("Charges: INR 250/month.");
+    expect(source).toContain("Charges: INR 500/month.");
     expect(source).toContain("Test: Schedule test / month");
     expect(source).toContain("Apportion: Business Panel (services per address)");
     expect(source).toContain("Poll: Schedule Polls (open to all polls)");
-    expect(source).toContain("Flat-1144, ATS Marigold, Sector 89A, Gurugram, Haryana (122505)");
+    expect(source).toContain("Sector 89A, Gurugram, Haryana (122505), INDIA");
     expect(source).toContain("trapitdotin@gmail.com");
     expect(source).toContain("+91-8800797123");
     expect(source).toContain("<th>S.N.</th>");
@@ -88,9 +88,9 @@ describe("completed results presentation", () => {
 
     const runnerSource = readFileSync(new URL("../../../apps/web/components/versioned-test-runner.tsx", import.meta.url), "utf8");
     expect(runnerSource).toContain("For best outcome");
-    expect(runnerSource).toContain("Avoid cheating/taking help from others");
-    expect(runnerSource).toContain("Avoid doing guess work");
-    expect(runnerSource).toContain("Try to score purely based on your knowledge and learnings");
+    expect(runnerSource).toContain("Avoid cheating or taking help from others or doing guess work");
+    expect(runnerSource).toContain("Respond purely based on your knowledge");
+    expect(runnerSource).toContain("Rules");
 
     const searchSource = readFileSync(new URL("../../../apps/web/components/apportion-business-search.tsx", import.meta.url), "utf8");
     expect(searchSource).toContain("apportion-business-card-grid");

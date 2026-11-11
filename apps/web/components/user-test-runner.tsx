@@ -359,7 +359,7 @@ export function UserTestRunner({
       </div>
 
       <div className="question-list test-runner-content">
-        <article className="question-card runner-summary-card">
+        <article className="question-card runner-summary-card pre-test-unified-card">
           {test.branding?.imageDataUrl || test.branding?.instituteName ? (
             <div className="assessment-branding">
               {test.branding.imageDataUrl ? (
@@ -373,34 +373,40 @@ export function UserTestRunner({
               ) : null}
             </div>
           ) : null}
-          <div className="question-head">
-            <strong>{test.title}</strong>
+          <h1 className="pre-test-centered-title">{test.title}</h1>
+          <div className="runner-meta-row" style={{ justifyContent: "center" }}>
             <span className="status-chip success">{test.durationMinutes} min</span>
-          </div>
-          <div className="runner-meta-row">
             <span className="status-chip success">
               Question {Math.min(currentQuestionIndex + 1, test.questions.length)} of {test.questions.length}
             </span>
             <span className="status-chip success">Answered {answeredCount} of {test.questions.length}</span>
           </div>
-            {!participantName.trim() ? (
-              <div className="pre-test-best-outcome-note" style={{ textAlign: "center", marginBottom: "1rem" }}>
-                <h2 style={{ fontWeight: 700, fontSize: "1.35rem", margin: "0 0 0.5rem" }}>For best outcome</h2>
-                <ul style={{ display: "inline-block", textAlign: "left", margin: 0, paddingLeft: "1.25rem" }}>
-                  <li>Avoid cheating/taking help from others</li>
-                  <li>Avoid doing guess work</li>
-                  <li>Try to score purely based on your knowledge and learnings</li>
+          {!participantName.trim() ? (
+            <div className="pre-test-guidance-rules-row">
+              <div className="pre-test-guidance-column">
+                <h2>For best outcome</h2>
+                <ul>
+                  <li>Avoid cheating or taking help from others or doing guess work</li>
+                  <li>Respond purely based on your knowledge</li>
                 </ul>
               </div>
-            ) : null}
-            <div className="field">
-              <label htmlFor="test-runner-participant-name">Your name for this test</label>
-              <input
-                id="test-runner-participant-name"
-                value={participantName}
-                onChange={(event) => setParticipantName(event.target.value)}
-              />
+              <div className="pre-test-rules-column">
+                <h2>Rules</h2>
+                <ul>
+                  <li>Correct answer: +1 marks.</li>
+                  <li>Incorrect or unanswered: -1 marks.</li>
+                </ul>
+              </div>
             </div>
+          ) : null}
+          <div className="field">
+            <label htmlFor="test-runner-participant-name">Your name for this test</label>
+            <input
+              id="test-runner-participant-name"
+              value={participantName}
+              onChange={(event) => setParticipantName(event.target.value)}
+            />
+          </div>
           {feedback ? <p className="muted-text">{feedback}</p> : null}
         </article>
 
@@ -411,6 +417,11 @@ export function UserTestRunner({
               <span className="muted-text">{test.questionCount - currentQuestionIndex - 1} remaining</span>
             </div>
             <p>{activeQuestion.question.prompt}</p>
+            {activeQuestion.question.imageDataUrl ? (
+              <div className="question-image-container">
+                <img alt={`Question ${currentQuestionIndex + 1} illustration`} className="question-illustration-image" src={activeQuestion.question.imageDataUrl} />
+              </div>
+            ) : null}
             <div className="answer-grid">
               {activeQuestion.displayOptions.map((option, optionIndex) => (
                 <label className="role-option" key={`${activeQuestion.question.id}-${optionIndex}`}>

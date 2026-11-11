@@ -6,22 +6,52 @@ const DEFAULT_GRAPH_API_VERSION = "v21.0";
 const DEFAULT_COUNTRY_CODE = "91";
 const DEFAULT_BOOKED_TEMPLATE = "appointment_booked_on_trapit";
 const DEFAULT_INVITATION_TEMPLATE = "appointment_invitation_on_trapit";
+const DEFAULT_INSTANT_TEST_TEMPLATE = "instant_test_scheduled_on_trapit";
+const DEFAULT_RAPID_TEST_TEMPLATE = "rapid_test_scheduled";
+const DEFAULT_SCHEDULED_TEST_TEMPLATE = "test_scheduled_on_trapit";
 const DEFAULT_TEMPLATE_LANGUAGE = "en";
 
 const DEFAULT_BOOKED_PARAM_NAMES = [
   "owner_staff_name",
-  "date_and_time",
   "requester_name",
   "requester_phone_number",
+  "date_and_time",
+  "service_name",
   "address",
 ] as const;
 
 const DEFAULT_INVITATION_PARAM_NAMES = [
   "requester_name",
   "owner_staff_name",
+  "owner_staff_number",
   "date_and_time",
   "service_name",
-  "location_name",
+  "address",
+] as const;
+
+const DEFAULT_INSTANT_TEST_PARAM_NAMES = [
+  "participant_name",
+  "test_creator_name",
+  "test_creator_number",
+  "test_name",
+  "test_group",
+] as const;
+
+const DEFAULT_RAPID_TEST_PARAM_NAMES = [
+  "participant_name",
+  "test_creator_name",
+  "test_creator_number",
+  "test_name",
+  "test_group",
+] as const;
+
+const DEFAULT_SCHEDULED_TEST_PARAM_NAMES = [
+  "participant_name",
+  "test_creator_name",
+  "test_creator_number",
+  "date_and_time",
+  "test_name",
+  "test_group",
 ] as const;
 
 export type WhatsAppSendResult = {
@@ -56,6 +86,9 @@ function getWhatsAppConfig() {
   const templateLanguage = process.env.WHATSAPP_TEMPLATE_LANGUAGE?.trim() || DEFAULT_TEMPLATE_LANGUAGE;
   const bookedTemplate = process.env.WHATSAPP_TEMPLATE_BOOKED?.trim() || DEFAULT_BOOKED_TEMPLATE;
   const invitationTemplate = process.env.WHATSAPP_TEMPLATE_INVITATION?.trim() || DEFAULT_INVITATION_TEMPLATE;
+  const instantTestTemplate = process.env.WHATSAPP_TEMPLATE_INSTANT_TEST?.trim() || DEFAULT_INSTANT_TEST_TEMPLATE;
+  const rapidTestTemplate = process.env.WHATSAPP_TEMPLATE_RAPID_TEST?.trim() || DEFAULT_RAPID_TEST_TEMPLATE;
+  const scheduledTestTemplate = process.env.WHATSAPP_TEMPLATE_SCHEDULED_TEST?.trim() || DEFAULT_SCHEDULED_TEST_TEMPLATE;
   const paramFormatEnv = process.env.WHATSAPP_PARAM_FORMAT?.trim().toUpperCase();
   const parameterFormat: "NAMED" | "POSITIONAL" = paramFormatEnv === "POSITIONAL" ? "POSITIONAL" : "NAMED";
 
@@ -66,9 +99,12 @@ function getWhatsAppConfig() {
     businessAccountId,
     configured: Boolean(phoneNumberId && accessToken),
     countryCode,
+    instantTestTemplate,
     invitationTemplate,
     parameterFormat,
     phoneNumberId,
+    rapidTestTemplate,
+    scheduledTestTemplate,
     templateLanguage,
   };
 }
@@ -419,8 +455,10 @@ function formatAppointmentDateTime(startsAt: string, justAddToList?: boolean, bo
  * Sends Template 1 (`appointment_booked_on_trapit`) to the Assigned Staff (if assigned) or the Business Owner.
  *
  * Template body:
- * Hello {{Owner/staff name}}, a new appointment has been scheduled for **{{date and time}}** on TRAPit.in.
- * Customer: {{requester name}} ({{requester phone number}})
+ * *Appointment Booked on TRAPit.in*
+ * Hello {{owner_staff_name}}, a new appointment has been scheduled by {{requester_name}} ({{requester_phone_number}}),
+ * Scheduled for: {{date_and_time}}
+ * Purpose: {{service_name}}
  * Location: {{address}}
  * Sign in to TRAPit.in to manage this appointment.
  */
@@ -437,6 +475,7 @@ export async function sendAppointmentBookedWhatsAppNotification(appointment: {
   requesterIdentifier: string;
   requesterName: string;
   requesterPhone: string | null;
+  serviceName?: string | null;
   startsAt: string;
 }): Promise<WhatsAppSendResult> {
   const config = getWhatsAppConfig();
@@ -460,9 +499,10 @@ export async function sendAppointmentBookedWhatsAppNotification(appointment: {
 
   const values = [
     recipientDisplayName,
-    formatAppointmentDateTime(appointment.startsAt, appointment.justAddToList, appointment.bookedQueuePosition),
     appointment.requesterName?.trim() || "Customer",
     appointment.requesterPhone?.trim() || appointment.requesterIdentifier.trim(),
+    formatAppointmentDateTime(appointment.startsAt, appointment.justAddToList, appointment.bookedQueuePosition),
+    appointment.serviceName?.trim() || "Consultation",
     formatLocationDisplay(appointment.locationName, appointment.locationAddress),
   ];
 
@@ -480,13 +520,17 @@ export async function sendAppointmentBookedWhatsAppNotification(appointment: {
  * Sends Template 2 (`appointment_invitation_on_trapit`) to the invited business user.
  *
  * Template body:
- * Hello {{Requester Name}}, {{Owner/staff name}} has invited you to an appointment scheduled for: **{{date and time}}** on TRAPit.in.
- * Purpose: {{Service name}}
- * Location: {{Location name}}
- * Please sign in to TRAPit.in to accept or decline this invitation before it expires.
+ * *Appointment Invitation on TRAPit.in*
+ * Hello {{requester_name}}, {{owner_staff_name}} ({{owner_staff_number}}) has invited you for an appointment,
+ * Scheduled for: {{date_and_time}}.
+ * Purpose: {{service_name}}
+ * Location: {{address}}
+ * Please sign in to TRAPit.in to accept or decline this invitation and to see the real time status of this appointment before it expires.
  */
 export async function sendAppointmentInvitationWhatsAppNotification(invitation: {
+  assignedStaffIdentifier?: string | null;
   assignedStaffName?: string | null;
+  assignedStaffPhone?: string | null;
   locationAddress: string;
   locationName: string;
   occurrences: Array<{ serviceDateKey: string; startsAt: string }>;
@@ -506,6 +550,10 @@ export async function sendAppointmentInvitationWhatsAppNotification(invitation: 
   const inviterDisplayName = invitation.ownerName?.trim()
     || invitation.assignedStaffName?.trim()
     || "Business Owner";
+  const inviterPhoneNumber = invitation.assignedStaffPhone?.trim()
+    || invitation.assignedStaffIdentifier?.trim()
+    || invitation.ownerIdentifier?.trim()
+    || "—";
 
   const firstOccurrence = invitation.occurrences[0];
   const baseSchedule = firstOccurrence
@@ -523,6 +571,7 @@ export async function sendAppointmentInvitationWhatsAppNotification(invitation: 
   const values = [
     invitation.requesterName?.trim() || "Customer",
     inviterDisplayName,
+    inviterPhoneNumber,
     scheduleDisplay,
     invitation.serviceName?.trim() || "Consultation",
     formatLocationDisplay(invitation.locationName, invitation.locationAddress),
@@ -531,6 +580,125 @@ export async function sendAppointmentInvitationWhatsAppNotification(invitation: 
   return sendWhatsAppTemplateMessage({
     recipientPhone,
     templateName: config.invitationTemplate,
+    parameters: paramNames.map((name, index) => ({
+      name,
+      value: values[index] ?? "—",
+    })),
+  });
+}
+
+/**
+ * Sends `instant_test_scheduled_on_trapit` when an Instant Test is scheduled.
+ */
+export async function sendInstantTestScheduledWhatsAppNotification(input: {
+  participantName: string;
+  participantPhone: string;
+  testCreatorName: string;
+  testCreatorNumber: string;
+  testGroup: string;
+  testName: string;
+}): Promise<WhatsAppSendResult> {
+  const config = getWhatsAppConfig();
+  if (!config.configured) {
+    return { sent: false, reason: "unconfigured" };
+  }
+
+  const paramNames = parseConfiguredParamNames(
+    process.env.WHATSAPP_INSTANT_TEST_PARAM_NAMES,
+    DEFAULT_INSTANT_TEST_PARAM_NAMES,
+  );
+
+  const values = [
+    input.participantName?.trim() || "Participant",
+    input.testCreatorName?.trim() || "Test Creator",
+    input.testCreatorNumber?.trim() || "—",
+    input.testName?.trim() || "Instant Test",
+    input.testGroup?.trim() || "Group",
+  ];
+
+  return sendWhatsAppTemplateMessage({
+    recipientPhone: input.participantPhone,
+    templateName: config.instantTestTemplate,
+    parameters: paramNames.map((name, index) => ({
+      name,
+      value: values[index] ?? "—",
+    })),
+  });
+}
+
+/**
+ * Sends `rapid_test_scheduled` when a Rapid Test is scheduled.
+ */
+export async function sendRapidTestScheduledWhatsAppNotification(input: {
+  participantName: string;
+  participantPhone: string;
+  testCreatorName: string;
+  testCreatorNumber: string;
+  testGroup: string;
+  testName: string;
+}): Promise<WhatsAppSendResult> {
+  const config = getWhatsAppConfig();
+  if (!config.configured) {
+    return { sent: false, reason: "unconfigured" };
+  }
+
+  const paramNames = parseConfiguredParamNames(
+    process.env.WHATSAPP_RAPID_TEST_PARAM_NAMES,
+    DEFAULT_RAPID_TEST_PARAM_NAMES,
+  );
+
+  const values = [
+    input.participantName?.trim() || "Participant",
+    input.testCreatorName?.trim() || "Test Creator",
+    input.testCreatorNumber?.trim() || "—",
+    input.testName?.trim() || "Rapid Test",
+    input.testGroup?.trim() || "Group",
+  ];
+
+  return sendWhatsAppTemplateMessage({
+    recipientPhone: input.participantPhone,
+    templateName: config.rapidTestTemplate,
+    parameters: paramNames.map((name, index) => ({
+      name,
+      value: values[index] ?? "—",
+    })),
+  });
+}
+
+/**
+ * Sends `test_scheduled_on_trapit` for a Standard Test (20 minutes before scheduled start time).
+ */
+export async function sendStandardTestScheduledWhatsAppNotification(input: {
+  participantName: string;
+  participantPhone: string;
+  startsAt: string;
+  testCreatorName: string;
+  testCreatorNumber: string;
+  testGroup: string;
+  testName: string;
+}): Promise<WhatsAppSendResult> {
+  const config = getWhatsAppConfig();
+  if (!config.configured) {
+    return { sent: false, reason: "unconfigured" };
+  }
+
+  const paramNames = parseConfiguredParamNames(
+    process.env.WHATSAPP_SCHEDULED_TEST_PARAM_NAMES,
+    DEFAULT_SCHEDULED_TEST_PARAM_NAMES,
+  );
+
+  const values = [
+    input.participantName?.trim() || "Participant",
+    input.testCreatorName?.trim() || "Test Creator",
+    input.testCreatorNumber?.trim() || "—",
+    formatShortDateTimeIst(input.startsAt),
+    input.testName?.trim() || "Scheduled Test",
+    input.testGroup?.trim() || "Group",
+  ];
+
+  return sendWhatsAppTemplateMessage({
+    recipientPhone: input.participantPhone,
+    templateName: config.scheduledTestTemplate,
     parameters: paramNames.map((name, index) => ({
       name,
       value: values[index] ?? "—",

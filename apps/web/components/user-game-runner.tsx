@@ -12,13 +12,15 @@ type GameState = {
   canStart: boolean;
   countdownDeadline: string | null;
   creatorRole: GameCreatorRole | null;
-  currentQuestion: { id: string; options: string[]; prompt: string } | null;
+  currentQuestion: { id: string; imageDataUrl?: string | null; options: string[]; prompt: string } | null;
   currentQuestionIndex: number | null;
   displayName: string;
   isAccepted: boolean;
   isCreator: boolean;
   isMissed: boolean;
   leaderboard: Array<GameLeaderboardEntry & { isSelf?: boolean; maskedIdentifier?: string; correctCount?: number; incorrectUnansweredCount?: number; elapsedMs?: number }>;
+  myReportedQuestionCount?: number;
+  reportedQuestionIds?: string[];
   rulesVersion?: number;
   globalDeadline: string | null;
   questionStartedAt: string | null;
@@ -43,6 +45,7 @@ type GameState = {
     answer: GameAnswer | null;
     correctOptionIndex: number;
     id: string;
+    imageDataUrl?: string | null;
     options: string[];
     prompt: string;
     questionIndex: number;
@@ -92,6 +95,12 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
   const [participantName, setParticipantName] = useState("");
   const [remainingMs, setRemainingMs] = useState(0);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | null>(null);
+  const [reviewingQuestionId, setReviewingQuestionId] = useState<string | null>(null);
+  const [reviewReason, setReviewReason] = useState("");
+  const [isReviewing, setIsReviewing] = useState(false);
+  const [reviewFeedback, setReviewFeedback] = useState<string | null>(null);
+  const [localReviewedIds, setLocalReviewedIds] = useState<string[]>([]);
+  const [localReviewCountDelta, setLocalReviewCountDelta] = useState(0);
   const clockOffsetRef = useRef(0);
   const deadlineRefreshRef = useRef(false);
   const readyQuestionRef = useRef<string | null>(null);
@@ -360,25 +369,24 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
           </section>
         ) : null}
         <div className="game-runner-layout">
-          <section className="workspace-card game-question-panel">
-            {((game.isCreator && game.creatorRole !== "spectator" && !game.isAccepted) || (!game.isCreator && !game.isAccepted)) && game.status === "upcoming" ? (
-              <div className="pre-test-best-outcome-note" style={{ textAlign: "center", marginBottom: "1rem" }}>
-                <h2 style={{ fontWeight: 700, fontSize: "1.35rem", margin: "0 0 0.5rem" }}>For best outcome</h2>
-                <ul style={{ display: "inline-block", textAlign: "left", margin: 0, paddingLeft: "1.25rem" }}>
-                  <li>Avoid cheating/taking help from others</li>
-                  <li>Avoid doing guess work</li>
-                  <li>Try to score purely based on your knowledge and learnings</li>
+          <section className="workspace-card game-question-panel pre-test-unified-card">
+            <h1 className="pre-test-centered-title">{game.title}</h1>
+            <div className="pre-test-guidance-rules-row">
+              <div className="pre-test-guidance-column">
+                <h2>For best outcome</h2>
+                <ul>
+                  <li>Avoid cheating or taking help from others or doing guess work</li>
+                  <li>Respond purely based on your knowledge</li>
                 </ul>
               </div>
-            ) : null}
-            <p className="eyebrow">Game waiting room</p>
-            <h1>{game.title}</h1>
-            <div className="game-rules-list">
-              <h2>Game rules</h2>
-              <p>{game.rules.questionCount} questions, {game.rules.questionDurationMs / 1000} seconds each.</p>
-              <p>Correct answer points by {game.rulesVersion === 4 ? "individual response time" : "order"}: {game.rules.correctPoints.join(", ")}.</p>
-              <p>Incorrect or unanswered: {game.rules.incorrectPoints} points.</p>
-              <p>{game.rulesVersion === 4 ? "Your 30-second timer starts when each question is displayed. Submitting an answer advances immediately to the next question. The test closes 10 minutes after the 60-second launch countdown." : "The next question starts early when every competitor answers."}</p>
+              <div className="pre-test-rules-column">
+                <h2>Rules</h2>
+                <ul>
+                  <li>{game.rules.questionCount} questions, {game.rules.questionDurationMs / 1000} seconds each</li>
+                  <li>Points based on fastest response: {game.rules.correctPoints.join(", ")}.</li>
+                  <li>Incorrect or unanswered: {game.rules.incorrectPoints} points.</li>
+                </ul>
+              </div>
             </div>
             {game.isCreator && game.status === "upcoming" ? (
               <div className="form-stack">
@@ -419,10 +427,9 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
               {!game.isCreator && !game.isAccepted && game.status === "upcoming" ? <button className="button" disabled={isMutating || !participantName.trim()} type="button" onClick={() => void runAction("accept")}>Accept Game</button> : null}
               {game.isCreator && game.status === "upcoming" ? <button className="button" disabled={isMutating || !game.canStart} type="button" onClick={() => void runAction("start")}>Start Game</button> : null}
             </div>
-            {game.isCreator && game.status === "upcoming" && !game.creatorRole ? <p className="muted-text">Choose Join Game or Watch Game before starting.</p> : null}
           </section>
           <aside className="workspace-card game-leaderboard-panel">
-            <p className="eyebrow">Accepted competitors</p>
+            <p className="eyebrow">Test Waiting Room</p>
             <h2>{game.acceptedCount} ready</h2>
             <div className="game-lobby-roster">
               {game.participants.map((participant, index) => (
@@ -439,7 +446,39 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
     );
   }
 
+  async function handleSubmitGameQuestionReview(questionId: string) {
+    if (isReviewing || !game) return;
+    setIsReviewing(true);
+    setReviewFeedback(null);
+    try {
+      await readJson(
+        await fetch(`/api/user/games/${encodeURIComponent(gameId)}${getQuery()}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            questionId,
+            reason: reviewReason.trim(),
+          }),
+        }),
+      );
+      setLocalReviewedIds((current) => [...new Set([...current, questionId])]);
+      setLocalReviewCountDelta((current) => current + 1);
+      setReviewingQuestionId(null);
+      setReviewReason("");
+      setReviewFeedback("Question submitted for review.");
+      await loadGame({ silent: true });
+    } catch (error) {
+      setReviewFeedback(error instanceof Error ? error.message : "Unable to submit question for review.");
+    } finally {
+      setIsReviewing(false);
+    }
+  }
+
   if (game.status === "completed") {
+    const reviewedSet = new Set([...(game.reportedQuestionIds ?? []), ...localReviewedIds]);
+    const myReviewCount = (game.myReportedQuestionCount ?? 0) + localReviewCountDelta;
+    const hasReachedUserReviewLimit = myReviewCount >= 2;
+
     return (
       <div className="game-page-stack">
         {userBanner}
@@ -454,6 +493,7 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
             </tr></tbody>
           </table>
         </div>
+        {reviewFeedback ? <p className="muted-text" role="status">{reviewFeedback}</p> : null}
         <div className="game-runner-layout">
           <section className="workspace-card game-question-panel">
             <p className="eyebrow">{game.isMissed ? game.rulesVersion === 4 ? "Absent" : "Missed game" : "Completed game"}</p>
@@ -463,12 +503,69 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
               <div className="review-list game-question-review-list">
                 {game.reviewQuestions.map((question) => {
                   const pointsValue = question.answer ? question.answer.points : game.rules.incorrectPoints;
+                  const isQuestionReviewed = reviewedSet.has(question.id);
                   return (
                   <article className="game-question-review" key={question.id}>
                     <div className="question-head">
                       <h2>{question.questionIndex + 1}. {question.prompt}</h2>
-                      <strong>{pointsValue >= 0 ? "+" : ""}{pointsValue}</strong>
+                      <div className="inline-actions">
+                        <strong>{pointsValue >= 0 ? "+" : ""}{pointsValue}</strong>
+                        <button
+                          className={isQuestionReviewed ? "button small-button" : "button-secondary small-button"}
+                          disabled={isReviewing || isQuestionReviewed || hasReachedUserReviewLimit}
+                          type="button"
+                          onClick={() => {
+                            if (reviewingQuestionId === question.id) {
+                              setReviewingQuestionId(null);
+                              setReviewReason("");
+                            } else {
+                              setReviewingQuestionId(question.id);
+                              setReviewReason("");
+                            }
+                          }}
+                        >
+                          {isQuestionReviewed ? "Reviewed" : "Review"}
+                        </button>
+                      </div>
                     </div>
+                    {question.imageDataUrl ? (
+                      <div className="question-image-container">
+                        <img alt={`Question ${question.questionIndex + 1} illustration`} className="question-illustration-image" loading="lazy" src={question.imageDataUrl} />
+                      </div>
+                    ) : null}
+                    {reviewingQuestionId === question.id && !isQuestionReviewed && !hasReachedUserReviewLimit ? (
+                      <div className="field-row align-end test-results-report-box">
+                        <div className="field grow-field">
+                          <label htmlFor={`game-review-reason-${question.id}`}>Description (max 20 characters)</label>
+                          <input
+                            id={`game-review-reason-${question.id}`}
+                            maxLength={20}
+                            placeholder="Max 20 chars"
+                            value={reviewReason}
+                            onChange={(event) => setReviewReason(event.target.value.slice(0, 20))}
+                          />
+                        </div>
+                        <button
+                          className="button small-button"
+                          disabled={isReviewing}
+                          type="button"
+                          onClick={() => void handleSubmitGameQuestionReview(question.id)}
+                        >
+                          {isReviewing ? "Submitting..." : "Submit review"}
+                        </button>
+                        <button
+                          className="button-secondary small-button"
+                          disabled={isReviewing}
+                          type="button"
+                          onClick={() => {
+                            setReviewingQuestionId(null);
+                            setReviewReason("");
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : null}
                     <div className="game-review-options">
                       {question.options.map((option, optionIndex) => {
                         const isCorrect = optionIndex === question.correctOptionIndex;
@@ -522,6 +619,11 @@ export function UserGameRunner({ autoAccept = false, authConfigured, defaultPart
         {game.currentQuestion ? (
           <div className="form-stack">
             <h2>{game.currentQuestion.prompt}</h2>
+            {game.currentQuestion.imageDataUrl ? (
+              <div className="question-image-container">
+                <img alt="Question illustration" className="question-illustration-image" src={game.currentQuestion.imageDataUrl} />
+              </div>
+            ) : null}
             <div className="game-answer-grid">
               {shuffleOptionIndexesWithSeed(
                 game.currentQuestion.options,

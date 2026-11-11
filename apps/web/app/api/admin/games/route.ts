@@ -29,6 +29,7 @@ export async function POST(request: Request) {
       participantGroupId?: string;
       participantGroupIds?: string[];
       poolId?: string;
+      sendWhatsAppNotification?: boolean;
       title?: string;
     };
 
@@ -43,6 +44,7 @@ export async function POST(request: Request) {
       participantGroupId: body.participantGroupId,
       participantGroupIds: body.participantGroupIds,
       poolId: body.poolId,
+      sendWhatsAppNotification: Boolean(body.sendWhatsAppNotification),
       title: body.title,
     });
 

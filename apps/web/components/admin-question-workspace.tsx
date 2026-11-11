@@ -356,9 +356,11 @@ function formatBusinessTimeRange(startMinutes: number, endMinutes: number) {
 }
 
 function parseDateTimeInputValue(value: string) {
-  const [datePart, timePart = "00:00"] = value.split("T");
-  const [year, month, day] = datePart.split("-").map(Number);
-  const [hours, minutes] = timePart.split(":").map(Number);
+  const safeValue = (value ?? "").trim();
+  if (!safeValue) return null;
+  const [datePart, timePart = "00:00"] = safeValue.split("T");
+  const [year, month, day] = (datePart ?? "").split("-").map(Number);
+  const [hours, minutes] = (timePart ?? "00:00").split(":").map(Number);
 
   if (![year, month, day, hours, minutes].every(Number.isFinite)) {
     return null;
@@ -403,10 +405,11 @@ function addMonthsToDateTimeInput(value: string, monthOffset: number) {
 }
 
 function addDaysToDateTimeInput(value: string, dayOffset: number) {
-  const date = new Date(value);
+  const safeValue = (value ?? "").trim();
+  const date = new Date(safeValue);
 
-  if (Number.isNaN(date.getTime())) {
-    return value;
+  if (!safeValue || Number.isNaN(date.getTime())) {
+    return safeValue;
   }
 
   date.setDate(date.getDate() + dayOffset);
@@ -414,16 +417,17 @@ function addDaysToDateTimeInput(value: string, dayOffset: number) {
 }
 
 function getRecurringScheduleInputs(startsAtInput: string, repeatMode: TestRepeatMode) {
-  if (repeatMode === "none") {
-    return [startsAtInput];
+  const safeInput = (startsAtInput ?? "").trim();
+  if (repeatMode === "none" || !safeInput) {
+    return [safeInput];
   }
 
   return Array.from({ length: RECURRING_TEST_INSTANCE_COUNT }, (_, index) => {
     if (repeatMode === "monthly") {
-      return addMonthsToDateTimeInput(startsAtInput, index);
+      return addMonthsToDateTimeInput(safeInput, index);
     }
 
-    return addDaysToDateTimeInput(startsAtInput, repeatMode === "weekly" ? index * 7 : index);
+    return addDaysToDateTimeInput(safeInput, repeatMode === "weekly" ? index * 7 : index);
   });
 }
 
@@ -1300,6 +1304,56 @@ async function fileToDataUrl(file: File) {
   });
 }
 
+async function compressQuestionImageFile(file: File): Promise<string> {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("Choose a valid image file.");
+  }
+  const rawDataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => (typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Unable to read the selected image.")));
+    reader.onerror = () => reject(new Error("Unable to read the selected image."));
+    reader.readAsDataURL(file);
+  });
+
+  if (typeof document === "undefined") {
+    return rawDataUrl;
+  }
+
+  return new Promise<string>((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      try {
+        const maxDimension = 720;
+        let width = img.naturalWidth || img.width || maxDimension;
+        let height = img.naturalHeight || img.height || maxDimension;
+        if (width > maxDimension || height > maxDimension) {
+          const scale = Math.min(maxDimension / width, maxDimension / height);
+          width = Math.max(1, Math.round(width * scale));
+          height = Math.max(1, Math.round(height * scale));
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+          resolve(rawDataUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        let compressed = canvas.toDataURL("image/webp", 0.65);
+        if (!compressed.startsWith("data:image/webp")) {
+          compressed = canvas.toDataURL("image/jpeg", 0.65);
+        }
+        resolve(compressed.length < rawDataUrl.length ? compressed : rawDataUrl);
+      } catch {
+        resolve(rawDataUrl);
+      }
+    };
+    img.onerror = () => resolve(rawDataUrl);
+    img.src = rawDataUrl;
+  });
+}
+
 type AdminWorkspaceSection =
   | "analytics-coming-soon"
   | "apportion"
@@ -1360,6 +1414,7 @@ type ShuffledQuestion = {
 
 type EditableQuestionDraft = {
   correctOptionIndex: number;
+  imageDataUrl?: string | null;
   options: string[];
   prompt: string;
 };
@@ -1749,6 +1804,11 @@ export function AdminQuestionWorkspace({
   const [groupAttendanceOffsetByRecordId, setGroupAttendanceOffsetByRecordId] = useState<Record<string, number>>({});
   const [groupIntroAdminPhoneByRecordId, setGroupIntroAdminPhoneByRecordId] = useState<Record<string, string>>({});
   const [isContactUsOpen, setIsContactUsOpen] = useState(false);
+  const [isNotificationsModalOpen, setIsNotificationsModalOpen] = useState(false);
+  const [whatsappNotificationsEnabled, setWhatsappNotificationsEnabled] = useState(true);
+  const [isSavingWhatsappPreference, setIsSavingWhatsappPreference] = useState(false);
+  const [isWhatsAppScheduleConfirmOpen, setIsWhatsAppScheduleConfirmOpen] = useState(false);
+  const [isProcessingRazorpayUpgrade, setIsProcessingRazorpayUpgrade] = useState(false);
   const [superAdminUpgradePendingRow, setSuperAdminUpgradePendingRow] = useState<{
     identifier: string;
     targetCategory: NormalUserCategory;
@@ -2203,8 +2263,55 @@ export function AdminQuestionWorkspace({
   }, []);
 
   useEffect(() => {
-    participantAnswersRef.current = participantAnswers;
-  }, [participantAnswers]);
+    let active = true;
+    async function loadWhatsappPreference() {
+      try {
+        const response = await fetch("/api/user/apportion?whatsappPreference=1");
+        if (!response.ok) return;
+        const payload = (await response.json()) as { whatsappEnabled?: boolean };
+        if (active && typeof payload.whatsappEnabled === "boolean") {
+          setWhatsappNotificationsEnabled(payload.whatsappEnabled);
+        }
+      } catch {
+        // Ignore preference load failures
+      }
+    }
+    void loadWhatsappPreference();
+    function handlePreferenceChanged(event: Event) {
+      const detail = (event as CustomEvent<{ whatsappEnabled?: boolean }>).detail;
+      if (typeof detail?.whatsappEnabled === "boolean") {
+        setWhatsappNotificationsEnabled(detail.whatsappEnabled);
+      }
+    }
+    window.addEventListener("trapit:whatsapp-preference-changed", handlePreferenceChanged);
+    return () => {
+      active = false;
+      window.removeEventListener("trapit:whatsapp-preference-changed", handlePreferenceChanged);
+    };
+  }, []);
+
+  async function handleUpdateWhatsappNotificationsPreference(nextEnabled: boolean) {
+    setWhatsappNotificationsEnabled(nextEnabled);
+    setIsSavingWhatsappPreference(true);
+    try {
+      const response = await fetch("/api/user/apportion", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set-whatsapp-preference", whatsappEnabled: nextEnabled }),
+      });
+      if (response.ok) {
+        const payload = (await response.json()) as { whatsappEnabled?: boolean };
+        if (typeof payload.whatsappEnabled === "boolean") {
+          setWhatsappNotificationsEnabled(payload.whatsappEnabled);
+        }
+        window.dispatchEvent(new CustomEvent("trapit:whatsapp-preference-changed", { detail: { whatsappEnabled: nextEnabled } }));
+      }
+    } catch {
+      // Keep local selection
+    } finally {
+      setIsSavingWhatsappPreference(false);
+    }
+  }
 
   useEffect(() => {
     if (!authorPoolId) {
@@ -3578,6 +3685,7 @@ export function AdminQuestionWorkspace({
       if (question.canManage) {
         nextDrafts[question.id] = {
           correctOptionIndex: question.correctOptionIndex,
+          imageDataUrl: question.imageDataUrl ?? null,
           options: [...question.options],
           prompt: question.prompt,
         };
@@ -3586,6 +3694,41 @@ export function AdminQuestionWorkspace({
     setPoolQuestionDrafts(nextDrafts);
     setIsEditingQuestionPool(true);
     setFeedback(null);
+  }
+
+  async function handlePoolQuestionImageSelect(questionId: string, file: File | null) {
+    if (!file) return;
+    try {
+      const compressedDataUrl = await compressQuestionImageFile(file);
+      setPoolQuestionDrafts((currentDrafts) => {
+        const currentDraft = currentDrafts[questionId];
+        if (!currentDraft) return currentDrafts;
+        return {
+          ...currentDrafts,
+          [questionId]: {
+            ...currentDraft,
+            imageDataUrl: compressedDataUrl,
+          },
+        };
+      });
+      setFeedback(null);
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Unable to process question image.");
+    }
+  }
+
+  function handleRemovePoolQuestionImage(questionId: string) {
+    setPoolQuestionDrafts((currentDrafts) => {
+      const currentDraft = currentDrafts[questionId];
+      if (!currentDraft) return currentDrafts;
+      return {
+        ...currentDrafts,
+        [questionId]: {
+          ...currentDraft,
+          imageDataUrl: null,
+        },
+      };
+    });
   }
 
   function handleCancelEditingQuestionPool() {
@@ -5345,7 +5488,52 @@ export function AdminQuestionWorkspace({
         setScheduleFeedback("Select a pool with at least 20 questions.");
         return;
       }
+      if (!editingScheduledTestId && whatsappNotificationsEnabled) {
+        setIsWhatsAppScheduleConfirmOpen(true);
+        return;
+      }
+      executeScheduleTest(false);
+      return;
+    }
 
+    const durationMinutes = Number(scheduleDurationMinutes);
+    const questionCount = Number(scheduleQuestionCount);
+
+    if (!Number.isFinite(durationMinutes) || durationMinutes < 1) {
+      setScheduleFeedback("Duration must be at least 1 minute.");
+      return;
+    }
+
+    if (!Number.isFinite(questionCount) || questionCount < 1) {
+      setScheduleFeedback("Question count must be at least 1.");
+      return;
+    }
+    if ((pools.find((pool) => pool.id === schedulePoolId)?.questionIds.length ?? 0) < questionCount) {
+      setScheduleFeedback("Select a pool with enough questions.");
+      return;
+    }
+
+    if (isScheduleSelfTestSelected && !currentAdminIdentifier) {
+      setScheduleFeedback("Your account needs a participant identifier before you can create a self test.");
+      return;
+    }
+
+    if (assessmentKind !== "instant" && (!scheduleStartsAtInput || Number.isNaN(new Date(scheduleStartsAtInput).getTime()))) {
+      setScheduleFeedback("Choose a valid test date and time.");
+      return;
+    }
+
+    if (!editingScheduledTestId && whatsappNotificationsEnabled) {
+      setIsWhatsAppScheduleConfirmOpen(true);
+      return;
+    }
+
+    executeScheduleTest(false);
+  }
+
+  function executeScheduleTest(sendWhatsAppNotification: boolean) {
+    setIsWhatsAppScheduleConfirmOpen(false);
+    if (isGameMode) {
       const waitingRoomTab = window.open("about:blank", "_blank");
       let gameCreated = false;
       if (waitingRoomTab) {
@@ -5359,6 +5547,7 @@ export function AdminQuestionWorkspace({
             body: JSON.stringify({
               participantGroupIds: selectedScheduleGroupIds,
               poolId: schedulePoolId,
+              sendWhatsAppNotification,
               title: scheduleTitle.trim(),
             }),
             headers: { "Content-Type": "application/json" },
@@ -5388,37 +5577,16 @@ export function AdminQuestionWorkspace({
 
     const durationMinutes = Number(scheduleDurationMinutes);
     const questionCount = Number(scheduleQuestionCount);
-
-    if (!Number.isFinite(durationMinutes) || durationMinutes < 1) {
-      setScheduleFeedback("Duration must be at least 1 minute.");
-      return;
-    }
-
-    if (!Number.isFinite(questionCount) || questionCount < 1) {
-      setScheduleFeedback("Question count must be at least 1.");
-      return;
-    }
-    if ((pools.find((pool) => pool.id === schedulePoolId)?.questionIds.length ?? 0) < questionCount) {
-      setScheduleFeedback("Select a pool with enough questions.");
-      return;
-    }
-
-    if (isScheduleSelfTestSelected && !currentAdminIdentifier) {
-      setScheduleFeedback("Your account needs a participant identifier before you can create a self test.");
-      return;
-    }
-
-    if (!scheduleStartsAtInput || Number.isNaN(new Date(scheduleStartsAtInput).getTime())) {
-      setScheduleFeedback("Choose a valid test date and time.");
-      return;
-    }
-
-    const startsAt = assessmentKind === "instant" && !editingScheduledTestId ? new Date().toISOString() : new Date(scheduleStartsAtInput).toISOString();
+    const effectiveStartsAtInput = (scheduleStartsAtInput ?? "").trim() || createDefaultScheduleTime();
+    const startsAt = assessmentKind === "instant" && !editingScheduledTestId ? new Date().toISOString() : new Date(effectiveStartsAtInput).toISOString();
     const scheduleStartInputs = getRecurringScheduleInputs(
-      scheduleStartsAtInput,
+      effectiveStartsAtInput,
       editingScheduledTestId ? "none" : scheduleRepeatMode,
     );
-    const recurrenceStartsAt = scheduleStartInputs.map((value) => new Date(value).toISOString());
+    const recurrenceStartsAt = scheduleStartInputs.map((value) => {
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? startsAt : parsed.toISOString();
+    });
 
     void mutateWorkspace(async () => {
       await readJson<ScheduledTestsResponse>(
@@ -5434,6 +5602,7 @@ export function AdminQuestionWorkspace({
             questionCount,
             recurrenceStartsAt: editingScheduledTestId ? undefined : recurrenceStartsAt,
             repeatMode: editingScheduledTestId ? "none" : scheduleRepeatMode,
+            sendWhatsAppNotification,
             startsAt,
             testId: editingScheduledTestId,
             title: scheduleTitle.trim(),
@@ -6540,10 +6709,22 @@ export function AdminQuestionWorkspace({
   }
 
   async function handleRequestCategoryUpgrade(requestedCategory: NormalUserCategory) {
+    if (isProcessingRazorpayUpgrade) return;
+    setIsProcessingRazorpayUpgrade(true);
+    setCategoryFeedback(null);
     try {
-      const payload = await readJson<UserCategorySnapshotResponse>(
+      const orderPayload = await readJson<{
+        amount: number;
+        currency: string;
+        keyId: string;
+        orderId: string;
+        requestedCategory: NormalUserCategory;
+      }>(
         await fetch("/api/user/category", {
-          body: JSON.stringify({ requestedCategory }),
+          body: JSON.stringify({
+            action: "create-razorpay-order",
+            requestedCategory,
+          }),
           headers: {
             "Content-Type": "application/json",
           },
@@ -6551,20 +6732,80 @@ export function AdminQuestionWorkspace({
         }),
       );
 
-      setCategorySnapshot(payload);
-      setCategoryFeedback(
-        `Upgrade request for ${requestedCategory === "trapit-pro-max" ? "TRAPit Pro Max" : "TRAPit Pro"} sent to the super admin.`,
-      );
-      setUpgradePrompt((currentPrompt) =>
-        currentPrompt
-          ? {
-              ...currentPrompt,
-              targetCategory: requestedCategory,
+      if (typeof window !== "undefined") {
+        const win = window as typeof window & {
+          Razorpay?: new (options: Record<string, unknown>) => { open: () => void };
+        };
+        if (!win.Razorpay) {
+          await new Promise<void>((resolve, reject) => {
+            const existingScript = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+            if (existingScript) {
+              existingScript.addEventListener("load", () => resolve(), { once: true });
+              existingScript.addEventListener("error", () => reject(new Error("Unable to load Razorpay Checkout.")), { once: true });
+              return;
             }
-          : currentPrompt,
-      );
+            const script = document.createElement("script");
+            script.src = "https://checkout.razorpay.com/v1/checkout.js";
+            script.async = true;
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error("Unable to load Razorpay Checkout."));
+            document.body.appendChild(script);
+          });
+        }
+
+        if (!win.Razorpay) {
+          throw new Error("Razorpay Checkout is unavailable.");
+        }
+
+        const rzp = new win.Razorpay({
+          amount: orderPayload.amount,
+          currency: orderPayload.currency,
+          description: requestedCategory === "trapit-pro-max" ? "TRAPit Pro Max (1 Month)" : "TRAPit Pro (1 Month)",
+          handler: async (response: {
+            razorpay_order_id?: string;
+            razorpay_payment_id?: string;
+            razorpay_signature?: string;
+          }) => {
+            try {
+              const verifiedSnapshot = await readJson<UserCategorySnapshotResponse>(
+                await fetch("/api/user/category", {
+                  body: JSON.stringify({
+                    action: "verify-razorpay-payment",
+                    razorpayOrderId: response.razorpay_order_id,
+                    razorpayPaymentId: response.razorpay_payment_id,
+                    razorpaySignature: response.razorpay_signature,
+                    requestedCategory,
+                  }),
+                  headers: {
+                    "Content-Type": "application/json",
+                  },
+                  method: "POST",
+                }),
+              );
+              setCategorySnapshot(verifiedSnapshot);
+              setCategoryFeedback("Payment successful! Your membership has been upgraded.");
+              setIsUpgradePanelOpen(false);
+              await loadWorkspace();
+              window.location.reload();
+            } catch (verifyError) {
+              setCategoryFeedback(
+                verifyError instanceof Error ? verifyError.message : "Payment verification failed.",
+              );
+            }
+          },
+          key: orderPayload.keyId,
+          name: "TRAPit.in",
+          order_id: orderPayload.orderId,
+          prefill: {
+            contact: currentAdminIdentifier ?? "",
+          },
+        });
+        rzp.open();
+      }
     } catch (error) {
-      setCategoryFeedback(error instanceof Error ? error.message : "Unable to send the upgrade request.");
+      setCategoryFeedback(error instanceof Error ? error.message : "Unable to start Razorpay payment.");
+    } finally {
+      setIsProcessingRazorpayUpgrade(false);
     }
   }
 
@@ -6744,6 +6985,16 @@ export function AdminQuestionWorkspace({
                     className="workspace-overflow-action"
                     type="button"
                     onClick={() => {
+                      setIsNotificationsModalOpen(true);
+                      setIsOverflowMenuOpen(false);
+                    }}
+                  >
+                    Notifications
+                  </button>
+                  <button
+                    className="workspace-overflow-action"
+                    type="button"
+                    onClick={() => {
                       setIsContactUsOpen(true);
                       setIsOverflowMenuOpen(false);
                     }}
@@ -6776,85 +7027,102 @@ export function AdminQuestionWorkspace({
                 <h2 className="section-title" id="upgrade-modal-title">
                   {upgradePrompt?.message ?? (effectiveUserCategory === "trapit-normal" ? "Upgrade to Pro or Pro max" : effectiveUserCategory === "trapit-pro" ? "Upgrade to Pro max" : "Membership Plan")}
                 </h2>
-                {(effectiveUserCategory === "trapit-pro" || effectiveUserCategory === "trapit-pro-max") ? (
-                  <p className="muted-text">
-                    Days remaining:{" "}
-                    <strong>
-                      {categorySnapshot?.activeAssignment?.expiresAt
-                        ? Math.max(0, Math.ceil((new Date(categorySnapshot.activeAssignment.expiresAt).getTime() - Date.now()) / 86_400_000))
-                        : "—"}
-                    </strong>
-                  </p>
-                ) : null}
               </div>
               <FloatingWindowCloseButton label="Close Upgrade Modal" onClick={() => setIsUpgradePanelOpen(false)} />
             </div>
 
-            <div className="leaderboard-table-wrap membership-upgrade-table-wrap">
-              <table className="leaderboard-table membership-upgrade-table">
-                <thead>
-                  <tr>
-                    <th scope="col">S.N.</th>
-                    <th scope="col">Features</th>
-                    <th className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined} scope="col">Free (0)</th>
-                    <th className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined} scope="col">Pro (10,000 / 12 months)</th>
-                    <th className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined} scope="col">Pro Max (20,000 / 12 months)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>1</td>
-                    <td>Test: Schedule test / month</td>
-                    <td className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined}>-</td>
-                    <td className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined}>10</td>
-                    <td className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined}>20</td>
-                  </tr>
-                  <tr>
-                    <td>2</td>
-                    <td>Apportion: Business Panel (services per address)</td>
-                    <td className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined}>-</td>
-                    <td className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined}>4</td>
-                    <td className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined}>10</td>
-                  </tr>
-                  <tr>
-                    <td>3</td>
-                    <td>Poll: Schedule Polls (open to all polls)</td>
-                    <td className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined}>-</td>
-                    <td className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined}>-</td>
-                    <td className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined}>10</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+            {(() => {
+              const daysRemainingCount = categorySnapshot?.activeAssignment?.expiresAt
+                ? Math.max(0, Math.ceil((new Date(categorySnapshot.activeAssignment.expiresAt).getTime() - Date.now()) / 86_400_000))
+                : null;
+              const daysRemainingLabel = daysRemainingCount !== null
+                ? `${daysRemainingCount} day${daysRemainingCount === 1 ? "" : "s"} remaining`
+                : "Active";
+              const isProClickable = effectiveUserCategory === "trapit-normal";
+              const isProMaxClickable = effectiveUserCategory === "trapit-normal" || effectiveUserCategory === "trapit-pro";
 
-            {effectiveUserCategory !== "trapit-pro-max" ? (
-              <div className="inline-actions upgrade-modal-actions">
-                {(upgradePrompt?.showProButton ?? (effectiveUserCategory === "trapit-normal")) ? (
-                  <button
-                    className="button"
-                    type="button"
-                    onClick={() => void handleRequestCategoryUpgrade("trapit-pro")}
-                  >
-                    TRAPit Pro
-                  </button>
-                ) : null}
-                {(upgradePrompt?.showProMaxButton ?? true) ? (
-                  <button
-                    className="button"
-                    type="button"
-                    onClick={() => void handleRequestCategoryUpgrade("trapit-pro-max")}
-                  >
-                    TRAPit Pro Max
-                  </button>
-                ) : null}
-              </div>
-            ) : null}
+              return (
+                <div className="leaderboard-table-wrap membership-upgrade-table-wrap">
+                  <table className="leaderboard-table membership-upgrade-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">S.N.</th>
+                        <th scope="col">Features</th>
+                        <th className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined} scope="col">
+                          <div className="upgrade-tier-header-cell">
+                            <span className="upgrade-tier-title">Free</span>
+                          </div>
+                        </th>
+                        <th className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined} scope="col">
+                          {isProClickable ? (
+                            <button
+                              className="upgrade-tier-clickable-button"
+                              disabled={isProcessingRazorpayUpgrade}
+                              type="button"
+                              onClick={() => void handleRequestCategoryUpgrade("trapit-pro")}
+                            >
+                              <span className="upgrade-tier-title">Pro</span>
+                              <span className="upgrade-tier-subline">Charges: INR 250/month.</span>
+                            </button>
+                          ) : (
+                            <div className="upgrade-tier-header-cell">
+                              <span className="upgrade-tier-title">Pro</span>
+                              {effectiveUserCategory === "trapit-pro" ? (
+                                <span className="upgrade-tier-subline">{daysRemainingLabel}</span>
+                              ) : null}
+                            </div>
+                          )}
+                        </th>
+                        <th className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined} scope="col">
+                          {isProMaxClickable ? (
+                            <button
+                              className="upgrade-tier-clickable-button"
+                              disabled={isProcessingRazorpayUpgrade}
+                              type="button"
+                              onClick={() => void handleRequestCategoryUpgrade("trapit-pro-max")}
+                            >
+                              <span className="upgrade-tier-title">Pro Max</span>
+                              <span className="upgrade-tier-subline">Charges: INR 500/month.</span>
+                            </button>
+                          ) : (
+                            <div className="upgrade-tier-header-cell">
+                              <span className="upgrade-tier-title">Pro Max</span>
+                              {effectiveUserCategory === "trapit-pro-max" ? (
+                                <span className="upgrade-tier-subline">{daysRemainingLabel}</span>
+                              ) : null}
+                            </div>
+                          )}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>1</td>
+                        <td>Test: Schedule test / month</td>
+                        <td className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined}>-</td>
+                        <td className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined}>10</td>
+                        <td className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined}>20</td>
+                      </tr>
+                      <tr>
+                        <td>2</td>
+                        <td>Apportion: Business Panel (services per address)</td>
+                        <td className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined}>-</td>
+                        <td className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined}>4</td>
+                        <td className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined}>10</td>
+                      </tr>
+                      <tr>
+                        <td>3</td>
+                        <td>Poll: Schedule Polls (open to all polls)</td>
+                        <td className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined}>-</td>
+                        <td className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined}>-</td>
+                        <td className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined}>10</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
 
-            {userPendingCategoryRequest ? (
-              <p className="muted-text">
-                Request pending: <strong>{userPendingCategoryRequest.requestedCategory === "trapit-pro-max" ? "TRAPit Pro Max" : "TRAPit Pro"}</strong>
-              </p>
-            ) : null}
             {categoryFeedback ? <p className="muted-text">{categoryFeedback}</p> : null}
           </div>
         </div>,
@@ -7085,8 +7353,97 @@ export function AdminQuestionWorkspace({
                 <p><strong>Business Name:</strong> TRAPit.in</p>
                 <p><strong>Contact Number:</strong> +91-8800797123</p>
                 <p><strong>Email:</strong> trapitdotin@gmail.com</p>
-                <p><strong>Operating Address:</strong> Flat-1144, ATS Marigold, Sector 89A, Gurugram, Haryana (122505)</p>
+                <p><strong>Operating Address:</strong> Sector 89A, Gurugram, Haryana (122505), INDIA</p>
               </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+
+      {isNotificationsModalOpen && typeof document !== "undefined" ? createPortal(
+        <div className="apportion-modal-overlay" role="presentation" onClick={() => setIsNotificationsModalOpen(false)}>
+          <div
+            aria-labelledby="notifications-modal-title"
+            aria-modal="true"
+            className="apportion-floating-drawer notifications-preferences-modal panel"
+            role="dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="workspace-overflow-head">
+              <div>
+                <p className="eyebrow">TRAPit</p>
+                <h2 className="section-title" id="notifications-modal-title">Notifications</h2>
+              </div>
+              <FloatingWindowCloseButton label="Close Notifications" onClick={() => setIsNotificationsModalOpen(false)} />
+            </div>
+            <div className="form-stack">
+              <div className="question-card nested-card">
+                <div className="field">
+                  <span className="field-label">Send whatsapp notification:</span>
+                  <div aria-label="Send whatsapp notification" className="business-choice-row" role="group">
+                    <button
+                      aria-pressed={whatsappNotificationsEnabled}
+                      className="business-choice-button"
+                      disabled={isSavingWhatsappPreference}
+                      type="button"
+                      onClick={() => void handleUpdateWhatsappNotificationsPreference(true)}
+                    >
+                      Yes
+                    </button>
+                    <button
+                      aria-pressed={!whatsappNotificationsEnabled}
+                      className="business-choice-button"
+                      disabled={isSavingWhatsappPreference}
+                      type="button"
+                      onClick={() => void handleUpdateWhatsappNotificationsPreference(false)}
+                    >
+                      No
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+
+      {isWhatsAppScheduleConfirmOpen && typeof document !== "undefined" ? createPortal(
+        <div className="apportion-modal-overlay" role="presentation" onClick={() => setIsWhatsAppScheduleConfirmOpen(false)}>
+          <div
+            aria-labelledby="whatsapp-schedule-confirm-title"
+            aria-modal="true"
+            className="apportion-floating-drawer whatsapp-schedule-confirm-modal panel"
+            role="dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="workspace-overflow-head">
+              <div>
+                <p className="eyebrow">WhatsApp Notification</p>
+                <h2 className="section-title" id="whatsapp-schedule-confirm-title">
+                  Do you want to send whatsapp notification messages?
+                </h2>
+              </div>
+              <FloatingWindowCloseButton label="Close WhatsApp Confirmation" onClick={() => setIsWhatsAppScheduleConfirmOpen(false)} />
+            </div>
+            <div className="inline-actions">
+              <button
+                className="button"
+                disabled={isMutating}
+                type="button"
+                onClick={() => executeScheduleTest(true)}
+              >
+                Yes
+              </button>
+              <button
+                className="button-secondary"
+                disabled={isMutating}
+                type="button"
+                onClick={() => executeScheduleTest(false)}
+              >
+                No
+              </button>
             </div>
           </div>
         </div>,
@@ -7521,7 +7878,7 @@ export function AdminQuestionWorkspace({
                         : [];
 
                       const isAttendanceEnabled = Boolean(group.attendanceTrackingEnabled);
-                      const creatorOffsetWeeks = groupAttendanceOffsetByRecordId[creatorRecord.id] ?? 0;
+                      const creatorOffsetWeeks = groupAttendanceOffsetByRecordId[group.id] ?? 0;
                       const creatorAttendanceWindow = buildGroupAttendanceCalendarWindow(creatorOffsetWeeks, group.createdAt);
 
                       return (
@@ -7680,7 +8037,7 @@ export function AdminQuestionWorkspace({
                                         onClick={() =>
                                           setGroupAttendanceOffsetByRecordId((current) => ({
                                             ...current,
-                                            [creatorRecord.id]: creatorAttendanceWindow.clampedOffsetWeeks - 1,
+                                            [group.id]: creatorAttendanceWindow.clampedOffsetWeeks - 1,
                                           }))
                                         }
                                       >
@@ -7716,7 +8073,7 @@ export function AdminQuestionWorkspace({
                                         onClick={() =>
                                           setGroupAttendanceOffsetByRecordId((current) => ({
                                             ...current,
-                                            [creatorRecord.id]: Math.min(0, creatorAttendanceWindow.clampedOffsetWeeks + 1),
+                                            [group.id]: Math.min(0, creatorAttendanceWindow.clampedOffsetWeeks + 1),
                                           }))
                                         }
                                       >
@@ -7727,7 +8084,7 @@ export function AdminQuestionWorkspace({
                                 ) : null}
                               </tr>
                               {memberAndRequestRecords.map((record, index) => {
-                                const offsetWeeks = groupAttendanceOffsetByRecordId[record.id] ?? 0;
+                                const offsetWeeks = groupAttendanceOffsetByRecordId[group.id] ?? 0;
                                 const attendanceWindow = buildGroupAttendanceCalendarWindow(offsetWeeks, group.createdAt);
                                 const isMemberAdmin = Boolean(
                                   record.isGroupAdmin
@@ -7847,7 +8204,7 @@ export function AdminQuestionWorkspace({
                                               onClick={() =>
                                                 setGroupAttendanceOffsetByRecordId((current) => ({
                                                   ...current,
-                                                  [record.id]: attendanceWindow.clampedOffsetWeeks - 1,
+                                                  [group.id]: attendanceWindow.clampedOffsetWeeks - 1,
                                                 }))
                                               }
                                             >
@@ -7883,7 +8240,7 @@ export function AdminQuestionWorkspace({
                                               onClick={() =>
                                                 setGroupAttendanceOffsetByRecordId((current) => ({
                                                   ...current,
-                                                  [record.id]: Math.min(0, attendanceWindow.clampedOffsetWeeks + 1),
+                                                  [group.id]: Math.min(0, attendanceWindow.clampedOffsetWeeks + 1),
                                                 }))
                                               }
                                             >
@@ -8478,6 +8835,40 @@ export function AdminQuestionWorkspace({
                             />
                           </div>
 
+                          <div className="field question-image-upload-field">
+                            <label htmlFor={`edit-question-image-${question.id}`}>Question Image (compressed automatically)</label>
+                            <div className="inline-actions">
+                              <input
+                                accept="image/*"
+                                id={`edit-question-image-${question.id}`}
+                                type="file"
+                                onChange={(event) => {
+                                  const file = event.target.files?.[0] ?? null;
+                                  void handlePoolQuestionImageSelect(question.id, file);
+                                  event.target.value = "";
+                                }}
+                              />
+                              {activePoolDraft.imageDataUrl ? (
+                                <button
+                                  className="button-secondary small-button"
+                                  type="button"
+                                  onClick={() => handleRemovePoolQuestionImage(question.id)}
+                                >
+                                  Remove image
+                                </button>
+                              ) : null}
+                            </div>
+                            {activePoolDraft.imageDataUrl ? (
+                              <div className="question-image-container">
+                                <img
+                                  alt={`Preview for question ${index + 1}`}
+                                  className="question-illustration-image"
+                                  src={activePoolDraft.imageDataUrl}
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+
                           <div className="inline-actions">
                             <button
                               className={activePoolDraft.options.length === 4 ? "button" : "button-secondary"}
@@ -8536,6 +8927,16 @@ export function AdminQuestionWorkspace({
                       ) : (
                         <>
                           <p className="compact-question-prompt">{question.prompt}</p>
+                          {question.imageDataUrl ? (
+                            <div className="question-image-container">
+                              <img
+                                alt={`Question ${index + 1} illustration`}
+                                className="question-illustration-image"
+                                loading="lazy"
+                                src={question.imageDataUrl}
+                              />
+                            </div>
+                          ) : null}
                           <ol className="question-options compact-question-options">
                             {question.options.map((option, optionIndex) => (
                               <li key={`${question.id}-${optionIndex}`}>
@@ -8915,7 +9316,18 @@ export function AdminQuestionWorkspace({
                     className="business-choice-button"
                     disabled={isGameMode}
                     type="button"
-                    onClick={() => { setScheduleQuestionCount(String(editingScheduledTest.questionCount)); setSchedulePoolId(""); }}
+                    onClick={() => {
+                      const nextCount = editingScheduledTest.questionCount;
+                      setScheduleQuestionCount(String(nextCount));
+                      setSchedulePoolId((currentPoolId) => {
+                        if (!currentPoolId) return "";
+                        const currentPool = pools.find((pool) => pool.id === currentPoolId);
+                        if (currentPool && (currentPool.questionIds.length >= nextCount || currentPool.id === editingScheduledTest.poolId)) {
+                          return currentPoolId;
+                        }
+                        return "";
+                      });
+                    }}
                   >
                     {editingScheduledTest.questionCount} (existing)
                   </button>
@@ -8927,7 +9339,17 @@ export function AdminQuestionWorkspace({
                     disabled={isGameMode}
                     key={count}
                     type="button"
-                    onClick={() => { setScheduleQuestionCount(String(count)); setSchedulePoolId(""); }}
+                    onClick={() => {
+                      setScheduleQuestionCount(String(count));
+                      setSchedulePoolId((currentPoolId) => {
+                        if (!currentPoolId) return "";
+                        const currentPool = pools.find((pool) => pool.id === currentPoolId);
+                        if (currentPool && (currentPool.questionIds.length >= count || (editingScheduledTest && currentPool.id === editingScheduledTest.poolId))) {
+                          return currentPoolId;
+                        }
+                        return "";
+                      });
+                    }}
                   >
                     {count}
                   </button>

@@ -6,8 +6,9 @@ import { listRegisteredDirectoryUsers } from "../../../../lib/cognito";
 
 import { resolveAppointmentLocationSchedule, validateAppointmentLocationSlot } from "../../../../lib/appointment-locations";
 import { cancelApportionAppointment, listApportionAppointmentsForActor, listApportionAppointmentsForRequester, listApportionInvitationsForActor, listApportionNotificationsForActor, updateApportionAppointment } from "../../../../lib/apportion-store";
+import { getWhatsAppNotificationPreference, setWhatsAppNotificationPreference } from "../../../../lib/notification-store";
 import { publishWorkspaceEvent } from "../../../../lib/realtime-events";
-import { getOrCreateWorkspaceAppointmentShareCode, getWorkspaceBranding, listParticipants, listWorkspaceAppointmentBusinesses } from "../../../../lib/testing-store";
+import { dispatchDueScheduledTestWhatsAppReminders, getOrCreateWorkspaceAppointmentShareCode, getWorkspaceBranding, listParticipants, listWorkspaceAppointmentBusinesses } from "../../../../lib/testing-store";
 import { getWorkspaceActor, type WorkspaceActor } from "../../../../lib/workspace-actor";
 
 type OwnerOperatingHours = {
@@ -119,12 +120,24 @@ export async function GET(request: Request) {
     return NextResponse.json({ businesses: await listWorkspaceAppointmentBusinesses(url.searchParams.get("businessSearch") ?? "") });
   }
   if (url.searchParams.get("notifications") === "1") {
-    const [appointmentNotifications, scheduleNotifications] = await Promise.all([
+    void dispatchDueScheduledTestWhatsAppReminders?.();
+    const [appointmentNotifications, scheduleNotifications, whatsappEnabled] = await Promise.all([
       listApportionNotificationsForActor(actor.identifier),
       listApportionScheduleNotificationsForActor(actor.identifier),
+      getWhatsAppNotificationPreference?.({ identifier: actor.identifier, sub: actor.sub }) ?? Promise.resolve(true),
     ]);
-    return NextResponse.json({ notifications: [...appointmentNotifications, ...scheduleNotifications]
-      .sort((first, second) => second.createdAt.localeCompare(first.createdAt)) });
+    return NextResponse.json({
+      notifications: [...appointmentNotifications, ...scheduleNotifications]
+        .sort((first, second) => second.createdAt.localeCompare(first.createdAt)),
+      whatsappEnabled,
+    });
+  }
+  if (url.searchParams.get("whatsappPreference") === "1") {
+    const whatsappEnabled = await getWhatsAppNotificationPreference({
+      identifier: actor.identifier,
+      sub: actor.sub,
+    });
+    return NextResponse.json({ whatsappEnabled });
   }
   const phone = url.searchParams.get("lookupPhone");
   if (phone !== null) {
@@ -182,7 +195,7 @@ export async function PATCH(request: Request) {
 
   try {
   const body = (await request.json()) as {
-    action?: "cancel" | "done" | "present-in-person" | "push-back" | "reject" | "reschedule" | "send-message" | "mark-read";
+    action?: "cancel" | "done" | "present-in-person" | "push-back" | "reject" | "reschedule" | "send-message" | "mark-read" | "set-whatsapp-preference";
     appointmentId?: string;
     message?: string;
     lastMessageId?: string;
@@ -190,7 +203,20 @@ export async function PATCH(request: Request) {
     nextStartsAt?: string;
     notes?: string | null;
     reason?: string;
+    whatsappEnabled?: boolean;
   };
+
+  if (body && typeof body === "object" && !Array.isArray(body) && body.action === "set-whatsapp-preference") {
+    if (typeof body.whatsappEnabled !== "boolean") {
+      return NextResponse.json({ error: "A valid WhatsApp preference is required." }, { status: 400 });
+    }
+    const whatsappEnabled = await setWhatsAppNotificationPreference({
+      enabled: body.whatsappEnabled,
+      identifier: actor.identifier,
+      sub: actor.sub,
+    });
+    return NextResponse.json({ whatsappEnabled });
+  }
 
   if (!body || typeof body !== "object" || Array.isArray(body)
     || typeof body.appointmentId !== "string" || !body.appointmentId.trim()
@@ -202,17 +228,19 @@ export async function PATCH(request: Request) {
     || (body.notes !== undefined && body.notes !== null && typeof body.notes !== "string")) {
     throw new Error("A valid appointment ID and appointment fields are required.");
   }
-  if (typeof body.action !== "string" || !["cancel", "done", "present-in-person", "push-back", "reject", "reschedule", "send-message", "mark-read"].includes(body.action)) {
+  const appointmentAction = body.action;
+  if (typeof appointmentAction !== "string" || !["cancel", "done", "present-in-person", "push-back", "reject", "reschedule", "send-message", "mark-read"].includes(appointmentAction)) {
     return NextResponse.json({ error: "Choose a valid appointment action." }, { status: 400 });
   }
-  if (body.action === "cancel" && !body.reason?.trim()) return NextResponse.json({ error: "A cancellation reason is required." }, { status: 400 });
-  if (body.action === "send-message" && typeof body.message !== "string") {
+  const validatedAction = appointmentAction as Exclude<typeof appointmentAction, "set-whatsapp-preference">;
+  if (validatedAction === "cancel" && !body.reason?.trim()) return NextResponse.json({ error: "A cancellation reason is required." }, { status: 400 });
+  if (validatedAction === "send-message" && typeof body.message !== "string") {
     return NextResponse.json({ error: "A message is required." }, { status: 400 });
   }
 
     let appointmentsPerSlot: number | undefined;
 
-    if (body.action === "reschedule") {
+    if (validatedAction === "reschedule") {
       const requesterAppointments = await listApportionAppointmentsForRequester(actor.identifier);
       const appointment = requesterAppointments.find((entry) => entry.id === body.appointmentId);
 
@@ -258,7 +286,7 @@ export async function PATCH(request: Request) {
     }
 
     const result = await updateApportionAppointment({
-      action: body.action,
+      action: validatedAction,
       actorIdentifier: actor.identifier,
       appointmentsPerSlot,
       appointmentId: body.appointmentId ?? "",

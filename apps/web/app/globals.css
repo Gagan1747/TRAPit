@@ -3907,6 +3907,22 @@ input[type="time"]::-webkit-calendar-picker-indicator {
   text-align: center;
 }
 
+.game-user-banner > .test-runner-timer {
+  position: static;
+  z-index: auto;
+  min-width: 132px;
+  padding: 6px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: none;
+  text-align: center;
+}
+
+.game-user-banner > .test-runner-timer strong {
+  font-size: 1.55rem;
+  font-variant-numeric: tabular-nums;
+}
+
 .test-runner-timer span {
   font-size: 0.82rem;
   font-weight: 700;
@@ -4967,12 +4983,125 @@ button:disabled {
 }
 
 .apportion-business-card-avatar {
-  width: 48px;
-  height: 48px;
+  width: 64px;
+  height: 64px;
   border-radius: 12px;
   object-fit: cover;
+  object-position: center;
   flex-shrink: 0;
   border: 1px solid var(--line);
+  background: #ffffff;
+  image-rendering: high-quality;
+  image-rendering: -webkit-optimize-contrast;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+.pre-test-unified-card {
+  display: grid;
+  gap: 16px;
+}
+
+.pre-test-centered-title {
+  margin: 0;
+  text-align: center;
+}
+
+.pre-test-centered-meta {
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+}
+
+.pre-test-guidance-rules-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  align-items: start;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.pre-test-guidance-column h2,
+.pre-test-rules-column h2 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+}
+
+.pre-test-guidance-column ul,
+.pre-test-rules-column ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 6px;
+}
+
+@media (max-width: 640px) {
+  .pre-test-guidance-rules-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.question-image-container {
+  margin: 10px 0 14px;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.question-illustration-image {
+  display: block;
+  max-width: min(100%, 480px);
+  max-height: 280px;
+  width: auto;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  object-fit: contain;
+  background: #ffffff;
+}
+
+.upgrade-tier-header-cell {
+  display: grid;
+  gap: 4px;
+}
+
+.upgrade-tier-clickable-button {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--accent-deep);
+  background: rgba(127, 99, 201, 0.12);
+  color: var(--accent-deep);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.upgrade-tier-clickable-button:hover:not(:disabled) {
+  background: rgba(127, 99, 201, 0.22);
+}
+
+.upgrade-tier-title {
+  font-weight: 700;
+}
+
+.upgrade-tier-subline {
+  display: block;
+  white-space: nowrap;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.notification-whatsapp-setting {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 8px;
 }
 
 .apportion-business-card-avatar.is-placeholder {

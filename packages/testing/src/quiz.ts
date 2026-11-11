@@ -9,7 +9,7 @@ export const GAME_CORRECT_POINTS = [50, 30, 10, 5, 5] as const;
 export const GAME_INCORRECT_POINTS = -5;
 
 function getParticipantIdentifierCandidates(value: string) {
-  const normalized = value.trim().toLowerCase();
+  const normalized = (value ?? "").trim().toLowerCase();
   const compact = normalized.replace(/[\s()-]/g, "");
   const digitsOnly = compact.replace(/\D/g, "");
   const candidates = new Set<string>([normalized, compact]);
@@ -26,16 +26,16 @@ function getParticipantIdentifierCandidates(value: string) {
 }
 
 export function participantIdentifiersMatch(left: string, right: string) {
-  const leftCandidates = getParticipantIdentifierCandidates(left);
+  const leftCandidates = getParticipantIdentifierCandidates(left ?? "");
 
-  return Array.from(getParticipantIdentifierCandidates(right)).some((candidate) =>
+  return Array.from(getParticipantIdentifierCandidates(right ?? "")).some((candidate) =>
     leftCandidates.has(candidate),
   );
 }
 
 export function dedupeParticipantIdentifiers(identifiers: string[]) {
   return identifiers.reduce<string[]>((uniqueIdentifiers, identifier) => {
-    const normalizedIdentifier = identifier.trim();
+    const normalizedIdentifier = (identifier ?? "").trim();
 
     if (
       normalizedIdentifier
@@ -53,12 +53,14 @@ export function dedupeParticipantIdentifiers(identifiers: string[]) {
 export type ObjectiveQuestion = {
   correctOptionIndex: number;
   id: string;
+  imageDataUrl?: string | null;
   options: string[];
   prompt: string;
 };
 
 export type QuestionDraft = {
   correctOptionIndex: number;
+  imageDataUrl?: string | null;
   options: string[];
   prompt: string;
 };
@@ -324,11 +326,13 @@ export type ScheduledTest = {
   questionIds: string[];
   questionCount: number;
   resolvedParticipantIdentifiers: string[];
+  sendWhatsAppNotification?: boolean;
   shareCode: string | null;
   startsAt: string;
   status: ScheduledTestStatus;
   title: string;
   updatedAt: string;
+  whatsAppReminderSentAt?: string | null;
 };
 
 export type TestParticipantSession = {
@@ -371,6 +375,7 @@ export type GameAnswer = {
 export type GamePresentedQuestion = {
   correctOptionIndex: number;
   id: string;
+  imageDataUrl?: string | null;
   options: string[];
   originalOptionIndexes: number[];
   prompt: string;
@@ -395,6 +400,7 @@ export type ScheduledGame = {
   questionStartedAt?: string[];
   questionIds: string[];
   rulesVersion?: 1 | 2 | 3 | 4;
+  sendWhatsAppNotification?: boolean;
   startedAt: string | null;
   title: string;
   updatedAt: string;
@@ -932,6 +938,7 @@ export function createQuestionFromDraft(draft: QuestionDraft): ObjectiveQuestion
   return {
     correctOptionIndex: normalized.correctOptionIndex,
     id: createQuestionId(),
+    ...(normalized.imageDataUrl !== undefined ? { imageDataUrl: normalized.imageDataUrl } : {}),
     options: normalized.options,
     prompt: normalized.prompt,
   };
@@ -1337,10 +1344,16 @@ export function getScheduledTestEndTime(
 }
 
 export function normalizeDraft(draft: QuestionDraft): QuestionDraft {
+  const imageDataUrl = typeof draft.imageDataUrl === "string"
+    ? draft.imageDataUrl.trim() || null
+    : draft.imageDataUrl === null
+      ? null
+      : undefined;
   return {
     correctOptionIndex: draft.correctOptionIndex,
-    options: draft.options.map((option) => option.trim()),
-    prompt: draft.prompt.trim(),
+    ...(imageDataUrl !== undefined ? { imageDataUrl } : {}),
+    options: (draft.options ?? []).map((option) => (option ?? "").trim()),
+    prompt: (draft.prompt ?? "").trim(),
   };
 }
 

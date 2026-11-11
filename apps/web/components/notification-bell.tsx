@@ -39,15 +39,14 @@ function isBrowserPushSupported() {
     && window.isSecureContext;
 }
 
-export function NotificationBell({ browserPushPublicKey, enableBrowserPush = false, items, subtitle, title }: NotificationBellProps) {
+export function NotificationBell({ items, subtitle, title }: NotificationBellProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [apportionItems, setApportionItems] = useState<NotificationBellItem[]>([]);
-  const [browserPushStatus, setBrowserPushStatus] = useState<"idle" | "registered" | "registering" | "unavailable">("idle");
-  const [browserPushFeedback, setBrowserPushFeedback] = useState<string | null>(null);
+  const [whatsappEnabled, setWhatsappEnabled] = useState<boolean>(true);
+  const [isSavingWhatsapp, setIsSavingWhatsapp] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const allItems = [...apportionItems, ...items];
   const totalCount = allItems.reduce((sum, item) => sum + item.count, 0);
-  const canRegisterBrowserPush = enableBrowserPush && Boolean(browserPushPublicKey);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -55,8 +54,16 @@ export function NotificationBell({ browserPushPublicKey, enableBrowserPush = fal
       try {
         const response = await fetch("/api/user/apportion?notifications=1", { signal: controller.signal });
         if (!response.ok) return;
-        const payload = await response.json() as { notifications: Array<{ id: string; title: string; body: string; url: string }> };
-        if (!controller.signal.aborted) setApportionItems(payload.notifications.map((entry) => ({ label: entry.title, detail: entry.body, count: 1, actionHref: entry.url, actionLabel: "Open" })));
+        const payload = await response.json() as {
+          notifications: Array<{ id: string; title: string; body: string; url: string }>;
+          whatsappEnabled?: boolean;
+        };
+        if (!controller.signal.aborted) {
+          setApportionItems(payload.notifications.map((entry) => ({ label: entry.title, detail: entry.body, count: 1, actionHref: entry.url, actionLabel: "Open" })));
+          if (typeof payload.whatsappEnabled === "boolean") {
+            setWhatsappEnabled(payload.whatsappEnabled);
+          }
+        }
       } catch { }
     }
     void loadApportionNotifications();
@@ -76,67 +83,26 @@ export function NotificationBell({ browserPushPublicKey, enableBrowserPush = fal
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, []);
 
-  useEffect(() => {
-    if (!canRegisterBrowserPush) {
-      setBrowserPushStatus("unavailable");
-      return;
-    }
-
-    if (!isBrowserPushSupported()) {
-      setBrowserPushStatus("unavailable");
-      return;
-    }
-
-    if (Notification.permission === "granted") {
-      let active = true;
-      setBrowserPushStatus("registering");
-      void saveBrowserPushSubscription(browserPushPublicKey!).then(() => {
-        if (active) {
-          setBrowserPushStatus("registered");
-          setBrowserPushFeedback(null);
-        }
-      }).catch((error: unknown) => {
-        if (active) {
-          setBrowserPushStatus("idle");
-          setBrowserPushFeedback(error instanceof Error ? error.message : "Unable to enable browser notifications.");
-        }
-      });
-      return () => { active = false; };
-    }
-    setBrowserPushStatus("idle");
-  }, [canRegisterBrowserPush, browserPushPublicKey, isOpen]);
-
-  async function registerBrowserPush() {
-    if (!browserPushPublicKey || !isBrowserPushSupported()) {
-      setBrowserPushFeedback("Browser notifications are not available here.");
-      setBrowserPushStatus("unavailable");
-      return;
-    }
-
+  async function updateWhatsappPreference(nextEnabled: boolean) {
+    setWhatsappEnabled(nextEnabled);
+    setIsSavingWhatsapp(true);
     try {
-      setBrowserPushStatus("registering");
-      setBrowserPushFeedback(null);
-
-      if (Notification.permission === "denied") {
-        setBrowserPushFeedback("Notifications are blocked. Allow notifications in your browser's site settings, then retry.");
-        setBrowserPushStatus("idle");
-        return;
+      const response = await fetch("/api/user/apportion", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set-whatsapp-preference", whatsappEnabled: nextEnabled }),
+      });
+      if (response.ok) {
+        const payload = await response.json() as { whatsappEnabled?: boolean };
+        if (typeof payload.whatsappEnabled === "boolean") {
+          setWhatsappEnabled(payload.whatsappEnabled);
+        }
+        window.dispatchEvent(new CustomEvent("trapit:whatsapp-preference-changed", { detail: { whatsappEnabled: nextEnabled } }));
       }
-      const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
-
-      if (permission !== "granted") {
-        setBrowserPushFeedback("Browser notification permission was not granted.");
-        setBrowserPushStatus("idle");
-        return;
-      }
-
-      await saveBrowserPushSubscription(browserPushPublicKey);
-
-      setBrowserPushFeedback("Browser notifications are enabled.");
-      setBrowserPushStatus("registered");
-    } catch (error) {
-      setBrowserPushFeedback(error instanceof Error ? error.message : "Unable to enable browser notifications.");
-      setBrowserPushStatus("idle");
+    } catch {
+      // Keep local selection
+    } finally {
+      setIsSavingWhatsapp(false);
     }
   }
 
@@ -159,23 +125,29 @@ export function NotificationBell({ browserPushPublicKey, enableBrowserPush = fal
           <p className="eyebrow">Notifications</p>
           <h2 className="section-title">{title}</h2>
           <p className="muted-text notification-panel-subtitle">{subtitle}</p>
-          {canRegisterBrowserPush ? (
-            <div className="notification-browser-push">
+          <div className="notification-whatsapp-setting">
+            <span className="field-label">Send whatsapp notification:</span>
+            <div className="business-choice-row" role="group" aria-label="Send whatsapp notification">
               <button
-                className="mini-link notification-browser-push-button"
-                disabled={browserPushStatus === "registering" || browserPushStatus === "registered"}
+                aria-pressed={whatsappEnabled}
+                className="business-choice-button"
+                disabled={isSavingWhatsapp}
                 type="button"
-                onClick={() => void registerBrowserPush()}
+                onClick={() => void updateWhatsappPreference(true)}
               >
-                {browserPushStatus === "registered"
-                  ? "Browser alerts enabled"
-                  : browserPushStatus === "registering"
-                    ? "Enabling..."
-                    : "Enable browser alerts"}
+                Yes
               </button>
-              {browserPushFeedback ? <small>{browserPushFeedback}</small> : null}
+              <button
+                aria-pressed={!whatsappEnabled}
+                className="business-choice-button"
+                disabled={isSavingWhatsapp}
+                type="button"
+                onClick={() => void updateWhatsappPreference(false)}
+              >
+                No
+              </button>
             </div>
-          ) : null}
+          </div>
           <div className="notification-panel-list">
             {allItems.map((item) => (
               <div className={`notification-panel-item${item.tone ? ` is-${item.tone}` : ""}`} key={`${item.label}-${item.detail ?? item.count}`}>

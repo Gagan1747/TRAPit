@@ -45,6 +45,7 @@ type NotificationState = {
   deliveries: NotificationDelivery[];
   pushTokens: StoredPushToken[];
   webPushSubscriptions: StoredWebPushSubscription[];
+  whatsappPreferenceByActor?: Record<string, boolean>;
 };
 
 export type BrowserSchedule = {
@@ -139,6 +140,11 @@ function normalizeState(parsed: Partial<NotificationState>): NotificationState {
       userIdentifier: subscription.userIdentifier?.trim() || null,
       userSub: subscription.userSub?.trim() || null,
     })).filter((subscription) => subscription.endpoint && subscription.keys.auth && subscription.keys.p256dh),
+    whatsappPreferenceByActor: Object.fromEntries(
+      Object.entries(parsed.whatsappPreferenceByActor ?? {})
+        .filter(([key, value]) => Boolean(key.trim()) && typeof value === "boolean")
+        .map(([key, value]) => [key.trim().toLowerCase(), value]),
+    ),
   };
 }
 
@@ -330,6 +336,67 @@ export async function removeOwnedWebPushSubscription(endpoint: string, userSub: 
     const state = await readState();
     state.webPushSubscriptions = state.webPushSubscriptions.filter((entry) => entry.endpoint !== endpoint || entry.userSub !== userSub);
     await writeState(state);
+  });
+}
+
+function normalizeWhatsAppPreferenceKey(identifier?: string | null, sub?: string | null) {
+  const normalizedIdentifier = (identifier ?? "").trim().toLowerCase().replace(/[\s()-]/g, "");
+  if (normalizedIdentifier) {
+    const digits = normalizedIdentifier.replace(/\D/g, "");
+    if (digits.length >= 10) {
+      return `phone:${digits.slice(-10)}`;
+    }
+    return `id:${normalizedIdentifier}`;
+  }
+  const normalizedSub = (sub ?? "").trim().toLowerCase();
+  return normalizedSub ? `sub:${normalizedSub}` : "";
+}
+
+export async function getWhatsAppNotificationPreference(input: {
+  identifier?: string | null;
+  sub?: string | null;
+}): Promise<boolean> {
+  return serialized(async () => {
+    const state = await readState();
+    const map = state.whatsappPreferenceByActor ?? {};
+    const primaryKey = normalizeWhatsAppPreferenceKey(input.identifier, input.sub);
+    if (primaryKey && typeof map[primaryKey] === "boolean") {
+      return map[primaryKey];
+    }
+    const rawId = (input.identifier ?? "").trim().toLowerCase();
+    if (rawId && typeof map[rawId] === "boolean") {
+      return map[rawId];
+    }
+    const rawSub = (input.sub ?? "").trim().toLowerCase();
+    if (rawSub && typeof map[`sub:${rawSub}`] === "boolean") {
+      return map[`sub:${rawSub}`];
+    }
+    return true;
+  });
+}
+
+export async function setWhatsAppNotificationPreference(input: {
+  enabled: boolean;
+  identifier?: string | null;
+  sub?: string | null;
+}): Promise<boolean> {
+  return serialized(async () => {
+    const state = await readState();
+    state.whatsappPreferenceByActor ??= {};
+    const primaryKey = normalizeWhatsAppPreferenceKey(input.identifier, input.sub);
+    if (primaryKey) {
+      state.whatsappPreferenceByActor[primaryKey] = Boolean(input.enabled);
+    }
+    const rawId = (input.identifier ?? "").trim().toLowerCase();
+    if (rawId) {
+      state.whatsappPreferenceByActor[rawId] = Boolean(input.enabled);
+    }
+    const rawSub = (input.sub ?? "").trim().toLowerCase();
+    if (rawSub) {
+      state.whatsappPreferenceByActor[`sub:${rawSub}`] = Boolean(input.enabled);
+    }
+    await writeState(state);
+    return Boolean(input.enabled);
   });
 }
 

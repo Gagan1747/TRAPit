@@ -23,6 +23,7 @@ type TestResultsPayload = {
   groupNames: string[];
   hasCreatorScope: boolean;
   hasParticipantScope: boolean;
+  myReportedQuestionCount?: number;
   overallMarks?: number;
   reportedQuestionIds?: string[];
   participantResult: {
@@ -50,6 +51,7 @@ type TestResultsPayload = {
   poolName: string;
   questions: Array<{
     correctOptionIndex: number;
+    imageDataUrl?: string | null;
     marks?: number | null;
     optionSelectionCounts: number[];
     options: string[];
@@ -155,6 +157,8 @@ export function TestResultsContent({
   const canInspectParticipantResponses = Boolean(payload.hasParticipantScope || selectedCreatorParticipant);
   const canReportQuestions = Boolean(payload.hasCreatorScope || payload.hasParticipantScope);
   const reportedSet = new Set([...(payload.reportedQuestionIds ?? []), ...localReportedIds]);
+  const myReportedCount = payload.myReportedQuestionCount ?? localReportedIds.length;
+  const hasReachedUserReviewLimit = myReportedCount >= 2;
 
   async function handleSubmitQuestionReport(questionId: string) {
     if (isReporting) return;
@@ -174,10 +178,10 @@ export function TestResultsContent({
       setLocalReportedIds((current) => [...new Set([...current, questionId])]);
       setReportingQuestionId(null);
       setReportReason("");
-      setReportFeedback("Question reported and tagged for review.");
+      setReportFeedback("Question submitted for review.");
       onPayloadUpdate?.(nextPayload);
     } catch (reportError) {
-      setReportFeedback(reportError instanceof Error ? reportError.message : "Unable to report question.");
+      setReportFeedback(reportError instanceof Error ? reportError.message : "Unable to submit question for review.");
     } finally {
       setIsReporting(false);
     }
@@ -245,7 +249,7 @@ export function TestResultsContent({
                   {canReportQuestions ? (
                     <button
                       className={isQuestionReported ? "button small-button" : "button-secondary small-button"}
-                      disabled={isReporting}
+                      disabled={isReporting || isQuestionReported || hasReachedUserReviewLimit}
                       type="button"
                       onClick={() => {
                         if (reportingQuestionId === question.questionId) {
@@ -257,20 +261,26 @@ export function TestResultsContent({
                         }
                       }}
                     >
-                      {isQuestionReported ? "Reported" : "Report"}
+                      {isQuestionReported ? "Reviewed" : "Review"}
                     </button>
                   ) : null}
                 </div>
               </div>
-              {reportingQuestionId === question.questionId ? (
+              {question.imageDataUrl ? (
+                <div className="question-image-container">
+                  <img alt={`Question ${questionIndex + 1} illustration`} className="question-illustration-image" loading="lazy" src={question.imageDataUrl} />
+                </div>
+              ) : null}
+              {reportingQuestionId === question.questionId && !isQuestionReported && !hasReachedUserReviewLimit ? (
                 <div className="field-row align-end test-results-report-box">
                   <div className="field grow-field">
-                    <label htmlFor={`report-reason-${question.questionId}`}>Reason (optional)</label>
+                    <label htmlFor={`report-reason-${question.questionId}`}>Description (max 20 characters)</label>
                     <input
                       id={`report-reason-${question.questionId}`}
-                      placeholder="Describe the issue or error in this question"
+                      maxLength={20}
+                      placeholder="Max 20 chars"
                       value={reportReason}
-                      onChange={(event) => setReportReason(event.target.value)}
+                      onChange={(event) => setReportReason(event.target.value.slice(0, 20))}
                     />
                   </div>
                   <button
@@ -279,7 +289,7 @@ export function TestResultsContent({
                     type="button"
                     onClick={() => void handleSubmitQuestionReport(question.questionId)}
                   >
-                    {isReporting ? "Submitting..." : "Submit report"}
+                    {isReporting ? "Submitting..." : "Submit review"}
                   </button>
                   <button
                     className="button-secondary small-button"

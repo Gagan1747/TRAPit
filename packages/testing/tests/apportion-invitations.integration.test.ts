@@ -545,9 +545,10 @@ describe("Apportion invitations", () => {
       });
       expect(staffBookingCall.template.components[0].parameters).toEqual([
         { type: "text", parameter_name: "owner_staff_name", text: "Therapist" },
-        expect.objectContaining({ type: "text", parameter_name: "date_and_time" }),
         { type: "text", parameter_name: "requester_name", text: "Other" },
         { type: "text", parameter_name: "requester_phone_number", text: "+919444444444" },
+        expect.objectContaining({ type: "text", parameter_name: "date_and_time" }),
+        { type: "text", parameter_name: "service_name", text: "Therapy" },
         { type: "text", parameter_name: "address", text: "Main, Main Street" },
       ]);
 
@@ -582,9 +583,10 @@ describe("Apportion invitations", () => {
       expect(invitationCall.template.components[0].parameters).toEqual([
         { type: "text", parameter_name: "requester_name", text: "Customer" },
         { type: "text", parameter_name: "owner_staff_name", text: "Clinic" },
+        { type: "text", parameter_name: "owner_staff_number", text: "+919222222222" },
         expect.objectContaining({ type: "text", parameter_name: "date_and_time" }),
         { type: "text", parameter_name: "service_name", text: "Therapy" },
-        { type: "text", parameter_name: "location_name", text: "Main, Main Street" },
+        { type: "text", parameter_name: "address", text: "Main, Main Street" },
       ]);
     } finally {
       globalThis.fetch = originalFetch;

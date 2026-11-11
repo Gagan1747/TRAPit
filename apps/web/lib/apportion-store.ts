@@ -6,6 +6,7 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { getApportionBusinessContext, getApportionBusinessContexts, resolveApportionProviderContact, type ApportionBusinessContext } from "./apportion-directory";
 import { getApportionLifecycleBoundaries, getApportionSlotExpiry, resolveAppointmentLocationSchedule, validateAppointmentLocationSlot } from "./appointment-locations";
+import { getWhatsAppNotificationPreference } from "./notification-store";
 import { sendAppointmentBookedWhatsAppNotification, sendAppointmentInvitationWhatsAppNotification } from "./whatsapp";
 
 const DEFAULT_PRODUCTION_DATA_DIR = ["", "var", "lib", "trapit"].join(path.sep);
@@ -950,7 +951,12 @@ export async function createApportionAppointment(input: ApportionAppointmentInpu
     await writeState(state);
     return created;
   });
-  await sendAppointmentBookedWhatsAppNotification(appointment);
+  const canSendWhatsApp = await getWhatsAppNotificationPreference({
+    identifier: appointment.requesterIdentifier,
+  });
+  if (canSendWhatsApp) {
+    await sendAppointmentBookedWhatsAppNotification(appointment);
+  }
   return appointment;
 }
 
@@ -1225,7 +1231,12 @@ export async function createApportionInvitation(input: {
     await writeState(state);
     return { invitation, projected: invitationProjection(invitation, input.actorIdentifier) };
   }).then(async ({ invitation, projected }) => {
-    await sendAppointmentInvitationWhatsAppNotification(invitation);
+    const canSendWhatsApp = await getWhatsAppNotificationPreference({
+      identifier: invitation.creatorIdentifier || invitation.ownerIdentifier,
+    });
+    if (canSendWhatsApp) {
+      await sendAppointmentInvitationWhatsAppNotification(invitation);
+    }
     return projected;
   });
 }

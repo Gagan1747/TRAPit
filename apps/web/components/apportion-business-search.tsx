@@ -90,6 +90,9 @@ export function ApportionBusinessSearch({ businesses, onClose }: { businesses: B
                       <img
                         alt={business.name}
                         className="apportion-business-card-avatar"
+                        decoding="async"
+                        height={64}
+                        width={64}
                         src={avatarSrc}
                       />
                     ) : (

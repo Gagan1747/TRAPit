@@ -11,6 +11,7 @@ import { NextResponse } from "next/server";
 import {
   getGameForParticipant,
   getGameRouteMetadata,
+  reportPostGameQuestion,
 } from "../../../../../lib/testing-store";
 import { getUserActor } from "../../../../../lib/user-api";
 
@@ -49,6 +50,8 @@ export async function GET(request: Request, context: { params: { gameId: string 
     ? game.questionIds.map((questionId, questionIndex) => {
       const reviewQuestion = game.presentedQuestions?.[questionIndex]
         ?? metadata.fallbackQuestions.get(questionId);
+      const fallbackQuestion = metadata.fallbackQuestions.get(questionId);
+      const imageDataUrl = reviewQuestion?.imageDataUrl ?? fallbackQuestion?.imageDataUrl ?? null;
         const answer = ownAnswers.find((entry) => entry.questionIndex === questionIndex) ?? null;
 
         return reviewQuestion
@@ -56,6 +59,7 @@ export async function GET(request: Request, context: { params: { gameId: string 
               answer,
               correctOptionIndex: reviewQuestion.correctOptionIndex,
               id: reviewQuestion.id,
+              ...(imageDataUrl ? { imageDataUrl } : {}),
               options: reviewQuestion.options,
               prompt: reviewQuestion.prompt,
               questionIndex,
@@ -105,12 +109,21 @@ export async function GET(request: Request, context: { params: { gameId: string 
       ...(creatorAnswersByParticipant ? { creatorAnswersByParticipant } : {}),
       creatorRole: game.creatorRole ?? null,
       currentQuestion: question && (!rapid || isAccepted)
-        ? { id: question.id, options: question.options, prompt: question.prompt }
+        ? {
+            id: question.id,
+            ...((question.imageDataUrl ?? metadata.fallbackQuestions.get(question.id)?.imageDataUrl)
+              ? { imageDataUrl: question.imageDataUrl ?? metadata.fallbackQuestions.get(question.id)?.imageDataUrl }
+              : {}),
+            options: question.options,
+            prompt: question.prompt,
+          }
         : null,
       currentQuestionIndex: game.currentQuestionIndex,
       displayName: participant?.label ?? actor.identifier,
       globalDeadline: game.globalDeadline,
+      myReportedQuestionCount: metadata.myReportedQuestionCount,
       questionStartedAt: game.participantQuestionStartedAt,
+      reportedQuestionIds: metadata.reportedQuestionIds,
       rulesVersion: game.rulesVersion,
       isAccepted,
       isCreator,
