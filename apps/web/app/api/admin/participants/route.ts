@@ -1,8 +1,10 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 import { isWebAuthConfigured } from "../../../../lib/auth-config";
 import { listRegisteredDirectoryUsers } from "../../../../lib/cognito";
+import { getPayoutAccountForUser } from "../../../../lib/payout-store";
 import { assertCanCreateGroup, assertCanManageGroup } from "../../../../lib/user-category-limits";
 import {
   addGroupMemberDirect,
@@ -16,11 +18,13 @@ import {
   listParticipantGroups,
   listParticipants,
   markGroupMemberAttendance,
+  recordGroupMonthlyPayment,
   removeGroupMember,
   resolveGroupJoinRequest,
   syncParticipants,
   toggleGroupAttendanceTracking,
   toggleGroupMemberAdmin,
+  toggleGroupPaymentTracking,
   updateGroup,
 } from "../../../../lib/testing-store";
 
@@ -91,6 +95,27 @@ type ParticipantBody =
       groupId?: string;
       membershipId?: string;
       mode?: "declare-group-admin";
+    }
+  | {
+      enabled?: boolean;
+      groupId?: string;
+      mode?: "toggle-group-payment-tracking";
+      monthlyPaymentAmountInr?: number | null;
+    }
+  | {
+      groupId?: string;
+      membershipId?: string;
+      mode?: "create-group-payment-order";
+      monthKey?: string;
+    }
+  | {
+      groupId?: string;
+      membershipId?: string;
+      mode?: "verify-group-payment";
+      monthKey?: string;
+      razorpayOrderId?: string;
+      razorpayPaymentId?: string;
+      razorpaySignature?: string;
     };
 
 function isCreateGroupBody(
@@ -394,6 +419,188 @@ export async function POST(request: Request) {
         groupId: body.groupId,
         memberIdentifier: actor.identifier,
         membershipId: body.membershipId,
+      });
+
+      return NextResponse.json(await buildParticipantsPayload(actor.identifier));
+    }
+
+    if (body.mode === "toggle-group-payment-tracking") {
+      if (!body.groupId?.trim()) {
+        return NextResponse.json({ error: "Group id is required." }, { status: 400 });
+      }
+
+      if (!actor.identifier) {
+        return NextResponse.json({ error: "Owner identifier is required." }, { status: 400 });
+      }
+
+      if (body.enabled !== false && !actor.isSuperAdmin && actor.userCategory === "trapit-normal") {
+        return NextResponse.json(
+          { error: "Pro or Pro Max membership is required to enable group payments." },
+          { status: 403 },
+        );
+      }
+
+      await toggleGroupPaymentTracking({
+        enabled: body.enabled,
+        groupId: body.groupId,
+        monthlyPaymentAmountInr: body.monthlyPaymentAmountInr,
+        ownerIdentifier: actor.identifier,
+      });
+
+      return NextResponse.json(await buildParticipantsPayload(actor.identifier));
+    }
+
+    if (body.mode === "create-group-payment-order") {
+      const groupId = body.groupId?.trim() ?? "";
+      const monthKey = body.monthKey?.trim() ?? "";
+      if (!groupId || !/^\d{4}-\d{2}$/.test(monthKey)) {
+        return NextResponse.json({ error: "Group id and valid month (YYYY-MM) are required." }, { status: 400 });
+      }
+      if (!actor.identifier) {
+        return NextResponse.json({ error: "User identifier is required." }, { status: 400 });
+      }
+
+      const allGroups = await listParticipantGroups();
+      const group = allGroups.find((entry) => entry.id === groupId);
+      if (!group || !group.paymentTrackingEnabled || !group.monthlyPaymentAmountInr || group.monthlyPaymentAmountInr <= 0) {
+        return NextResponse.json({ error: "This group does not have monthly payments enabled." }, { status: 400 });
+      }
+
+      const keyId = process.env.RAZORPAY_KEY_ID?.trim() || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID?.trim() || "";
+      const keySecret = process.env.RAZORPAY_KEY_SECRET?.trim() || "";
+      if (!keyId || !keySecret) {
+        return NextResponse.json(
+          { error: "Razorpay payment gateway is not configured yet. Please set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET." },
+          { status: 503 },
+        );
+      }
+
+      const amountPaise = Math.round(group.monthlyPaymentAmountInr * 100);
+      const creatorPayoutAccount = group.ownerIdentifier
+        ? await getPayoutAccountForUser({ userIdentifier: group.ownerIdentifier })
+        : null;
+      const receipt = `grp_${group.id.slice(-8)}_${monthKey}_${Date.now()}`.slice(0, 40);
+      const authHeader = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
+
+      const baseOrderBody: Record<string, unknown> = {
+        amount: amountPaise,
+        currency: "INR",
+        notes: {
+          groupId: group.id,
+          groupName: group.name,
+          memberIdentifier: actor.identifier,
+          monthKey,
+          ownerIdentifier: group.ownerIdentifier ?? "",
+          ...(creatorPayoutAccount?.linkedAccountId ? { linkedAccountId: creatorPayoutAccount.linkedAccountId } : {}),
+        },
+        receipt,
+      };
+
+      let orderResponse = await fetch("https://api.razorpay.com/v1/orders", {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${authHeader}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(
+          creatorPayoutAccount?.linkedAccountId
+            ? {
+                ...baseOrderBody,
+                transfers: [
+                  {
+                    account: creatorPayoutAccount.linkedAccountId,
+                    amount: amountPaise,
+                    currency: "INR",
+                    on_hold: 0,
+                  },
+                ],
+              }
+            : baseOrderBody,
+        ),
+      });
+
+      // Fallback if Route transfer on order creation is not enabled on a test key
+      if (!orderResponse.ok && creatorPayoutAccount?.linkedAccountId) {
+        orderResponse = await fetch("https://api.razorpay.com/v1/orders", {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${authHeader}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(baseOrderBody),
+        });
+      }
+
+      const orderPayload = (await orderResponse.json().catch(() => ({}))) as {
+        amount?: number;
+        currency?: string;
+        error?: { description?: string };
+        id?: string;
+      };
+
+      if (!orderResponse.ok || !orderPayload.id) {
+        return NextResponse.json(
+          { error: orderPayload.error?.description || "Unable to initialize Razorpay payment order." },
+          { status: 502 },
+        );
+      }
+
+      return NextResponse.json({
+        amount: orderPayload.amount ?? amountPaise,
+        amountInr: group.monthlyPaymentAmountInr,
+        currency: orderPayload.currency ?? "INR",
+        groupId: group.id,
+        groupName: group.name,
+        keyId,
+        linkedAccountId: creatorPayoutAccount?.linkedAccountId ?? null,
+        monthKey,
+        orderId: orderPayload.id,
+      });
+    }
+
+    if (body.mode === "verify-group-payment") {
+      const groupId = body.groupId?.trim() ?? "";
+      const monthKey = body.monthKey?.trim() ?? "";
+      const orderId = body.razorpayOrderId?.trim() ?? "";
+      const paymentId = body.razorpayPaymentId?.trim() ?? "";
+      const signature = body.razorpaySignature?.trim() ?? "";
+
+      if (!groupId || !/^\d{4}-\d{2}$/.test(monthKey) || !orderId || !paymentId || !signature) {
+        return NextResponse.json({ error: "Complete payment verification details are required." }, { status: 400 });
+      }
+      if (!actor.identifier) {
+        return NextResponse.json({ error: "User identifier is required." }, { status: 400 });
+      }
+
+      const keySecret = process.env.RAZORPAY_KEY_SECRET?.trim() || "";
+      if (!keySecret) {
+        return NextResponse.json({ error: "Razorpay payment gateway is not configured." }, { status: 503 });
+      }
+
+      const expectedSignature = createHmac("sha256", keySecret)
+        .update(`${orderId}|${paymentId}`)
+        .digest("hex");
+      const expectedBuffer = Buffer.from(expectedSignature, "utf8");
+      const actualBuffer = Buffer.from(signature, "utf8");
+      if (expectedBuffer.length !== actualBuffer.length || !timingSafeEqual(expectedBuffer, actualBuffer)) {
+        return NextResponse.json({ error: "Payment signature verification failed." }, { status: 400 });
+      }
+
+      const allGroups = await listParticipantGroups();
+      const group = allGroups.find((entry) => entry.id === groupId);
+      const amountInr = group?.monthlyPaymentAmountInr ?? 0;
+      if (!group || amountInr <= 0) {
+        return NextResponse.json({ error: "Group payment configuration not found." }, { status: 400 });
+      }
+
+      await recordGroupMonthlyPayment({
+        amountInr,
+        groupId: group.id,
+        memberIdentifier: actor.identifier,
+        membershipId: body.membershipId,
+        monthKey,
+        orderId,
+        paymentId,
       });
 
       return NextResponse.json(await buildParticipantsPayload(actor.identifier));

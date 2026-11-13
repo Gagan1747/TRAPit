@@ -413,7 +413,7 @@ export async function reconcileBrowserNotificationIntents(schedules: BrowserSche
     for (const schedule of schedules) {
       if (!Number.isFinite(Date.parse(schedule.startsAt)) || !Number.isFinite(Date.parse(schedule.endsAt)) || Date.parse(schedule.endsAt) <= now) continue;
       const instanceKey = browserScheduleInstanceKey(schedule);
-      for (const recipientIdentifier of new Set(schedule.recipients.map((value) => value.trim().toLowerCase()).filter(Boolean))) {
+      for (const recipientIdentifier of new Set(schedule.recipients.map((value) => (value ?? "").trim().toLowerCase()).filter(Boolean))) {
         const recipientKey = `${instanceKey}:${recipientIdentifier}`;
         eligible.add(recipientKey);
         if (!observed.has(recipientKey)) {

@@ -35,6 +35,7 @@ export type ApportionAppointment = {
   justAddToList: boolean;
   locationAddress: string;
   locationId: string;
+  locationLink?: string | null;
   locationName: string;
   messages: ApportionAppointmentMessage[];
   notes: string | null;
@@ -121,6 +122,7 @@ export type ApportionInvitation = {
   requesterPhone?: string | null;
   ownerName: string | null;
   locationId: string;
+  locationLink?: string | null;
   locationName: string;
   locationAddress: string;
   serviceId: string;
@@ -1027,6 +1029,7 @@ async function buildApportionAppointment(state: ApportionState, input: Apportion
     justAddToList: booking.settings.justAddToList,
     locationAddress: booking.location.address,
     locationId,
+    locationLink: booking.location.locationLink?.trim() || null,
     locationName: booking.location.name,
     messages: [],
     notes: input.notes?.trim() || null,
@@ -1223,7 +1226,7 @@ export async function createApportionInvitation(input: {
       creatorIdentifier: input.actorIdentifier.trim(), requesterIdentifier: input.requesterIdentifier.trim(), requesterName: input.requesterName.trim() || "Registered user",
       requesterPhone: input.requesterPhone?.trim() || null, ownerName: booking.context.branding.instituteName || null,
       serviceId: booking.service.id, serviceName: booking.service.name, locationId: booking.location.id, locationName: booking.location.name,
-      locationAddress: booking.location.address, notes: input.notes?.trim() || null, createdAt: timestamp, statusUpdatedAt: timestamp,
+      locationAddress: booking.location.address, locationLink: booking.location.locationLink?.trim() || null, notes: input.notes?.trim() || null, createdAt: timestamp, statusUpdatedAt: timestamp,
       expiresAt: occurrences[0].slotEndsAt, occurrences, appointmentIds: [], notifications: [], bookedSettings: { ...booking.settings },
     };
     addInvitationNotifications(invitation, "Appointment invitation", `${invitation.serviceName} at ${invitation.locationName}: ${occurrences.length} appointment(s) awaiting acceptance.`, timestamp);

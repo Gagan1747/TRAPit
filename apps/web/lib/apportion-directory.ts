@@ -621,6 +621,7 @@ export async function prepareApportionBrandingMutation(state: TestingWorkspaceSt
     });
   }
   if (existing?.appointmentShareCode) branding.appointmentShareCode = existing.appointmentShareCode;
+  branding.createdAt = existing?.createdAt || branding.createdAt || new Date().toISOString();
   state.workspaceBrandingByActor[key] = branding;
   const consultation = business?.services.find((service) => service.id === "consultation");
   if (consultation) { consultation.locationIds = locations.map((location) => location.id); consultation.active = true; consultation.assignedIdentifier = key; }

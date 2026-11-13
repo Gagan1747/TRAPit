@@ -594,4 +594,52 @@ describe("Apportion targeted invitation API", () => {
     expect(fixtures.create).toHaveBeenCalledWith(expect.objectContaining({ requesterIdentifier: OWNER, requesterName: "Requester", serviceId: "therapy" }));
     expect(fixtures.invite).not.toHaveBeenCalled();
   });
+
+  it("exposes ownerServiceAppointments and businessCreatedAt only to business owners, admins, and staff", async () => {
+    fixtures.appointments = [{
+      id: "appt-1",
+      serviceId: "consultation",
+      locationId: "location-1",
+      locationName: "Main",
+      locationAddress: "Street",
+      serviceDateKey: "2026-10-05",
+      startsAt: "2026-10-05T04:30:00.000Z",
+      createdAt: "2026-10-01T09:00:00.000Z",
+      currentStatus: "pending",
+      justAddToList: false,
+      ownerIdentifier: OWNER,
+      requesterIdentifier: "+919333333333",
+      requesterName: "Customer One",
+      requesterPhone: "+919333333333",
+    }];
+    fixtures.actor = { identifier: OWNER, userCategory: "trapit-pro", isSuperAdmin: false };
+    const ownerRes = await publicApi.GET(new Request("https://trapit.in/api/apportion/CODE?compact=1"), { params: { shareCode: "CODE" } });
+    const ownerPayload = await ownerRes.json();
+    expect(ownerPayload.isOwnBusinessViewer).toBe(true);
+    expect(ownerPayload.businessCreatedAt).toBe("2026-10-01T09:00:00.000Z");
+    expect(ownerPayload.ownerServiceAppointments).toHaveLength(1);
+    expect(ownerPayload.ownerServiceAppointments[0].requesterName).toBe("Customer One");
+
+    fixtures.actor = { identifier: "+919888888888", userCategory: "trapit-normal", isSuperAdmin: false };
+    const customerRes = await publicApi.GET(new Request("https://trapit.in/api/apportion/CODE?compact=1"), { params: { shareCode: "CODE" } });
+    const customerPayload = await customerRes.json();
+    expect(customerPayload.isOwnBusinessViewer).toBeUndefined();
+    expect(customerPayload.ownerServiceAppointments).toBeUndefined();
+
+    const normalized = normalizeWorkspaceBranding({
+      instituteName: "Clinic",
+      createdAt: "2026-09-15T00:00:00.000Z",
+      appointmentLocations: [{
+        id: "location-1",
+        name: "Main",
+        address: "Street",
+        locationLink: "https://maps.google.com/?q=Clinic",
+        workingDays: "Monday",
+        workingHours: "9:00 AM - 5:00 PM",
+        workingHoursSecondWindow: "",
+      }],
+    } as never);
+    expect(normalized?.createdAt).toBe("2026-09-15T00:00:00.000Z");
+    expect(normalized?.appointmentLocations?.[0]?.locationLink).toBe("https://maps.google.com/?q=Clinic");
+  });
 });

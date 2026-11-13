@@ -28,6 +28,26 @@ function canManageHoldsForBusiness(
   return Boolean(delegate && matchApportionIdentity(viewerIdentifier, delegate));
 }
 
+function isOwnBusinessViewerForBusiness(
+  viewerIdentifier: string | null,
+  ownerContext: Awaited<ReturnType<typeof getApportionBusinessContext>>,
+  ownerIdentifier: string,
+  providerIdentifier: string | null,
+) {
+  if (!viewerIdentifier) return false;
+  if (matchApportionIdentity(viewerIdentifier, ownerIdentifier)) return true;
+  const delegate = ownerContext?.business.adminDelegateIdentifier;
+  if (delegate && matchApportionIdentity(viewerIdentifier, delegate)) return true;
+  if (providerIdentifier && matchApportionIdentity(viewerIdentifier, providerIdentifier)) return true;
+  if (ownerContext?.business.services.some((service) => service.active && service.assignedIdentifier && matchApportionIdentity(viewerIdentifier, service.assignedIdentifier))) {
+    return true;
+  }
+  if (ownerContext?.memberships.some((membership) => matchApportionIdentity(viewerIdentifier, membership.providerIdentifier))) {
+    return true;
+  }
+  return false;
+}
+
 async function resolveRegisteredTarget(phone: string) {
   const normalizedPhone = phone.trim().replace(/[\s()-]/g, "");
   if (!/^(?:\+[1-9]\d{7,14}|\d{10})$/.test(normalizedPhone)) {
@@ -541,11 +561,56 @@ export async function GET(
   });
 
   const canManageHolds = canManageHoldsForBusiness(viewerIdentifier, business.ownerContext, business.ownerIdentifier);
+  const isOwnBusinessViewer = isOwnBusinessViewerForBusiness(
+    viewerIdentifier,
+    business.ownerContext,
+    business.ownerIdentifier,
+    business.providerIdentifier,
+  );
+  const earliestAppointmentIso = ownerAppointments.reduce<string | null>((earliest, appointment) => {
+    const candidate = appointment.createdAt || (appointment.serviceDateKey ? `${appointment.serviceDateKey}T00:00:00+05:30` : null);
+    if (!candidate || Number.isNaN(Date.parse(candidate))) return earliest;
+    if (!earliest || Date.parse(candidate) < Date.parse(earliest)) return new Date(candidate).toISOString();
+    return earliest;
+  }, null);
+  const configuredCreatedAt = business.ownerContext?.branding.createdAt ?? linkedBusiness.branding.createdAt ?? null;
+  const businessCreatedAt = configuredCreatedAt && earliestAppointmentIso
+    ? (Date.parse(earliestAppointmentIso) < Date.parse(configuredCreatedAt) ? earliestAppointmentIso : configuredCreatedAt)
+    : configuredCreatedAt ?? earliestAppointmentIso ?? new Date().toISOString();
+  const ownerServiceAppointments = isOwnBusinessViewer
+    ? ownerAppointments
+        .filter((appointment) => (appointment.serviceId || "consultation") === serviceId)
+        .map((appointment) => ({
+          bookedQueuePosition: appointment.bookedQueuePosition ?? 1,
+          canManage: true,
+          canMessage: true,
+          createdAt: appointment.createdAt,
+          currentStatus: appointment.currentStatus,
+          id: appointment.id,
+          justAddToList: Boolean(appointment.justAddToList),
+          locationAddress: appointment.locationAddress,
+          locationId: appointment.locationId,
+          locationName: appointment.locationName,
+          messages: appointment.messages ?? [],
+          notes: appointment.notes ?? null,
+          ownerIdentifier: appointment.ownerIdentifier,
+          ownerName: appointment.ownerName ?? business.branding.instituteName ?? null,
+          queueOrder: appointment.queueOrder ?? appointment.bookedQueuePosition ?? 1,
+          requesterIdentifier: appointment.requesterIdentifier,
+          requesterName: appointment.requesterName,
+          requesterPhone: appointment.requesterPhone ?? appointment.requesterIdentifier,
+          serviceDateKey: appointment.serviceDateKey,
+          serviceId: appointment.serviceId || "consultation",
+          serviceName: appointment.serviceName || business.service.name || "Consultation",
+          startsAt: appointment.startsAt,
+        }))
+    : undefined;
 
   return NextResponse.json({
     viewerIdentifier,
     canInvite,
     canManageHolds,
+    ...(isOwnBusinessViewer ? { isOwnBusinessViewer: true, businessCreatedAt, ownerServiceAppointments } : {}),
     addressOptions,
     services: directServices,
     serviceId,

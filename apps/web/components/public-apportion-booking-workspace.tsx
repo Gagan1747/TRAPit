@@ -1,10 +1,13 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, LoaderCircle, Search, Send } from "lucide-react";
+import { ChevronLeft, ChevronRight, LoaderCircle, Search, Send, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { findNextApportionRecurringDate, matchApportionIdentity, planApportionDates, resolveApportionDailySchedule, resolveApportionLocationForDate } from "@trapit/testing";
+import { createPortal } from "react-dom";
+import { findNextApportionRecurringDate, matchApportionIdentity, participantIdentifiersMatch, planApportionDates, resolveApportionDailySchedule, resolveApportionLocationForDate } from "@trapit/testing";
 
+import { formatShortDateTimeIst } from "../lib/date-format";
 import { formatPhoneNumberForDisplay } from "../lib/privacy";
+import { ApportionCancellationDialog } from "./apportion-cancellation-dialog";
 import { markNotificationPromptOpportunity } from "./browser-push-prompt";
 
 const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -12,10 +15,38 @@ const WEEKDAY_SHORT_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const WEEKDAY_KEYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
+type OwnerServiceAppointment = {
+  bookedQueuePosition: number;
+  canManage: boolean;
+  canMessage: boolean;
+  createdAt: string;
+  currentStatus: "cancelled" | "delayed" | "done" | "missed" | "pending" | "present-in-person" | "pushed-back" | "rejected";
+  id: string;
+  justAddToList: boolean;
+  locationAddress: string;
+  locationId: string;
+  locationName: string;
+  messages: Array<{ id: string; authorIdentifier: string; createdAt: string; body: string }>;
+  notes: string | null;
+  ownerIdentifier: string;
+  ownerName: string | null;
+  queueOrder: number;
+  requesterIdentifier: string;
+  requesterName: string;
+  requesterPhone: string | null;
+  serviceDateKey: string;
+  serviceId: string;
+  serviceName: string;
+  startsAt: string;
+};
+
 type BookingPayload = {
   viewerIdentifier: string;
   canInvite: boolean;
   canManageHolds?: boolean;
+  isOwnBusinessViewer?: boolean;
+  businessCreatedAt?: string;
+  ownerServiceAppointments?: OwnerServiceAppointment[];
   addressOptions: Array<{
     key: string;
     location: BookingPayload["business"]["locations"][number];
@@ -545,6 +576,13 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
   const [recurringTime, setRecurringTime] = useState<{ dayOffset: number; minutes: number } | null>(null);
   const [slotPage, setSlotPage] = useState(0);
   const [weekOffset, setWeekOffset] = useState(0);
+  const [threadAppointmentId, setThreadAppointmentId] = useState<string | null>(null);
+  const [threadMessages, setThreadMessages] = useState<OwnerServiceAppointment["messages"] | null>(null);
+  const [messageDraft, setMessageDraft] = useState("");
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [messageError, setMessageError] = useState<string | null>(null);
+  const [updatingAppointmentId, setUpdatingAppointmentId] = useState<string | null>(null);
+  const [cancellationAppointment, setCancellationAppointment] = useState<OwnerServiceAppointment | null>(null);
   const normalizedTargetPhone = targetPhone.trim().replace(/[\s()-]/g, "");
   const lookupContext = JSON.stringify([shareCode, selectedOwnerIdentifier, selectedServiceId, normalizedTargetPhone]);
   lookupContextRef.current = lookupContext;
@@ -688,6 +726,13 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
       .filter((entry) => entry.locationId === selectedLocation.id)
       .map((entry) => [entry.dateKey, entry.count]));
     const dateAvailable = (key: string) => {
+      if (payload.isOwnBusinessViewer) {
+        const createdKey = payload.businessCreatedAt ? getIstDateKey(new Date(payload.businessCreatedAt)) : createDateKey(today);
+        const minKey = createdKey <= createDateKey(today) ? createdKey : createDateKey(today);
+        if (key >= minKey && key <= createDateKey(maxDate)) {
+          return true;
+        }
+      }
       const effective = resolveEffectiveLocation(payload.business, selectedLocation, key);
       if (!effective) return false;
       if (payload.business.justAddToList) return Boolean(estimateQueueStart({ activeCount: queueCountsByDate[key] ?? 0, appointmentsPerSlot: payload.business.appointmentsPerSlot, selectedDateKey: key, slotDurationMinutes: payload.business.slotDurationMinutes ?? 10, workingHours: effective.workingHours, workingHoursSecondWindow: effective.workingHoursSecondWindow }));
@@ -915,6 +960,73 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
     }
   }
 
+  async function handleOwnerAppointmentAction(
+    appointment: OwnerServiceAppointment,
+    action: "done" | "reject" | "cancel",
+    reason?: string,
+  ): Promise<string | void> {
+    if (updatingAppointmentId) return "Another update is in progress.";
+    setUpdatingAppointmentId(appointment.id);
+    setFeedback(null);
+    try {
+      const response = await fetch("/api/user/apportion", {
+        method: action === "cancel" ? "DELETE" : "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          action === "cancel"
+            ? { appointmentId: appointment.id, reason }
+            : { action, appointmentId: appointment.id },
+        ),
+      });
+      const result = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) {
+        throw new Error(result.error || "Unable to update appointment.");
+      }
+      await loadBookingPage(selectedOwnerIdentifier, selectedServiceId, true, true, selectedLocationId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to update appointment.";
+      setFeedback(message);
+      return message;
+    } finally {
+      setUpdatingAppointmentId(null);
+    }
+  }
+
+  async function handleSendThreadMessage(appointment: OwnerServiceAppointment) {
+    const message = messageDraft.trim();
+    if (!message || isSendingMessage) return;
+    setIsSendingMessage(true);
+    setMessageError(null);
+    try {
+      const response = await fetch("/api/user/apportion", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "send-message",
+          appointmentId: appointment.id,
+          message,
+        }),
+      });
+      const result = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        updatedAppointment?: { id: string; messages: OwnerServiceAppointment["messages"] };
+      };
+      if (!response.ok) {
+        throw new Error(result.error || "Unable to send the message.");
+      }
+      if (result.updatedAppointment) {
+        setThreadMessages(result.updatedAppointment.messages);
+      }
+      setMessageDraft("");
+      await loadBookingPage(selectedOwnerIdentifier, selectedServiceId, true, true, selectedLocationId);
+      setThreadMessages(null);
+    } catch (error) {
+      setMessageError(error instanceof Error ? error.message : "Unable to send the message.");
+    } finally {
+      setIsSendingMessage(false);
+    }
+  }
+
   if (isLoading) {
     return <div className="empty-state"><p className="muted-text">Loading appointment page...</p></div>;
   }
@@ -925,10 +1037,20 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
 
   const today = createDateFromKey(getIstDateKey(new Date(clock)));
   today.setHours(0, 0, 0, 0);
+  const isOwnBusinessViewer = Boolean(payload.isOwnBusinessViewer);
+  const rawCreatedDateKey = payload.businessCreatedAt ? getIstDateKey(new Date(payload.businessCreatedAt)) : todayKey;
+  const businessCreatedDateKey = rawCreatedDateKey <= todayKey ? rawCreatedDateKey : todayKey;
+  const minBookableDate = isOwnBusinessViewer ? createDateFromKey(businessCreatedDateKey) : today;
+  minBookableDate.setHours(0, 0, 0, 0);
+  const minWeekStartDate = new Date(minBookableDate);
+  minWeekStartDate.setDate(minBookableDate.getDate() - minBookableDate.getDay());
+  minWeekStartDate.setHours(0, 0, 0, 0);
+  const isPastSelectedDate = selectedDateKey < todayKey;
   const selectedLocation = payload.business.locations.find((location) => location.id === selectedLocationId) ?? null;
   const effectiveSelectedLocation = selectedLocation
     ? resolveEffectiveLocation(payload.business, selectedLocation, selectedDateKey)
     : null;
+  const ownerScheduleLocation = effectiveSelectedLocation ?? selectedLocation;
   const slotDurationMinutes = payload.business.slotDurationMinutes ?? 30;
   const slotCountsByIso = Object.fromEntries(payload.slotCounts
     .filter((slot) => slot.locationId === selectedLocationId)
@@ -972,9 +1094,172 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
       startsAt,
     };
   }).filter((slot) => slot.isAvailable) : [];
-  const visibleSlots = availableSlots.slice(slotPage * 6, slotPage * 6 + 6);
-  const pageCount = Math.ceil(availableSlots.length / 6);
+  const visibleSlots = availableSlots;
   const selectedSlot = availableSlots.find((slot) => slot.startsAt === selectedSlotIso && !slot.isHeld) ?? null;
+  const ownerAppointmentsForLocation = (payload.ownerServiceAppointments ?? []).filter(
+    (appointment) => appointment.locationId === selectedLocationId,
+  );
+  const ownerAppointmentsCountByDateKey = ownerAppointmentsForLocation.reduce<Record<string, number>>((counts, appointment) => {
+    counts[appointment.serviceDateKey] = (counts[appointment.serviceDateKey] ?? 0) + 1;
+    return counts;
+  }, {});
+  const ownerDateAppointments = ownerAppointmentsForLocation.filter(
+    (appointment) => appointment.serviceDateKey === selectedDateKey,
+  );
+  const ownerBaseSlots = isOwnBusinessViewer && ownerScheduleLocation
+    ? buildSlotStartsForDate({
+        selectedDateKey,
+        slotDurationMinutes: payload.business.slotDurationMinutes ?? 10,
+        workingHours: ownerScheduleLocation.workingHours,
+        workingHoursSecondWindow: ownerScheduleLocation.workingHoursSecondWindow,
+      })
+    : [];
+  const ownerSlotCapacity = Math.max(1, payload.business.appointmentsPerSlot || 1);
+  type OwnerSlotCardItem =
+    | {
+        appointment: OwnerServiceAppointment;
+        isPastRecord: boolean;
+        key: string;
+        kind: "booked";
+        slotLabel: string;
+        startsAt: string;
+      }
+    | {
+        dayOffset: number;
+        instanceIndex: number;
+        isHeld: boolean;
+        isPast: boolean;
+        key: string;
+        kind: "available";
+        minutes: number;
+        slotLabel: string;
+        startsAt: string;
+      };
+  const ownerSlotCards: OwnerSlotCardItem[] = (() => {
+    if (!isOwnBusinessViewer) return [];
+    const closedStatuses = new Set(["done", "missed", "cancelled", "rejected"]);
+    if (payload.business.justAddToList) {
+      const sortedQueue = [...ownerDateAppointments].sort(
+        (left, right) =>
+          (left.queueOrder - right.queueOrder)
+          || (left.bookedQueuePosition - right.bookedQueuePosition)
+          || left.createdAt.localeCompare(right.createdAt),
+      );
+      const cards: OwnerSlotCardItem[] = [];
+      let queueCursor = 0;
+      for (const slot of ownerBaseSlots) {
+        const isPast = isPastSelectedDate || new Date(slot.startsAt).getTime() <= clock;
+        const isHeld = isSelectedDateHeld || heldSlotIsosForSelectedLocation.has(slot.startsAt);
+        for (let instanceIndex = 0; instanceIndex < ownerSlotCapacity; instanceIndex += 1) {
+          const appointment = sortedQueue[queueCursor];
+          if (appointment) {
+            queueCursor += 1;
+            const isPastRecord = isPastSelectedDate || closedStatuses.has(appointment.currentStatus);
+            cards.push({
+              appointment,
+              isPastRecord,
+              key: `booked-${appointment.id}`,
+              kind: "booked",
+              slotLabel: slot.label,
+              startsAt: slot.startsAt,
+            });
+          } else {
+            cards.push({
+              dayOffset: slot.dayOffset,
+              instanceIndex,
+              isHeld,
+              isPast,
+              key: `avail-${slot.startsAt}-${instanceIndex}`,
+              kind: "available",
+              minutes: slot.minutes,
+              slotLabel: slot.label,
+              startsAt: slot.startsAt,
+            });
+          }
+        }
+      }
+      while (queueCursor < sortedQueue.length) {
+        const appointment = sortedQueue[queueCursor]!;
+        queueCursor += 1;
+        const fallbackLabel = ownerBaseSlots.at(-1)?.label ?? formatShortDateTimeIst(appointment.startsAt);
+        cards.push({
+          appointment,
+          isPastRecord: isPastSelectedDate || closedStatuses.has(appointment.currentStatus),
+          key: `booked-${appointment.id}`,
+          kind: "booked",
+          slotLabel: fallbackLabel,
+          startsAt: appointment.startsAt,
+        });
+      }
+      return cards;
+    }
+
+    const appointmentsByStartsAt = new Map<string, OwnerServiceAppointment[]>();
+    const unmatchedAppointments: OwnerServiceAppointment[] = [];
+    const baseSlotSet = new Set(ownerBaseSlots.map((slot) => slot.startsAt));
+    for (const appointment of [...ownerDateAppointments].sort(
+      (left, right) =>
+        (left.bookedQueuePosition - right.bookedQueuePosition)
+        || left.createdAt.localeCompare(right.createdAt),
+    )) {
+      if (baseSlotSet.has(appointment.startsAt)) {
+        const list = appointmentsByStartsAt.get(appointment.startsAt) ?? [];
+        list.push(appointment);
+        appointmentsByStartsAt.set(appointment.startsAt, list);
+      } else {
+        unmatchedAppointments.push(appointment);
+      }
+    }
+
+    const cards: OwnerSlotCardItem[] = [];
+    for (const slot of ownerBaseSlots) {
+      const slotAppointments = appointmentsByStartsAt.get(slot.startsAt) ?? [];
+      const totalInstances = Math.max(ownerSlotCapacity, slotAppointments.length);
+      const isPast = isPastSelectedDate || new Date(slot.startsAt).getTime() <= clock;
+      const isHeld = isSelectedDateHeld || heldSlotIsosForSelectedLocation.has(slot.startsAt);
+      for (let instanceIndex = 0; instanceIndex < totalInstances; instanceIndex += 1) {
+        const appointment = slotAppointments[instanceIndex];
+        if (appointment) {
+          cards.push({
+            appointment,
+            isPastRecord: isPastSelectedDate || closedStatuses.has(appointment.currentStatus),
+            key: `booked-${appointment.id}`,
+            kind: "booked",
+            slotLabel: slot.label,
+            startsAt: slot.startsAt,
+          });
+        } else {
+          cards.push({
+            dayOffset: slot.dayOffset,
+            instanceIndex,
+            isHeld,
+            isPast,
+            key: `avail-${slot.startsAt}-${instanceIndex}`,
+            kind: "available",
+            minutes: slot.minutes,
+            slotLabel: slot.label,
+            startsAt: slot.startsAt,
+          });
+        }
+      }
+    }
+    for (const appointment of unmatchedAppointments) {
+      cards.push({
+        appointment,
+        isPastRecord: isPastSelectedDate || closedStatuses.has(appointment.currentStatus),
+        key: `booked-${appointment.id}`,
+        kind: "booked",
+        slotLabel: formatShortDateTimeIst(appointment.startsAt),
+        startsAt: appointment.startsAt,
+      });
+    }
+    return cards;
+  })();
+  const threadAppointment = threadAppointmentId
+    ? (payload.ownerServiceAppointments ?? []).find((entry) => entry.id === threadAppointmentId) ?? null
+    : null;
+  const threadReadOnly = !threadAppointment?.canMessage
+    || ["cancelled", "done", "missed", "rejected"].includes(threadAppointment.currentStatus);
   const logoDataUrl = payload.providerProfile.imageDataUrl ? normalizeImageDataUrl(payload.providerProfile.imageDataUrl) : null;
   const profileImageDataUrl = payload.providerProfile.profileImageDataUrl ? normalizeImageDataUrl(payload.providerProfile.profileImageDataUrl) : null;
   const promotionalImageDataUrls = payload.providerProfile.promotionalImageDataUrls
@@ -1254,9 +1539,9 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                   <button
                     aria-label="Previous week"
                     className="icon-button button-secondary"
-                    disabled={weekOffset === 0}
+                    disabled={isOwnBusinessViewer ? weekStartDate <= minWeekStartDate : weekOffset === 0}
                     type="button"
-                    onClick={() => setWeekOffset((current) => Math.max(0, current - 1))}
+                    onClick={() => setWeekOffset((current) => isOwnBusinessViewer ? current - 1 : Math.max(0, current - 1))}
                   >
                     <ChevronLeft aria-hidden="true" size={20} />
                   </button>
@@ -1287,8 +1572,13 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                     const hasSlotCapacity = payload.business.justAddToList || Boolean(effectiveDateLocation && buildSlotStartsForDate({ selectedDateKey: dateKey, slotDurationMinutes, workingHours: effectiveDateLocation.workingHours, workingHoursSecondWindow: effectiveDateLocation.workingHoursSecondWindow }).some((slot) => new Date(slot.startsAt).getTime() > clock && (slotCountsByIso[slot.startsAt] ?? 0) < payload.business.appointmentsPerSlot));
                     const isBaseAvailableDate = isDateInWindow && hasQueueCapacity && hasSlotCapacity;
                     const isDateHeld = heldDateKeysForSelectedLocation.has(dateKey);
-                    const isAvailableDate = isBaseAvailableDate && !isDateHeld;
-                    const disabledReason = isDateHeld ? "On hold" : date > maxBookableDate ? "Outside booking horizon" : !effectiveDateLocation ? "Closed or provider on leave" : date < today && !isBaseAvailableDate ? "Past service day" : "No remaining availability";
+                    const dateAppointmentCount = ownerAppointmentsCountByDateKey[dateKey] ?? 0;
+                    const isOwnerSelectableDate = isOwnBusinessViewer
+                      && dateKey >= businessCreatedDateKey
+                      && date <= maxBookableDate
+                      && (Boolean(effectiveDateLocation) || dateAppointmentCount > 0 || date < today);
+                    const isAvailableDate = (isBaseAvailableDate && !isDateHeld) || isOwnerSelectableDate;
+                    const disabledReason = isDateHeld ? "On hold" : date > maxBookableDate ? "Outside booking horizon" : date < minBookableDate ? "Before bookings page creation" : !effectiveDateLocation ? "Closed or provider on leave" : date < today && !isBaseAvailableDate ? "Past service day" : "No remaining availability";
                     const isSelected = dateKey === selectedDateKey;
 
                     return (
@@ -1300,16 +1590,24 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                           disabled={!isAvailableDate && !(canManageHolds && isBaseAvailableDate)}
                           type="button"
                           onClick={() => {
-                            if (isDateHeld && !canManageHolds) return;
+                            if (isDateHeld && !canManageHolds && !isOwnBusinessViewer) return;
                             setSelectedDateKey(dateKey);
                             setSelectedSlotIso(null);
                           }}
                         >
+                          {isOwnBusinessViewer ? (
+                            <span
+                              aria-label={`${dateAppointmentCount} appointment${dateAppointmentCount === 1 ? "" : "s"}`}
+                              className="apportion-date-appointment-count"
+                            >
+                              {dateAppointmentCount}
+                            </span>
+                          ) : null}
                           <small>{WEEKDAY_SHORT_NAMES[date.getDay()]}</small>
                           <strong>{date.getDate()}</strong>
                           {isSameDay(date, new Date()) ? <small>Today</small> : null}
                         </button>
-                        {canManageHolds && isBaseAvailableDate ? (
+                        {canManageHolds && isBaseAvailableDate && date >= today ? (
                           <button
                             aria-label={isDateHeld ? `Release hold on ${dateKey}` : `Hold ${dateKey}`}
                             className="apportion-hold-cross-button"
@@ -1331,7 +1629,154 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
             ) : null}
 
             <div className="form-stack apportion-booking-form">
-            {payload.business.justAddToList ? (
+            {isOwnBusinessViewer ? (
+              <div className="field">
+                <label htmlFor="apportion-appointment-time">
+                  {isPastSelectedDate ? `Appointments & slots (${selectedDateLabel})` : "Appointment slots"}
+                </label>
+                {payload.business.justAddToList && !isPastSelectedDate ? (
+                  <p className="muted-text">
+                    Queue size: {queueCountForSelectedDate}
+                    {queueEstimate ? ` · Estimated start time: ${queueEstimate.label}` : ""}
+                  </p>
+                ) : null}
+                {ownerSlotCards.length ? (
+                  <div className="apportion-slot-grid is-single-column-scroll" role="group" aria-label="Appointment slots">
+                    {ownerSlotCards.map((card) => {
+                      if (card.kind === "booked") {
+                        const { appointment, isPastRecord, slotLabel } = card;
+                        const formattedPhone = formatPhoneNumberForDisplay(
+                          appointment.requesterPhone || appointment.requesterIdentifier,
+                          { showFullPhoneNumber: true },
+                        );
+                        return (
+                          <div
+                            aria-label={`Appointment for ${appointment.requesterName} at ${slotLabel}`}
+                            className={`apportion-owner-slot-card is-booked${isPastRecord ? " is-past-record" : " is-upcoming-record"}`}
+                            key={card.key}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => {
+                              setThreadAppointmentId(appointment.id);
+                              setThreadMessages(null);
+                              setMessageDraft("");
+                              setMessageError(null);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                setThreadAppointmentId(appointment.id);
+                                setThreadMessages(null);
+                                setMessageDraft("");
+                                setMessageError(null);
+                              }
+                            }}
+                          >
+                            <div className="apportion-owner-slot-left">
+                              <span>{slotLabel}</span>
+                            </div>
+                            <div className="apportion-owner-slot-center">
+                              <strong className="apportion-owner-slot-name">{appointment.requesterName || "Customer"}</strong>
+                              <span className="apportion-owner-slot-phone">{formattedPhone}</span>
+                            </div>
+                            <div className="apportion-owner-slot-right">
+                              {!isPastRecord ? (
+                                <>
+                                  <button
+                                    aria-label={`Mark ${appointment.requesterName} as done`}
+                                    className="apportion-slot-action-icon is-done"
+                                    disabled={updatingAppointmentId === appointment.id}
+                                    title="Done"
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void handleOwnerAppointmentAction(appointment, "done");
+                                    }}
+                                  >
+                                    ✓
+                                  </button>
+                                  {payload.business.justAddToList ? (
+                                    <button
+                                      aria-label={`Mark ${appointment.requesterName} as absent`}
+                                      className="apportion-slot-action-icon is-absent"
+                                      disabled={updatingAppointmentId === appointment.id}
+                                      title="Absent"
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        void handleOwnerAppointmentAction(appointment, "reject");
+                                      }}
+                                    >
+                                      ✕
+                                    </button>
+                                  ) : (
+                                    <button
+                                      aria-label={`Cancel appointment for ${appointment.requesterName}`}
+                                      className="apportion-slot-action-icon is-cancel"
+                                      disabled={updatingAppointmentId === appointment.id}
+                                      title="Cancel"
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        setCancellationAppointment(appointment);
+                                      }}
+                                    >
+                                      ✕
+                                    </button>
+                                  )}
+                                </>
+                              ) : appointment.currentStatus === "done" ? (
+                                <span aria-label="Done" className="apportion-slot-status-icon is-done" title="Done">✓</span>
+                              ) : appointment.currentStatus === "cancelled" || appointment.currentStatus === "rejected" ? (
+                                <span aria-label="Cancelled" className="apportion-slot-status-icon is-cancelled" title="Cancelled">✕</span>
+                              ) : (
+                                <span aria-label="Missed" className="apportion-slot-status-icon is-missed" title="Missed">—</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="apportion-slot-chip-wrap" key={card.key} style={{ position: "relative" }}>
+                          <button
+                            aria-pressed={!card.isPast && selectedSlotIso === card.startsAt && !card.isHeld}
+                            className={`apportion-slot-chip apportion-owner-available-card${!card.isPast && selectedSlotIso === card.startsAt && !card.isHeld ? " is-selected" : ""}${card.isHeld ? " is-on-hold is-blocked" : ""}`}
+                            disabled={card.isHeld || card.isPast}
+                            type="button"
+                            onClick={() => {
+                              if (card.isHeld || card.isPast) return;
+                              setSelectedSlotIso(card.startsAt);
+                              if (recurrenceActive) setRecurringTime({ dayOffset: card.dayOffset, minutes: card.minutes });
+                              setFeedback(null);
+                            }}
+                          >
+                            <span className="apportion-owner-slot-left">{card.slotLabel}</span>
+                            <span className="apportion-owner-slot-available-label">Available</span>
+                          </button>
+                          {canManageHolds && !card.isPast && card.instanceIndex === 0 ? (
+                            <button
+                              aria-label={card.isHeld ? `Release hold on ${card.slotLabel}` : `Hold ${card.slotLabel}`}
+                              className="apportion-hold-cross-button"
+                              title={card.isHeld ? "Release slot hold" : "Put slot on hold"}
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                void handleToggleHold({ slotIso: card.startsAt });
+                              }}
+                            >
+                              ✕
+                            </button>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="muted-text apportion-queue-warning">No slots configured for this date.</p>
+                )}
+              </div>
+            ) : payload.business.justAddToList ? (
               <div className="field">
                 <p className="muted-text">Queue size: {queueCountForSelectedDate}</p>
                 {queueEstimate ? <p className="muted-text">Estimated start time: {queueEstimate.label}</p> : null}
@@ -1340,17 +1785,8 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
             ) : (
               <div className="field">
                 <label htmlFor="apportion-appointment-time">Appointment time</label>
-                <div className="apportion-slot-pager">
-                  <button aria-label="Previous times" className="icon-button button-secondary" disabled={slotPage === 0} type="button" onClick={() => setSlotPage((page) => Math.max(0, page - 1))}>
-                    <ChevronLeft aria-hidden="true" size={18} />
-                  </button>
-                  <span className="muted-text">{pageCount ? `${slotPage + 1} / ${pageCount}` : "0 times"}</span>
-                  <button aria-label="Next times" className="icon-button button-secondary" disabled={slotPage + 1 >= pageCount} type="button" onClick={() => setSlotPage((page) => Math.min(pageCount - 1, page + 1))}>
-                    <ChevronRight aria-hidden="true" size={18} />
-                  </button>
-                </div>
                 {visibleSlots.length ? (
-                  <div className="apportion-slot-grid" role="group" aria-label="Available appointment times">
+                  <div className="apportion-slot-grid is-single-column-scroll" role="group" aria-label="Available appointment times">
                     {visibleSlots.map((slot) => (
                       <div className="apportion-slot-chip-wrap" key={slot.startsAt} style={{ position: "relative" }}>
                         <button
@@ -1402,7 +1838,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
             </div>
             {feedback ? <p className="muted-text" role="status">{feedback}{ticketUrl ? <> <a href={ticketUrl}>My Dashboard</a></> : null}</p> : null}
             <div className="inline-actions">
-              <button className="button" disabled={isBooking || isLookingUp || (isTargeted && !targetIsVerified) || !selectedLocation || !selectedDateKey || (!payload.business.justAddToList && !selectedSlot) || (payload.business.justAddToList && !queueEstimate) || (recurringAllowed && recurrenceMode !== "none" && (!!recurrenceError || !plannedDateKeys.length))} type="button" onClick={() => void handleBookAppointment()}>
+              <button className="button" disabled={isPastSelectedDate || isBooking || isLookingUp || (isTargeted && !targetIsVerified) || !selectedLocation || !selectedDateKey || (!payload.business.justAddToList && !selectedSlot) || (payload.business.justAddToList && !queueEstimate) || (recurringAllowed && recurrenceMode !== "none" && (!!recurrenceError || !plannedDateKeys.length))} type="button" onClick={() => void handleBookAppointment()}>
                 {isBooking ? <LoaderCircle aria-hidden="true" className="apportion-spinner" size={18} /> : isTargeted ? <Send aria-hidden="true" size={18} /> : null}{isBooking ? isTargeted ? "Sending..." : "Booking..." : "Book"}
               </button>
               <a className="button-secondary" href="/user?tab=apportion">My Dashboard</a>
@@ -1412,6 +1848,109 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
           </div>
         </div>
       </section>
+
+      {cancellationAppointment ? (
+        <ApportionCancellationDialog
+          onClose={() => setCancellationAppointment(null)}
+          onConfirm={(reason) => handleOwnerAppointmentAction(cancellationAppointment, "cancel", reason)}
+        />
+      ) : null}
+
+      {threadAppointment && typeof document !== "undefined" ? createPortal(
+        <div
+          className="apportion-thread-overlay"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setThreadAppointmentId(null);
+          }}
+        >
+          <section aria-labelledby="apportion-booking-thread-title" aria-modal="true" className="apportion-thread-drawer" role="dialog">
+            <header className="apportion-thread-header">
+              <div>
+                <p className="eyebrow">{threadAppointment.locationName} / {threadAppointment.serviceName || "Consultation"}</p>
+                <h2 id="apportion-booking-thread-title">Appointment notes</h2>
+                <p className="muted-text">
+                  {formatShortDateTimeIst(threadAppointment.startsAt)} · {threadAppointment.requesterName}
+                </p>
+              </div>
+              <button
+                aria-label="Close appointment notes"
+                className="icon-button apportion-thread-close"
+                type="button"
+                onClick={() => setThreadAppointmentId(null)}
+              >
+                <X aria-hidden="true" size={19} />
+              </button>
+            </header>
+            <div aria-label="Message history" aria-live="polite" className="apportion-thread-body">
+              {(threadMessages ?? threadAppointment.messages).length ? (
+                (threadMessages ?? threadAppointment.messages).map((message) => {
+                  const isOwnMessage = Boolean(
+                    payload.viewerIdentifier
+                    && participantIdentifiersMatch(message.authorIdentifier, payload.viewerIdentifier),
+                  );
+                  const isRequesterMessage = participantIdentifiersMatch(
+                    message.authorIdentifier,
+                    threadAppointment.requesterIdentifier,
+                  );
+                  const authorLabel = isOwnMessage ? "You" : isRequesterMessage ? "Customer" : "Provider/Business";
+                  return (
+                    <article
+                      className={`apportion-thread-message${isOwnMessage ? " is-outgoing" : " is-incoming"}`}
+                      key={message.id}
+                    >
+                      <div>
+                        <strong>{authorLabel}</strong>
+                        <time dateTime={message.createdAt}>{formatShortDateTimeIst(message.createdAt)}</time>
+                      </div>
+                      <p>{message.body}</p>
+                    </article>
+                  );
+                })
+              ) : threadAppointment.notes ? (
+                <article className="apportion-thread-message is-incoming">
+                  <div>
+                    <strong>Booking note</strong>
+                    <time dateTime={threadAppointment.createdAt}>{formatShortDateTimeIst(threadAppointment.createdAt)}</time>
+                  </div>
+                  <p>{threadAppointment.notes}</p>
+                </article>
+              ) : (
+                <p className="muted-text">No notes or messages yet.</p>
+              )}
+            </div>
+            <footer className="apportion-thread-footer">
+              {threadReadOnly ? (
+                <p className="muted-text">Read only. Messaging is unavailable for this appointment.</p>
+              ) : (
+                <>
+                  <label htmlFor="apportion-booking-thread-message">Message</label>
+                  <textarea
+                    id="apportion-booking-thread-message"
+                    maxLength={2000}
+                    rows={3}
+                    value={messageDraft}
+                    onChange={(event) => setMessageDraft(event.target.value)}
+                  />
+                  {messageError ? <p className="form-error" role="alert">{messageError}</p> : null}
+                  <div>
+                    <span className="muted-text">{messageDraft.length} / 2000</span>
+                    <button
+                      className="button small-button"
+                      disabled={!messageDraft.trim() || isSendingMessage}
+                      type="button"
+                      onClick={() => void handleSendThreadMessage(threadAppointment)}
+                    >
+                      {isSendingMessage ? <LoaderCircle aria-hidden="true" className="apportion-spinner" size={16} /> : null}
+                      {isSendingMessage ? "Sending..." : "Send message"}
+                    </button>
+                  </div>
+                </>
+              )}
+            </footer>
+          </section>
+        </div>,
+        document.body,
+      ) : null}
 
       <p className="apportion-identity-mark">www.TRAPit.in</p>
 

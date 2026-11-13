@@ -69,7 +69,7 @@ type PollSummaryEntry = {
 const POLL_STORE_MODE = process.env.TRAPIT_POLL_STORE_MODE?.trim().toLowerCase() ?? "file";
 
 function dedupe(values: string[]) {
-  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+  return Array.from(new Set((values ?? []).map((value) => (value ?? "").trim()).filter(Boolean)));
 }
 
 function resolvePollResponseMode(input: Pick<CreateScheduledPollInput, "anonymous" | "openPollRequiresRegistration" | "participantType">): PollResponseMode {

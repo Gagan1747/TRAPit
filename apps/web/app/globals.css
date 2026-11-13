@@ -1644,6 +1644,153 @@ main {
   gap: 8px;
 }
 
+.apportion-slot-grid.is-single-column-scroll {
+  grid-template-columns: minmax(0, 1fr);
+  max-height: 296px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.apportion-date-appointment-count {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent-deep);
+  color: #ffffff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  z-index: 2;
+}
+
+.apportion-owner-slot-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(114, 92, 74, 0.28);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.apportion-owner-slot-card:hover,
+.apportion-owner-slot-card:focus-visible {
+  border-color: var(--accent-deep);
+  background: rgba(127, 99, 201, 0.08);
+  outline: none;
+}
+
+.apportion-owner-slot-left {
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--accent-deep);
+  padding-right: 8px;
+  border-right: 1px solid var(--line);
+}
+
+.apportion-owner-slot-center {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+}
+
+.apportion-owner-slot-name,
+.apportion-owner-slot-phone {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apportion-owner-slot-name {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.apportion-owner-slot-phone {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.apportion-owner-slot-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.apportion-slot-action-icon,
+.apportion-slot-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.apportion-slot-action-icon {
+  border: 1px solid var(--line);
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.apportion-slot-action-icon.is-done,
+.apportion-slot-status-icon.is-done {
+  color: #15803d;
+  border-color: rgba(21, 128, 61, 0.35);
+  background: rgba(21, 128, 61, 0.1);
+}
+
+.apportion-slot-action-icon.is-cancel,
+.apportion-slot-action-icon.is-absent,
+.apportion-slot-status-icon.is-cancelled {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.35);
+  background: rgba(185, 28, 28, 0.1);
+}
+
+.apportion-slot-status-icon.is-missed {
+  color: #92400e;
+  border: 1px solid rgba(146, 64, 14, 0.35);
+  background: rgba(245, 158, 11, 0.14);
+}
+
+.apportion-owner-available-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+}
+
+.apportion-owner-slot-available-label {
+  font-size: 0.82rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .apportion-slot-pager {
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr) 40px;
@@ -5065,13 +5212,15 @@ button:disabled {
 .upgrade-tier-header-cell {
   display: grid;
   gap: 4px;
+  min-width: 0;
 }
 
 .upgrade-tier-clickable-button {
   display: grid;
   gap: 4px;
   width: 100%;
-  padding: 8px 10px;
+  min-width: 0;
+  padding: 8px 8px;
   border-radius: 8px;
   border: 1px solid var(--accent-deep);
   background: rgba(127, 99, 201, 0.12);
@@ -5087,13 +5236,39 @@ button:disabled {
 
 .upgrade-tier-title {
   font-weight: 700;
+  line-height: 1.2;
 }
 
 .upgrade-tier-subline {
   display: block;
-  white-space: nowrap;
-  font-size: 0.82rem;
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  font-size: 0.76rem;
+  line-height: 1.25;
   font-weight: 600;
+}
+
+.razorpay-container,
+.razorpay-container iframe,
+.razorpay-backdrop {
+  color-scheme: light !important;
+  forced-color-adjust: none !important;
+}
+
+.group-payment-month.is-payable {
+  cursor: pointer;
+  border-color: var(--accent-deep);
+  background: rgba(127, 99, 201, 0.1);
+}
+
+.group-payment-month.is-payable:hover:not(:disabled) {
+  background: rgba(127, 99, 201, 0.2);
+}
+
+.group-payment-month.is-payable:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .notification-whatsapp-setting {

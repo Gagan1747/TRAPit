@@ -538,6 +538,7 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       joinedAt: record.joinedAt ?? null,
       ownerIdentifier: record.ownerIdentifier?.trim() ?? "",
       ownerLabel: record.ownerLabel?.trim() || record.ownerIdentifier?.trim() || "Owner",
+      paymentsByMonthKey: record.paymentsByMonthKey ?? {},
       requestId: record.requestId ?? null,
       status: (record.status ?? "member") as GroupMembershipStatus,
       updatedAt: record.updatedAt ?? record.createdAt ?? new Date().toISOString(),
@@ -551,9 +552,14 @@ function normalizeState(parsed: Partial<TestingWorkspaceState>): TestingWorkspac
       adminShareCodesByIdentifier: group.adminShareCodesByIdentifier ?? {},
       attendanceTrackingEnabled: Boolean(group.attendanceTrackingEnabled),
       inviteJoinMode: group.inviteJoinMode ?? "approval-required",
+      monthlyPaymentAmountInr:
+        typeof group.monthlyPaymentAmountInr === "number" && Number.isFinite(group.monthlyPaymentAmountInr) && group.monthlyPaymentAmountInr > 0
+          ? Math.round(group.monthlyPaymentAmountInr)
+          : null,
       ownerIdentifier: group.ownerIdentifier?.trim() || null,
       ownerLabel: group.ownerLabel?.trim() || null,
       participantIds: dedupe(group.participantIds ?? []),
+      paymentTrackingEnabled: Boolean(group.paymentTrackingEnabled),
       shareCode: group.shareCode?.trim() || `TRAPIT-GROUP-${createEntityId("access").replace(/-/g, "").toUpperCase()}`,
     })),
     participants: parsed.participants ?? [],
@@ -756,6 +762,7 @@ function reconcileGroupMemberships(state: TestingWorkspaceState) {
       if (record.groupId === group.id) {
         record.groupName = group.name;
         record.attendanceByDateKey ??= {};
+        record.paymentsByMonthKey ??= {};
         record.isGroupAdmin = isGroupAdminOf(group, record.userIdentifier);
         if (record.introducedByAdminIdentifier) {
           const introProfile = state.participants.find((participant) =>
@@ -957,6 +964,7 @@ export function mutateWorkspaceBrandingState(
     ? {
         ...normalizedBranding,
         appointmentShareCode: ownerShareCode ?? normalizedBranding.appointmentShareCode ?? existingBranding?.appointmentShareCode ?? null,
+        createdAt: existingBranding?.createdAt ?? normalizedBranding.createdAt ?? new Date().toISOString(),
       }
     : null;
 
@@ -2680,7 +2688,9 @@ export async function listParticipantGroupsForOwner(
       const participant = participantMap.get(participantId);
 
       return participant ? identifiersMatch(participant.identifier, ownerIdentifier) : false;
-    });
+    }) || (state.groupMemberships ?? []).some(
+      (record) => record.groupId === group.id && identifiersMatch(record.userIdentifier, ownerIdentifier),
+    );
 
     if (isMember) {
       return true;
@@ -3089,6 +3099,114 @@ export async function toggleGroupAttendanceTracking(input: {
 
   await writeStore(state);
   return state.participantGroups;
+}
+
+export async function toggleGroupPaymentTracking(input: {
+  enabled?: boolean;
+  groupId: string;
+  monthlyPaymentAmountInr?: number | null;
+  ownerIdentifier: string;
+}) {
+  const state = await readStore();
+  reconcileGroupMemberships(state);
+  const group = state.participantGroups.find((entry) => entry.id === input.groupId);
+
+  if (!group) {
+    throw new Error("Group not found.");
+  }
+
+  if (!group.ownerIdentifier || !identifiersMatch(group.ownerIdentifier, input.ownerIdentifier)) {
+    throw new Error("Only the group creator can update payment settings.");
+  }
+
+  const nextEnabled = typeof input.enabled === "boolean"
+    ? input.enabled
+    : !Boolean(group.paymentTrackingEnabled);
+  const nextAmount = input.monthlyPaymentAmountInr !== undefined
+    ? (typeof input.monthlyPaymentAmountInr === "number" && Number.isFinite(input.monthlyPaymentAmountInr) && input.monthlyPaymentAmountInr > 0
+      ? Math.round(input.monthlyPaymentAmountInr)
+      : null)
+    : (group.monthlyPaymentAmountInr ?? null);
+
+  if (nextEnabled && (!nextAmount || nextAmount <= 0)) {
+    throw new Error("Enter a valid monthly payment amount in INR.");
+  }
+
+  const timestamp = new Date().toISOString();
+  state.participantGroups = state.participantGroups.map((entry) =>
+    entry.id === group.id
+      ? {
+          ...entry,
+          monthlyPaymentAmountInr: nextAmount,
+          paymentTrackingEnabled: nextEnabled,
+          updatedAt: timestamp,
+        }
+      : entry,
+  );
+
+  await writeStore(state);
+  return state.participantGroups;
+}
+
+export async function recordGroupMonthlyPayment(input: {
+  amountInr: number;
+  groupId: string;
+  memberIdentifier: string;
+  membershipId?: string | null;
+  monthKey: string;
+  orderId?: string | null;
+  paidAt?: string;
+  paymentId?: string | null;
+}) {
+  const state = await readStore();
+  reconcileGroupMemberships(state);
+  const group = state.participantGroups.find((entry) => entry.id === input.groupId);
+
+  if (!group) {
+    throw new Error("Group not found.");
+  }
+
+  const monthKey = (input.monthKey ?? "").trim();
+  if (!/^\d{4}-\d{2}$/.test(monthKey)) {
+    throw new Error("A valid payment month (YYYY-MM) is required.");
+  }
+
+  const amountInr = Math.round(Number(input.amountInr));
+  if (!Number.isFinite(amountInr) || amountInr <= 0) {
+    throw new Error("A valid payment amount is required.");
+  }
+
+  const paidAt = input.paidAt?.trim() || new Date().toISOString();
+  let matched = false;
+  state.groupMemberships = (state.groupMemberships ?? []).map((record) => {
+    if (matched) return record;
+    const isTarget = input.membershipId
+      ? record.id === input.membershipId
+      : record.groupId === group.id && identifiersMatch(record.userIdentifier, input.memberIdentifier);
+    if (!isTarget) return record;
+    matched = true;
+    const nextPayments = {
+      ...(record.paymentsByMonthKey ?? {}),
+      [monthKey]: {
+        amountInr,
+        orderId: input.orderId?.trim() || null,
+        paidAt,
+        paymentId: input.paymentId?.trim() || null,
+      },
+    };
+    return {
+      ...record,
+      paymentsByMonthKey: nextPayments,
+      updatedAt: paidAt,
+    };
+  });
+
+  if (!matched) {
+    throw new Error("Group membership record not found.");
+  }
+
+  await writeStore(state);
+  return state.groupMemberships;
 }
 
 export async function toggleGroupMemberAdmin(input: {
@@ -3776,7 +3894,8 @@ export async function listScheduledTests(actorId: string | null = null) {
 }
 
 function assertAssessmentName(value: string, label: string) {
-  if (!value.trim() || Array.from(value.trim()).length > 30) {
+  const safeValue = (value ?? "").trim();
+  if (!safeValue || Array.from(safeValue).length > 30) {
     throw new Error(`${label} is required and must not exceed 30 characters.`);
   }
 }
@@ -3810,8 +3929,18 @@ function assertNewTestConfiguration(state: TestingWorkspaceState, input: {
 }
 
 export async function createScheduledTest(input: Parameters<typeof createScheduledTestWithoutNotifications>[0]) {
+  return createScheduledTestsBatch([input]);
+}
+
+export async function createScheduledTestsBatch(inputs: Array<Parameters<typeof createScheduledTestWithoutNotifications>[0]>) {
+  if (!inputs.length) {
+    return [];
+  }
   await recoverBrowserSchedulingNotifications();
-  const result = await createScheduledTestWithoutNotifications(input);
+  let result: ScheduledTest[] = [];
+  for (const input of inputs) {
+    result = await createScheduledTestWithoutNotifications(input);
+  }
   await recoverBrowserSchedulingNotifications();
   return result;
 }
@@ -4163,17 +4292,81 @@ export async function listUserHistory(identifier: string) {
   );
 }
 
+function getCurrentIstMonthKey(now = new Date()) {
+  const shifted = new Date(now.getTime() + (5 * 60 + 30) * 60 * 1000);
+  const year = shifted.getUTCFullYear();
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
+function isGroupMemberEligibleForPaidGroupAccess(
+  state: TestingWorkspaceState,
+  group: ParticipantGroup,
+  normalizedIdentifier: string,
+  monthKey = getCurrentIstMonthKey(),
+) {
+  if (!group.paymentTrackingEnabled || !group.monthlyPaymentAmountInr || group.monthlyPaymentAmountInr <= 0) {
+    return true;
+  }
+  if (group.ownerIdentifier && identifiersMatch(group.ownerIdentifier, normalizedIdentifier)) {
+    return true;
+  }
+  if ((group.adminIdentifiers ?? []).some((adminId) => identifiersMatch(adminId, normalizedIdentifier))) {
+    return true;
+  }
+  const membership = (state.groupMemberships ?? []).find(
+    (record) =>
+      record.groupId === group.id
+      && (record.status === "member" || record.status === "creator")
+      && identifiersMatch(record.userIdentifier, normalizedIdentifier),
+  );
+  return Boolean(membership?.paymentsByMonthKey?.[monthKey]?.paidAt);
+}
+
+function canParticipantAccessGroupIds(
+  state: TestingWorkspaceState,
+  groupIds: string[],
+  normalizedIdentifier: string,
+) {
+  if (!groupIds.length) return true;
+  const participantProfileIds = state.participants
+    .filter((participant) => identifiersMatch(participant.identifier, normalizedIdentifier))
+    .map((participant) => participant.id);
+  const matchingGroups = state.participantGroups.filter(
+    (group) =>
+      groupIds.includes(group.id)
+      && ((group.ownerIdentifier && identifiersMatch(group.ownerIdentifier, normalizedIdentifier))
+        || group.participantIds.some((participantId) => participantProfileIds.includes(participantId))),
+  );
+  if (!matchingGroups.length) {
+    const anyPaidGroupInList = state.participantGroups.some(
+      (group) => groupIds.includes(group.id) && group.paymentTrackingEnabled && (group.monthlyPaymentAmountInr ?? 0) > 0,
+    );
+    return !anyPaidGroupInList;
+  }
+  return matchingGroups.some((group) => isGroupMemberEligibleForPaidGroupAccess(state, group, normalizedIdentifier));
+}
+
 export async function listAvailableTestsForParticipant(
   identifier: string,
 ): Promise<AvailableUserTest[]> {
   const state = await readStoreSnapshot();
   const normalizedIdentifier = normalizeParticipantIdentifier(identifier);
-  const scheduledTests = hydrateScheduledTests(state).filter((scheduledTest) =>
-    Boolean(scheduledTest.creatorIdentifier && identifiersMatch(scheduledTest.creatorIdentifier, normalizedIdentifier))
-    || scheduledTest.resolvedParticipantIdentifiers.some((participantIdentifier) =>
+  const scheduledTests = hydrateScheduledTests(state).filter((scheduledTest) => {
+    const isCreator = Boolean(
+      scheduledTest.creatorIdentifier && identifiersMatch(scheduledTest.creatorIdentifier, normalizedIdentifier),
+    );
+    if (isCreator) return true;
+    const isParticipant = scheduledTest.resolvedParticipantIdentifiers.some((participantIdentifier) =>
       identifiersMatch(participantIdentifier, normalizedIdentifier),
-    ),
-  );
+    );
+    if (!isParticipant) return false;
+    const hasSubmittedAttempt = state.attempts.some(
+      (attempt) => attempt.testId === scheduledTest.id && identifiersMatch(attempt.userId, normalizedIdentifier),
+    );
+    if (hasSubmittedAttempt) return true;
+    return canParticipantAccessGroupIds(state, scheduledTest.participantGroupIds, normalizedIdentifier);
+  });
   const completedScheduledTests = scheduledTests.filter((scheduledTest) => scheduledTest.status === "completed");
   const completedScheduledTestIds = new Set(completedScheduledTests.map((scheduledTest) => scheduledTest.id));
   const leaderboardByTestId = new Map(
@@ -4304,7 +4497,8 @@ export async function listAvailablePollsForParticipant(identifier: string): Prom
   const participantGroupIds = new Set(
     state.participantGroups
       .filter((group) =>
-        group.participantIds.some((participantId) => participantProfileIds.includes(participantId)),
+        group.participantIds.some((participantId) => participantProfileIds.includes(participantId))
+        && isGroupMemberEligibleForPaidGroupAccess(state, group, normalizedIdentifier),
       )
       .map((group) => group.id),
   );
@@ -4363,7 +4557,8 @@ function getParticipantGroupIdsForIdentifier(state: TestingWorkspaceState, norma
   return new Set(
     state.participantGroups
       .filter((group) =>
-        group.participantIds.some((participantId) => participantProfileIds.includes(participantId)),
+        group.participantIds.some((participantId) => participantProfileIds.includes(participantId))
+        && isGroupMemberEligibleForPaidGroupAccess(state, group, normalizedIdentifier),
       )
       .map((group) => group.id),
   );
@@ -6821,7 +7016,14 @@ export async function listGamesForParticipant(participantIdentifier: string) {
   const normalizedIdentifier = normalizeParticipantIdentifier(participantIdentifier);
   const snapshot = await readStoreSnapshot();
   const now = new Date();
-  const relevantGames = snapshot.games.filter((game) => findGameParticipant(game, normalizedIdentifier));
+  const canAccessGame = (state: TestingWorkspaceState, game: TestingWorkspaceState["games"][number]) => {
+    if (!findGameParticipant(game, normalizedIdentifier)) return false;
+    if (identifiersMatch(game.creatorIdentifier, normalizedIdentifier)) return true;
+    if (game.completedAt) return true;
+    const groupIds = (game.participantGroupIds ?? [game.participantGroupId]).filter(Boolean);
+    return canParticipantAccessGroupIds(state, groupIds, normalizedIdentifier);
+  };
+  const relevantGames = snapshot.games.filter((game) => canAccessGame(snapshot, game));
   if (!relevantGames.some((game) => gameNeedsLifecycleWrite(snapshot, game, now))) {
     return relevantGames.map((game) => hydrateGame(game, now.getTime(), normalizedIdentifier));
   }
@@ -6830,13 +7032,13 @@ export async function listGamesForParticipant(participantIdentifier: string) {
     const mutationNow = new Date();
 
     for (const game of state.games) {
-      if (!findGameParticipant(game, normalizedIdentifier)) continue;
+      if (!canAccessGame(state, game)) continue;
       refreshRapidInvitations(state, game);
       advanceGameLifecycle(game, mutationNow);
     }
 
     return state.games
-      .filter((game) => findGameParticipant(game, normalizedIdentifier))
+      .filter((game) => canAccessGame(state, game))
       .map((game) => hydrateGame(game, mutationNow.getTime(), normalizedIdentifier));
   });
 }

@@ -3,25 +3,48 @@ import { type WorkspaceBranding } from "@trapit/testing";
 
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 import { assertCanScheduleSelfTest, assertCanScheduleTest } from "../../../../lib/user-category-limits";
-import { createScheduledTest, listScheduledTests, updateScheduledTest } from "../../../../lib/testing-store";
+import { createScheduledTestsBatch, listScheduledTests, updateScheduledTest } from "../../../../lib/testing-store";
 
-type TestRepeatMode = "none" | "daily" | "weekly" | "monthly";
+type TestRepeatMode = "none" | "weekly" | "biweekly" | "four-weekly" | "daily" | "monthly";
 
-const RECURRENCE_INSTANCE_COUNT = 6;
+const MIN_RECURRENCE_INSTANCE_COUNT = 1;
+const MAX_RECURRENCE_INSTANCE_COUNT = 10;
 
 function normalizeRepeatMode(value: unknown): TestRepeatMode {
-  return value === "daily" || value === "weekly" || value === "monthly" ? value : "none";
+  return value === "weekly"
+    || value === "biweekly"
+    || value === "four-weekly"
+    || value === "daily"
+    || value === "monthly"
+    ? value
+    : "none";
 }
 
-function getStartsAtValues(input: { recurrenceStartsAt?: string[]; repeatMode: TestRepeatMode; startsAt: string }) {
+function getStartsAtValues(input: {
+  instanceCount?: number;
+  recurrenceStartsAt?: string[];
+  repeatMode: TestRepeatMode;
+  startsAt: string;
+}) {
   if (input.repeatMode === "none") {
     return [input.startsAt];
   }
 
-  const values = input.recurrenceStartsAt?.length ? input.recurrenceStartsAt : [];
+  const values = (input.recurrenceStartsAt ?? [])
+    .map((value) => (value ?? "").trim())
+    .filter(Boolean);
 
-  if (values.length !== RECURRENCE_INSTANCE_COUNT) {
-    throw new Error("Recurring schedules must create exactly 6 test instances.");
+  const requestedCount = Number.isInteger(input.instanceCount)
+    ? Number(input.instanceCount)
+    : values.length;
+
+  if (
+    !values.length
+    || values.length < MIN_RECURRENCE_INSTANCE_COUNT
+    || values.length > MAX_RECURRENCE_INSTANCE_COUNT
+    || (Number.isInteger(input.instanceCount) && values.length !== requestedCount)
+  ) {
+    throw new Error(`Recurring schedules must create between ${MIN_RECURRENCE_INSTANCE_COUNT} and ${MAX_RECURRENCE_INSTANCE_COUNT} test instances.`);
   }
 
   if (values.some((value) => Number.isNaN(new Date(value).getTime()))) {
@@ -77,6 +100,7 @@ export async function POST(request: Request) {
       branding?: WorkspaceBranding | null;
       durationMinutes?: number;
       generateInviteLink?: boolean;
+      instanceCount?: number;
       participantGroupIds?: string[];
       participantIds?: string[];
       poolId?: string;
@@ -113,6 +137,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Instant Tests cannot repeat." }, { status: 400 });
     }
     const startsAtValues = getStartsAtValues({
+      instanceCount: body.instanceCount,
       recurrenceStartsAt: body.recurrenceStartsAt,
       repeatMode,
       startsAt: body.startsAt,
@@ -134,27 +159,25 @@ export async function POST(request: Request) {
       }
     }
 
-    let scheduledTests = await listScheduledTests(actor.sub);
-
-    for (const [index, startsAt] of startsAtValues.entries()) {
-      scheduledTests = await createScheduledTest({
+    const scheduledTests = await createScheduledTestsBatch(
+      startsAtValues.map((startsAt, index) => ({
         assessmentKind: body.assessmentKind ?? "standard",
         actorIdentifier: actor.identifier,
         branding: body.branding ?? null,
         createdBy: actor.sub,
         creatorDisplayName: actor.displayName,
-        durationMinutes: body.durationMinutes,
+        durationMinutes: body.durationMinutes!,
         generateInviteLink: Boolean(body.generateInviteLink),
         participantGroupIds: body.participantGroupIds ?? [],
         participantIds: body.participantIds ?? [],
-        poolId: body.poolId,
-        questionCount: body.questionCount,
+        poolId: body.poolId!,
+        questionCount: body.questionCount!,
         sendWhatsAppNotification: Boolean(body.sendWhatsAppNotification),
         startsAt,
-        title: body.title,
+        title: (body.title ?? "").trim(),
         titleSuffix: startsAtValues.length > 1 ? `- ${index + 1} of ${startsAtValues.length}` : null,
-      });
-    }
+      })),
+    );
 
     return NextResponse.json({ scheduledTests });
   } catch (error) {

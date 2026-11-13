@@ -141,9 +141,15 @@ const DEFAULT_BUSINESS_END_MINUTES = 18 * 60;
 const DEFAULT_APPOINTMENT_NOTES_PROMPT = "Share a brief about appointment purpose";
 const IST_OFFSET_MINUTES = 5 * 60 + 30;
 
-type TestRepeatMode = "none" | "daily" | "weekly" | "monthly";
+type TestRepeatMode = "none" | "weekly" | "biweekly" | "four-weekly";
 
-const RECURRING_TEST_INSTANCE_COUNT = 6;
+const TEST_REPEAT_MODE_OPTIONS: ReadonlyArray<{ label: string; value: Exclude<TestRepeatMode, "none">; stepDays: number }> = [
+  { label: "1/week", stepDays: 7, value: "weekly" },
+  { label: "1/2 weeks", stepDays: 14, value: "biweekly" },
+  { label: "1/4 week", stepDays: 28, value: "four-weekly" },
+];
+
+const TEST_REPEAT_INSTANCE_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
 
 function createEmptyOptions(count: number) {
   return Array.from({ length: count }, () => "");
@@ -406,29 +412,34 @@ function addMonthsToDateTimeInput(value: string, monthOffset: number) {
 
 function addDaysToDateTimeInput(value: string, dayOffset: number) {
   const safeValue = (value ?? "").trim();
-  const date = new Date(safeValue);
+  const parts = parseDateTimeInputValue(safeValue);
 
-  if (!safeValue || Number.isNaN(date.getTime())) {
+  if (!parts) {
     return safeValue;
   }
 
-  date.setDate(date.getDate() + dayOffset);
-  return toDateTimeInputValue(date.toISOString());
+  const shiftedUtc = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + dayOffset, parts.hours, parts.minutes));
+  return formatDateTimeInputValue({
+    day: shiftedUtc.getUTCDate(),
+    hours: parts.hours,
+    minutes: parts.minutes,
+    month: shiftedUtc.getUTCMonth() + 1,
+    year: shiftedUtc.getUTCFullYear(),
+  });
 }
 
-function getRecurringScheduleInputs(startsAtInput: string, repeatMode: TestRepeatMode) {
+function getRecurringScheduleInputs(startsAtInput: string, repeatMode: TestRepeatMode, instanceCount = 1) {
   const safeInput = (startsAtInput ?? "").trim();
+  const clampedCount = Math.min(10, Math.max(1, Number.isFinite(instanceCount) ? Math.floor(instanceCount) : 1));
   if (repeatMode === "none" || !safeInput) {
     return [safeInput];
   }
 
-  return Array.from({ length: RECURRING_TEST_INSTANCE_COUNT }, (_, index) => {
-    if (repeatMode === "monthly") {
-      return addMonthsToDateTimeInput(safeInput, index);
-    }
+  const stepDays = repeatMode === "four-weekly" ? 28 : repeatMode === "biweekly" ? 14 : 7;
 
-    return addDaysToDateTimeInput(safeInput, repeatMode === "weekly" ? index * 7 : index);
-  });
+  return Array.from({ length: clampedCount }, (_, index) =>
+    addDaysToDateTimeInput(safeInput, index * stepDays),
+  );
 }
 
 function formatMembershipCount(value: number) {
@@ -923,11 +934,12 @@ function getBookingBehaviorMode(branding: WorkspaceBranding | null): BookingBeha
 }
 
 function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBranding | null {
-  const instituteName = branding?.instituteName.trim() ?? "";
-  const address = branding?.address.trim() ?? "";
+  const instituteName = branding?.instituteName?.trim() ?? "";
+  const address = branding?.address?.trim() ?? "";
   const imageDataUrl = branding?.imageDataUrl?.trim() ?? null;
   const profileImageDataUrl = branding?.profileImageDataUrl?.trim() ?? null;
   const promotionalImageDataUrls = (branding?.promotionalImageDataUrls ?? [])
+    .filter((value): value is string => typeof value === "string")
     .map((value) => value.trim())
     .filter(Boolean)
     .slice(0, MAX_PROMOTIONAL_IMAGES);
@@ -940,15 +952,16 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
   const appointmentDateHoursOverrides = branding?.appointmentDateHoursOverrides ?? [];
   const appointmentWeeklyHoursOverrides = branding?.appointmentWeeklyHoursOverrides ?? [];
   const appointmentLocations = (branding?.appointmentLocations ?? []).map((location, index) => ({
-    address: location.address.trim(),
+    address: location.address?.trim() ?? "",
     dailyHours: resolveApportionDailySchedule(location),
-    id: location.id.trim() || `location-${index + 1}`,
-    name: location.name.trim() || `Location ${index + 1}`,
-    workingDays: location.workingDays.trim(),
-    workingHours: location.workingHours.trim(),
-    workingHoursSecondWindow: location.workingHoursSecondWindow.trim(),
+    id: location.id?.trim() || `location-${index + 1}`,
+    ...(location.locationLink?.trim() ? { locationLink: location.locationLink.trim() } : {}),
+    name: location.name?.trim() || `Location ${index + 1}`,
+    workingDays: location.workingDays?.trim() ?? "",
+    workingHours: location.workingHours?.trim() ?? "",
+    workingHoursSecondWindow: location.workingHoursSecondWindow?.trim() ?? "",
   }));
-  const breakHours = branding?.breakHours.trim() ?? "";
+  const breakHours = branding?.breakHours?.trim() ?? "";
   const justAddToList = branding?.justAddToList === true;
   const recurringBookingsEnabled = branding?.recurringBookingsEnabled === true;
   const recurringBookingLimit = recurringBookingsEnabled
@@ -959,9 +972,9 @@ function normalizeBrandingInput(branding: WorkspaceBranding | null): WorkspaceBr
     : recurringBookingsEnabled
       ? 6
       : null;
-  const workingDays = branding?.workingDays.trim() ?? "";
-  const workingHours = branding?.workingHours.trim() ?? "";
-  const workingHoursSecondWindow = branding?.workingHoursSecondWindow.trim() ?? "";
+  const workingDays = branding?.workingDays?.trim() ?? "";
+  const workingHours = branding?.workingHours?.trim() ?? "";
+  const workingHoursSecondWindow = branding?.workingHoursSecondWindow?.trim() ?? "";
   const showRemainingBookings = branding?.showRemainingBookings === true;
   const appointmentsPerSlot = Number.isFinite(branding?.appointmentsPerSlot) && branding?.appointmentsPerSlot && branding.appointmentsPerSlot > 0
     ? Math.floor(branding.appointmentsPerSlot)
@@ -1802,7 +1815,24 @@ export function AdminQuestionWorkspace({
   const [groupMemberSearchByGroupId, setGroupMemberSearchByGroupId] = useState<Record<string, string>>({});
   const [groupQrCodes, setGroupQrCodes] = useState<Record<string, string>>({});
   const [groupAttendanceOffsetByRecordId, setGroupAttendanceOffsetByRecordId] = useState<Record<string, number>>({});
+  const [groupPaymentOffsetByRecordId, setGroupPaymentOffsetByRecordId] = useState<Record<string, number>>({});
   const [groupIntroAdminPhoneByRecordId, setGroupIntroAdminPhoneByRecordId] = useState<Record<string, string>>({});
+  const [isPaymentsModalOpen, setIsPaymentsModalOpen] = useState(false);
+  const [payoutAccount, setPayoutAccount] = useState<{
+    linkedAccountId: string;
+    status: "created" | "onboarding" | "verified";
+    updatedAt: string;
+  } | null>(null);
+  const [isOnboardingPayout, setIsOnboardingPayout] = useState(false);
+  const [payoutFeedback, setPayoutFeedback] = useState<string | null>(null);
+  const [groupPaymentPromptGroup, setGroupPaymentPromptGroup] = useState<{
+    amountDraft: string;
+    currentEnabled: boolean;
+    groupId: string;
+    groupName: string;
+  } | null>(null);
+  const [groupPaymentPromptFeedback, setGroupPaymentPromptFeedback] = useState<string | null>(null);
+  const [isProcessingGroupPaymentKey, setIsProcessingGroupPaymentKey] = useState<string | null>(null);
   const [isContactUsOpen, setIsContactUsOpen] = useState(false);
   const [isNotificationsModalOpen, setIsNotificationsModalOpen] = useState(false);
   const [whatsappNotificationsEnabled, setWhatsappNotificationsEnabled] = useState(true);
@@ -1830,6 +1860,7 @@ export function AdminQuestionWorkspace({
   const [appointmentOperatingHoursById, setAppointmentOperatingHoursById] = useState<Record<string, ApportionOwnerOperatingHours>>({});
   const [brandingFeedback, setBrandingFeedback] = useState<string | null>(null);
   const [brandingAddress, setBrandingAddress] = useState("");
+  const [brandingLocationLink, setBrandingLocationLink] = useState("");
   const [brandingImageDataUrl, setBrandingImageDataUrl] = useState<string | null>(null);
   const [brandingInstituteName, setBrandingInstituteName] = useState("");
   const [brandingProfileImageDataUrl, setBrandingProfileImageDataUrl] = useState<string | null>(null);
@@ -1859,6 +1890,7 @@ export function AdminQuestionWorkspace({
   const [businessWeeklyHoursOverrides, setBusinessWeeklyHoursOverrides] = useState<AppointmentWeeklyHoursOverride[]>([]);
   const [businessSecondLocation, setBusinessSecondLocation] = useState({
     address: "",
+    locationLink: "",
     enabled: false,
     name: "Location 2",
     dailyHours: resolveApportionDailySchedule({}),
@@ -1960,6 +1992,7 @@ export function AdminQuestionWorkspace({
   const [schedulePoolId, setSchedulePoolId] = useState("");
   const [scheduleQuestionCount, setScheduleQuestionCount] = useState("20");
   const [scheduleRepeatMode, setScheduleRepeatMode] = useState<TestRepeatMode>("none");
+  const [scheduleRepeatInstanceCount, setScheduleRepeatInstanceCount] = useState("1");
   const [scheduleStartsAtInput, setScheduleStartsAtInput] = useState(createDefaultScheduleTime());
   const [scheduleTitle, setScheduleTitle] = useState("");
   const [scheduledTests, setScheduledTests] = useState<ScheduledTest[]>([]);
@@ -2003,6 +2036,7 @@ export function AdminQuestionWorkspace({
     });
     const secondDailyHours = resolveApportionDailySchedule(secondLocation ?? {});
     setBrandingAddress(firstLocation?.address ?? branding?.address ?? "");
+    setBrandingLocationLink(firstLocation?.locationLink ?? "");
     setBrandingInstituteName(branding?.instituteName ?? "");
     setBrandingImageDataUrl(branding?.imageDataUrl ?? null);
     setBrandingProfileImageDataUrl(branding?.profileImageDataUrl ?? null);
@@ -2024,6 +2058,7 @@ export function AdminQuestionWorkspace({
     setBusinessWeeklyHoursOverrides(branding?.appointmentWeeklyHoursOverrides ?? []);
     setBusinessSecondLocation({
       address: secondLocation?.address ?? "",
+      locationLink: secondLocation?.locationLink ?? "",
       enabled: Boolean(secondLocation),
       dailyHours: secondDailyHours,
       customizedWeekdays: getCustomizedScheduleWeekdays(secondDailyHours, secondLocation?.workingDays ?? ""),
@@ -2179,6 +2214,43 @@ export function AdminQuestionWorkspace({
 
   useEffect(() => {
     void loadWorkspace();
+    void (async () => {
+      try {
+        const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null;
+        const callbackMode = params?.get("payoutOnboarding");
+        const callbackAccountId = params?.get("accountId")?.trim() ?? "";
+        if (callbackMode === "callback" && callbackAccountId) {
+          const completed = await readJson<{
+            payoutAccount: { linkedAccountId: string; status: "created" | "onboarding" | "verified"; updatedAt: string } | null;
+          }>(
+            await fetch("/api/user/payments", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "complete-onboarding",
+                linkedAccountId: callbackAccountId,
+              }),
+            }),
+          );
+          setPayoutAccount(completed.payoutAccount);
+          setPayoutFeedback("Bank account verified and linked via Razorpay.");
+          setIsPaymentsModalOpen(true);
+          if (typeof window !== "undefined") {
+            const cleanUrl = new URL(window.location.href);
+            cleanUrl.searchParams.delete("payoutOnboarding");
+            cleanUrl.searchParams.delete("accountId");
+            window.history.replaceState({}, "", cleanUrl.toString());
+          }
+          return;
+        }
+        const payload = await readJson<{
+          payoutAccount: { linkedAccountId: string; status: "created" | "onboarding" | "verified"; updatedAt: string } | null;
+        }>(await fetch("/api/user/payments"));
+        setPayoutAccount(payload.payoutAccount);
+      } catch {
+        // Ignore payout status fetch error on initial load
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -2895,6 +2967,7 @@ export function AdminQuestionWorkspace({
     setScheduleParticipantIds([]);
     setScheduleQuestionCount("20");
     setScheduleRepeatMode("none");
+    setScheduleRepeatInstanceCount("1");
     setScheduleStartsAtInput(createDefaultScheduleTime());
     setScheduleTitle("");
   }
@@ -4512,12 +4585,14 @@ export function AdminQuestionWorkspace({
           ...(workspaceBranding.appointmentLocations ?? []).map((location, index) => ({
             ...location,
             address: index === 0 ? brandingAddress : businessSecondLocation.address,
+            locationLink: index === 0 ? brandingLocationLink : businessSecondLocation.locationLink,
           })),
           ...(businessSecondLocation.enabled && workspaceBranding.appointmentLocations?.length === 1 ? [{
             ...workspaceBranding.appointmentLocations[0],
             id: workspaceBranding.appointmentLocations[0].id === "location-2" ? "location-1" : "location-2",
             name: businessSecondLocation.name,
             address: businessSecondLocation.address,
+            locationLink: businessSecondLocation.locationLink,
           }] : []),
         ],
       });
@@ -4565,6 +4640,7 @@ export function AdminQuestionWorkspace({
           address: brandingAddress,
           dailyHours: businessDailyHours,
           id: workspaceBranding?.appointmentLocations?.[0]?.id ?? "location-1",
+          locationLink: brandingLocationLink,
           name: businessLocationName,
           workingDays: businessWorkingDays,
           workingHours: businessWorkingHours,
@@ -4574,6 +4650,7 @@ export function AdminQuestionWorkspace({
           address: businessSecondLocation.address,
           dailyHours: businessSecondLocation.dailyHours,
           id: workspaceBranding?.appointmentLocations?.[1]?.id ?? (workspaceBranding?.appointmentLocations?.[0]?.id === "location-2" ? "location-1" : "location-2"),
+          locationLink: businessSecondLocation.locationLink,
           name: businessSecondLocation.name,
           workingDays: businessSecondLocation.workingDays,
           workingHours: businessSecondLocation.workingHours,
@@ -5415,6 +5492,135 @@ export function AdminQuestionWorkspace({
     };
   }
 
+  function buildGroupPaymentCalendarWindow(offsetMonths = 0, boundaryIso?: string | null) {
+    const today = new Date();
+    const currentMonthIndex = today.getFullYear() * 12 + today.getMonth();
+    const parsedBoundary = boundaryIso ? new Date(boundaryIso) : null;
+    const earliestMonthIndex =
+      parsedBoundary && !Number.isNaN(parsedBoundary.getTime())
+        ? parsedBoundary.getFullYear() * 12 + parsedBoundary.getMonth()
+        : currentMonthIndex;
+
+    const minStartMonthIndex = Math.min(earliestMonthIndex, currentMonthIndex);
+    const defaultStartMonthIndex = Math.max(minStartMonthIndex, currentMonthIndex - 2);
+    const maxStartMonthIndex = currentMonthIndex + 6;
+    const minOffset = minStartMonthIndex - defaultStartMonthIndex;
+    const maxOffset = maxStartMonthIndex - defaultStartMonthIndex;
+    const clampedOffsetMonths = Math.max(minOffset, Math.min(maxOffset, offsetMonths));
+    const startMonthIndex = defaultStartMonthIndex + clampedOffsetMonths;
+
+    const months = Array.from({ length: 6 }, (_, index) => {
+      const monthIndex = startMonthIndex + index;
+      const year = Math.floor(monthIndex / 12);
+      const month0 = ((monthIndex % 12) + 12) % 12;
+      const monthKey = `${year}-${String(month0 + 1).padStart(2, "0")}`;
+      const date = new Date(year, month0, 1);
+      const monthLabel = date.toLocaleDateString("en-IN", { month: "short", year: "2-digit" });
+      return {
+        isBeforeBoundary: monthIndex < minStartMonthIndex,
+        monthKey,
+        monthLabel,
+      };
+    });
+
+    return {
+      canGoNext: clampedOffsetMonths < maxOffset,
+      canGoPrevious: clampedOffsetMonths > minOffset,
+      clampedOffsetMonths,
+      months,
+    };
+  }
+
+  function handleOpenGroupPaymentPrompt(group: ParticipantGroup) {
+    if (!isSuperAdmin && effectiveUserCategory === "trapit-normal") {
+      openUpgradePanel({
+        featureLabel: "Group Payments",
+        message: "Upgrade to Pro or Pro max",
+        showProButton: true,
+        showProMaxButton: true,
+        targetCategory: "trapit-pro",
+      });
+      return;
+    }
+
+    setGroupPaymentPromptFeedback(null);
+    setGroupPaymentPromptGroup({
+      amountDraft: String(group.monthlyPaymentAmountInr ?? 500),
+      currentEnabled: Boolean(group.paymentTrackingEnabled),
+      groupId: group.id,
+      groupName: group.name,
+    });
+  }
+
+  async function handleSaveGroupPaymentSettings(enable: boolean) {
+    if (!groupPaymentPromptGroup) return;
+    const parsedAmount = Math.round(Number(groupPaymentPromptGroup.amountDraft));
+    if (enable && (!Number.isFinite(parsedAmount) || parsedAmount <= 0)) {
+      setGroupPaymentPromptFeedback("Enter a valid monthly payment amount in INR.");
+      return;
+    }
+
+    setGroupPaymentPromptFeedback(null);
+    lastLocalMutationMsRef.current = Date.now();
+    try {
+      const payload = await readJson<ParticipantsResponse>(
+        await fetch("/api/admin/participants", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            enabled: enable,
+            groupId: groupPaymentPromptGroup.groupId,
+            mode: "toggle-group-payment-tracking",
+            monthlyPaymentAmountInr: enable ? parsedAmount : null,
+          }),
+        }),
+      );
+      setParticipants(payload.participants);
+      setParticipantGroups(payload.participantGroups);
+      setGroupJoinRequests(payload.groupJoinRequests);
+      setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
+      setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
+      setGroupPaymentPromptGroup(null);
+      setGroupFeedback(
+        enable
+          ? `Monthly group payment enabled (INR ${parsedAmount}/month).`
+          : "Monthly group payment disabled.",
+      );
+    } catch (error) {
+      setGroupPaymentPromptFeedback(
+        error instanceof Error ? error.message : "Unable to update group payment settings.",
+      );
+    }
+  }
+
+  async function handleInitiatePayoutOnboarding() {
+    if (isOnboardingPayout) return;
+    setIsOnboardingPayout(true);
+    setPayoutFeedback(null);
+    try {
+      const payload = await readJson<{
+        callbackUrl: string;
+        linkedAccountId: string;
+        onboardingUrl: string;
+        payoutAccount: { linkedAccountId: string; status: "created" | "onboarding" | "verified"; updatedAt: string };
+      }>(
+        await fetch("/api/user/payments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "initiate-onboarding" }),
+        }),
+      );
+      setPayoutAccount(payload.payoutAccount);
+      setPayoutFeedback(`Linked account (${payload.linkedAccountId}) initialized. Redirecting to Razorpay portal...`);
+      if (typeof window !== "undefined" && payload.onboardingUrl) {
+        window.open(payload.onboardingUrl, "_blank", "noopener,noreferrer");
+      }
+    } catch (error) {
+      setPayoutFeedback(error instanceof Error ? error.message : "Unable to initiate Razorpay account onboarding.");
+    } finally {
+      setIsOnboardingPayout(false);
+    }
+  }
   const isScheduleSelfTestSelected = scheduleParticipantGroupIds.includes(SELF_TEST_GROUP_OPTION_ID);
   const selectedScheduleGroupIds = scheduleParticipantGroupIds.filter((groupId) => groupId !== SELF_TEST_GROUP_OPTION_ID);
   const ownedScheduleGroups = participantGroups.filter((group) => Boolean(currentAdminIdentifier && group.ownerIdentifier && participantIdentifiersMatch(group.ownerIdentifier, currentAdminIdentifier)));
@@ -5457,7 +5663,9 @@ export function AdminQuestionWorkspace({
           const createdAt = new Date(test.createdAt);
           return createdAt.getFullYear() === now.getFullYear() && createdAt.getMonth() === now.getMonth();
         }).length;
-      const plannedCount = editingScheduledTestId || isGameMode || scheduleRepeatMode === "none" ? 1 : 6;
+      const plannedCount = editingScheduledTestId || isGameMode || scheduleRepeatMode === "none"
+        ? 1
+        : Math.min(10, Math.max(1, Number.parseInt(scheduleRepeatInstanceCount, 10) || 1));
       const maxTests = normalUserCategoryDefinitions[effectiveUserCategory].test.maxScheduledTestsPerMonth;
       if (scheduledTestsThisMonth + plannedCount > maxTests && effectiveUserCategory === "trapit-pro") {
         openUpgradePanel({
@@ -5579,9 +5787,12 @@ export function AdminQuestionWorkspace({
     const questionCount = Number(scheduleQuestionCount);
     const effectiveStartsAtInput = (scheduleStartsAtInput ?? "").trim() || createDefaultScheduleTime();
     const startsAt = assessmentKind === "instant" && !editingScheduledTestId ? new Date().toISOString() : new Date(effectiveStartsAtInput).toISOString();
+    const parsedInstanceCount = Math.min(10, Math.max(1, Number.parseInt(scheduleRepeatInstanceCount, 10) || 1));
+    const effectiveRepeatMode = editingScheduledTestId || parsedInstanceCount <= 1 ? "none" : scheduleRepeatMode;
     const scheduleStartInputs = getRecurringScheduleInputs(
       effectiveStartsAtInput,
-      editingScheduledTestId ? "none" : scheduleRepeatMode,
+      effectiveRepeatMode,
+      parsedInstanceCount,
     );
     const recurrenceStartsAt = scheduleStartInputs.map((value) => {
       const parsed = new Date(value);
@@ -5596,16 +5807,17 @@ export function AdminQuestionWorkspace({
             branding: normalizeBrandingInput(workspaceBranding),
             durationMinutes,
             generateInviteLink: editingScheduledTest ? Boolean(editingScheduledTest.shareCode) : false,
+            instanceCount: editingScheduledTestId ? undefined : scheduleStartInputs.length,
             participantGroupIds: isScheduleSelfTestSelected ? [] : selectedScheduleGroupIds,
             participantIds: isScheduleSelfTestSelected && currentAdminIdentifier ? [currentAdminIdentifier] : scheduleParticipantIds,
             poolId: schedulePoolId,
             questionCount,
             recurrenceStartsAt: editingScheduledTestId ? undefined : recurrenceStartsAt,
-            repeatMode: editingScheduledTestId ? "none" : scheduleRepeatMode,
+            repeatMode: effectiveRepeatMode,
             sendWhatsAppNotification,
             startsAt,
             testId: editingScheduledTestId,
-            title: scheduleTitle.trim(),
+            title: (scheduleTitle ?? "").trim(),
           }),
           headers: {
             "Content-Type": "application/json",
@@ -5618,9 +5830,9 @@ export function AdminQuestionWorkspace({
       setScheduleFeedback(
         editingScheduledTestId
           ? "Test updated."
-          : scheduleRepeatMode === "none"
+          : effectiveRepeatMode === "none" || scheduleStartInputs.length === 1
             ? "Test scheduled."
-            : "6 recurring tests scheduled.",
+            : `${scheduleStartInputs.length} recurring tests scheduled.`,
       );
       resetScheduledTestForm();
     }).catch((error) => {
@@ -5641,9 +5853,11 @@ export function AdminQuestionWorkspace({
   }
 
   const selectedPool = pools.find((pool) => pool.id === schedulePoolId) ?? null;
+  const parsedScheduleInstanceCount = Math.min(10, Math.max(1, Number.parseInt(scheduleRepeatInstanceCount, 10) || 1));
   const schedulePreviewInputs = getRecurringScheduleInputs(
     scheduleStartsAtInput,
     editingScheduledTestId ? "none" : scheduleRepeatMode,
+    parsedScheduleInstanceCount,
   );
   const selectedQuestionBankPool = pools.find((pool) => pool.id === selectedQuestionBankPoolId) ?? null;
   const participantHistoryByTestId = new Map(
@@ -6229,6 +6443,17 @@ export function AdminQuestionWorkspace({
             setBrandingAddress(event.target.value);
           }}
         />
+        <label htmlFor="branding-location-link">Location link</label>
+        <input
+          id="branding-location-link"
+          placeholder="https://maps.google.com/..."
+          type="url"
+          value={brandingLocationLink}
+          onChange={(event) => {
+            markBrandingDraftDirty();
+            setBrandingLocationLink(event.target.value);
+          }}
+        />
         {!ownerDelegated ? <><span className="field-label">Operating hours by day</span>
         <BusinessWeeklyHoursEditor
           blockedWeeklyIntervals={personalConsultationLocationIds.includes("location-1") && personalConsultationLocationIds.includes("location-2") && businessSecondLocation.enabled
@@ -6265,6 +6490,17 @@ export function AdminQuestionWorkspace({
             onChange={(event) => {
               markBrandingDraftDirty();
               setBusinessSecondLocation((current) => ({ ...current, address: event.target.value }));
+            }}
+          />
+          <label htmlFor="business-location-two-link">Location link</label>
+          <input
+            id="business-location-two-link"
+            placeholder="https://maps.google.com/..."
+            type="url"
+            value={businessSecondLocation.locationLink}
+            onChange={(event) => {
+              markBrandingDraftDirty();
+              setBusinessSecondLocation((current) => ({ ...current, locationLink: event.target.value }));
             }}
           />
           {!ownerDelegated ? <><span className="field-label">Operating hours by day</span>
@@ -6708,6 +6944,52 @@ export function AdminQuestionWorkspace({
     });
   }
 
+  async function ensureRazorpayCheckoutLoaded() {
+    if (typeof window === "undefined") {
+      throw new Error("Razorpay Checkout is unavailable.");
+    }
+    const win = window as typeof window & {
+      Razorpay?: new (options: Record<string, unknown>) => { open: () => void };
+    };
+    if (!win.Razorpay) {
+      for (const host of ["https://api.razorpay.com", "https://cdn.razorpay.com", "https://checkout.razorpay.com"]) {
+        if (!document.querySelector(`link[rel="preconnect"][href="${host}"]`)) {
+          const preconnect = document.createElement("link");
+          preconnect.rel = "preconnect";
+          preconnect.href = host;
+          document.head.appendChild(preconnect);
+        }
+      }
+      await new Promise<void>((resolve, reject) => {
+        const existingScript = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+        if (existingScript) {
+          existingScript.addEventListener("load", () => resolve(), { once: true });
+          existingScript.addEventListener("error", () => reject(new Error("Unable to load Razorpay Checkout.")), { once: true });
+          return;
+        }
+        const script = document.createElement("script");
+        script.src = "https://checkout.razorpay.com/v1/checkout.js";
+        script.async = true;
+        script.referrerPolicy = "origin";
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error("Unable to load Razorpay Checkout."));
+        document.body.appendChild(script);
+      });
+    }
+    if (!win.Razorpay) {
+      throw new Error("Razorpay Checkout is unavailable.");
+    }
+    return win.Razorpay;
+  }
+
+  function normalizeRazorpayContactPhone(identifier: string | null | undefined) {
+    const digits = (identifier ?? "").replace(/\D/g, "");
+    if (digits.length >= 10) {
+      return `+91${digits.slice(-10)}`;
+    }
+    return undefined;
+  }
+
   async function handleRequestCategoryUpgrade(requestedCategory: NormalUserCategory) {
     if (isProcessingRazorpayUpgrade) return;
     setIsProcessingRazorpayUpgrade(true);
@@ -6733,32 +7015,20 @@ export function AdminQuestionWorkspace({
       );
 
       if (typeof window !== "undefined") {
-        const win = window as typeof window & {
-          Razorpay?: new (options: Record<string, unknown>) => { open: () => void };
-        };
-        if (!win.Razorpay) {
-          await new Promise<void>((resolve, reject) => {
-            const existingScript = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
-            if (existingScript) {
-              existingScript.addEventListener("load", () => resolve(), { once: true });
-              existingScript.addEventListener("error", () => reject(new Error("Unable to load Razorpay Checkout.")), { once: true });
-              return;
-            }
-            const script = document.createElement("script");
-            script.src = "https://checkout.razorpay.com/v1/checkout.js";
-            script.async = true;
-            script.onload = () => resolve();
-            script.onerror = () => reject(new Error("Unable to load Razorpay Checkout."));
-            document.body.appendChild(script);
-          });
-        }
+        const RazorpayConstructor = await ensureRazorpayCheckoutLoaded();
+        const normalizedContact = normalizeRazorpayContactPhone(currentAdminIdentifier);
+        const wasUpgradeModalOpen = isUpgradePanelOpen;
+        setIsUpgradePanelOpen(false);
 
-        if (!win.Razorpay) {
-          throw new Error("Razorpay Checkout is unavailable.");
-        }
-
-        const rzp = new win.Razorpay({
+        const rzp = new RazorpayConstructor({
           amount: orderPayload.amount,
+          config: {
+            display: {
+              preferences: {
+                show_default_blocks: true,
+              },
+            },
+          },
           currency: orderPayload.currency,
           description: requestedCategory === "trapit-pro-max" ? "TRAPit Pro Max (1 Month)" : "TRAPit Pro (1 Month)",
           handler: async (response: {
@@ -6788,16 +7058,29 @@ export function AdminQuestionWorkspace({
               await loadWorkspace();
               window.location.reload();
             } catch (verifyError) {
+              if (wasUpgradeModalOpen) setIsUpgradePanelOpen(true);
               setCategoryFeedback(
                 verifyError instanceof Error ? verifyError.message : "Payment verification failed.",
               );
             }
           },
+          image: `${window.location.origin}/trapit-logo.jpeg`,
           key: orderPayload.keyId,
+          method: {
+            card: true,
+            netbanking: true,
+            upi: true,
+            wallet: true,
+          },
+          modal: {
+            ondismiss: () => {
+              if (wasUpgradeModalOpen) setIsUpgradePanelOpen(true);
+            },
+          },
           name: "TRAPit.in",
           order_id: orderPayload.orderId,
           prefill: {
-            contact: currentAdminIdentifier ?? "",
+            ...(normalizedContact ? { contact: normalizedContact } : {}),
           },
         });
         rzp.open();
@@ -6806,6 +7089,106 @@ export function AdminQuestionWorkspace({
       setCategoryFeedback(error instanceof Error ? error.message : "Unable to start Razorpay payment.");
     } finally {
       setIsProcessingRazorpayUpgrade(false);
+    }
+  }
+
+  async function handlePayGroupMonthlyFee(record: GroupMembershipRecord, monthKey: string) {
+    const paymentSlotKey = `${record.id}:${monthKey}`;
+    if (isProcessingGroupPaymentKey) return;
+    setIsProcessingGroupPaymentKey(paymentSlotKey);
+    setGroupFeedback(null);
+    try {
+      const orderPayload = await readJson<{
+        amount: number;
+        amountInr: number;
+        currency: string;
+        groupId: string;
+        groupName: string;
+        keyId: string;
+        monthKey: string;
+        orderId: string;
+      }>(
+        await fetch("/api/admin/participants", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            groupId: record.groupId,
+            membershipId: record.id,
+            mode: "create-group-payment-order",
+            monthKey,
+          }),
+        }),
+      );
+
+      if (typeof window !== "undefined") {
+        const RazorpayConstructor = await ensureRazorpayCheckoutLoaded();
+        const normalizedContact = normalizeRazorpayContactPhone(currentAdminIdentifier);
+
+        const rzp = new RazorpayConstructor({
+          amount: orderPayload.amount,
+          config: {
+            display: {
+              preferences: {
+                show_default_blocks: true,
+              },
+            },
+          },
+          currency: orderPayload.currency,
+          description: `${orderPayload.groupName} (${orderPayload.monthKey})`,
+          handler: async (response: {
+            razorpay_order_id?: string;
+            razorpay_payment_id?: string;
+            razorpay_signature?: string;
+          }) => {
+            try {
+              const payload = await readJson<ParticipantsResponse>(
+                await fetch("/api/admin/participants", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    groupId: record.groupId,
+                    membershipId: record.id,
+                    mode: "verify-group-payment",
+                    monthKey,
+                    razorpayOrderId: response.razorpay_order_id,
+                    razorpayPaymentId: response.razorpay_payment_id,
+                    razorpaySignature: response.razorpay_signature,
+                  }),
+                }),
+              );
+              setParticipants(payload.participants);
+              setParticipantGroups(payload.participantGroups);
+              setGroupJoinRequests(payload.groupJoinRequests);
+              setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
+              setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
+              setGroupFeedback(`Payment of INR ${orderPayload.amountInr} for ${monthKey} completed.`);
+              await loadWorkspace({ silent: true });
+            } catch (verifyError) {
+              setGroupFeedback(
+                verifyError instanceof Error ? verifyError.message : "Unable to verify group payment.",
+              );
+            }
+          },
+          image: `${window.location.origin}/trapit-logo.jpeg`,
+          key: orderPayload.keyId,
+          method: {
+            card: true,
+            netbanking: true,
+            upi: true,
+            wallet: true,
+          },
+          name: "TRAPit.in",
+          order_id: orderPayload.orderId,
+          prefill: {
+            ...(normalizedContact ? { contact: normalizedContact } : {}),
+          },
+        });
+        rzp.open();
+      }
+    } catch (error) {
+      setGroupFeedback(error instanceof Error ? error.message : "Unable to start group payment.");
+    } finally {
+      setIsProcessingGroupPaymentKey(null);
     }
   }
 
@@ -6985,6 +7368,17 @@ export function AdminQuestionWorkspace({
                     className="workspace-overflow-action"
                     type="button"
                     onClick={() => {
+                      setPayoutFeedback(null);
+                      setIsPaymentsModalOpen(true);
+                      setIsOverflowMenuOpen(false);
+                    }}
+                  >
+                    Payments
+                  </button>
+                  <button
+                    className="workspace-overflow-action"
+                    type="button"
+                    onClick={() => {
                       setIsNotificationsModalOpen(true);
                       setIsOverflowMenuOpen(false);
                     }}
@@ -7036,8 +7430,8 @@ export function AdminQuestionWorkspace({
                 ? Math.max(0, Math.ceil((new Date(categorySnapshot.activeAssignment.expiresAt).getTime() - Date.now()) / 86_400_000))
                 : null;
               const daysRemainingLabel = daysRemainingCount !== null
-                ? `${daysRemainingCount} day${daysRemainingCount === 1 ? "" : "s"} remaining`
-                : "Active";
+                ? `(${daysRemainingCount} day${daysRemainingCount === 1 ? "" : "s"} remaining)`
+                : "(Active)";
               const isProClickable = effectiveUserCategory === "trapit-normal";
               const isProMaxClickable = effectiveUserCategory === "trapit-normal" || effectiveUserCategory === "trapit-pro";
 
@@ -7062,7 +7456,7 @@ export function AdminQuestionWorkspace({
                               onClick={() => void handleRequestCategoryUpgrade("trapit-pro")}
                             >
                               <span className="upgrade-tier-title">Pro</span>
-                              <span className="upgrade-tier-subline">Charges: INR 250/month.</span>
+                              <span className="upgrade-tier-subline">(INR 250/month)</span>
                             </button>
                           ) : (
                             <div className="upgrade-tier-header-cell">
@@ -7082,7 +7476,7 @@ export function AdminQuestionWorkspace({
                               onClick={() => void handleRequestCategoryUpgrade("trapit-pro-max")}
                             >
                               <span className="upgrade-tier-title">Pro Max</span>
-                              <span className="upgrade-tier-subline">Charges: INR 500/month.</span>
+                              <span className="upgrade-tier-subline">(INR 500/month)</span>
                             </button>
                           ) : (
                             <div className="upgrade-tier-header-cell">
@@ -7124,6 +7518,148 @@ export function AdminQuestionWorkspace({
             })()}
 
             {categoryFeedback ? <p className="muted-text">{categoryFeedback}</p> : null}
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+
+      {isPaymentsModalOpen && typeof document !== "undefined" ? createPortal(
+        <div className="apportion-modal-overlay" role="presentation" onClick={() => setIsPaymentsModalOpen(false)}>
+          <div
+            aria-labelledby="payments-modal-title"
+            aria-modal="true"
+            className="apportion-floating-drawer upgrade-pricing-modal panel"
+            role="dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="workspace-overflow-head">
+              <div>
+                <p className="eyebrow">Peer Payments &amp; Payouts</p>
+                <h2 className="section-title" id="payments-modal-title">Pay Account Settings</h2>
+              </div>
+              <FloatingWindowCloseButton label="Close Payments Modal" onClick={() => setIsPaymentsModalOpen(false)} />
+            </div>
+            <div className="form-stack">
+              <p className="muted-text">
+                Link your bank account via Razorpay to receive monthly peer payments from your groups. You will be redirected to Razorpay&apos;s secure portal to enter your Legal Business Name / Full Name, PAN Number, and Bank Account &amp; IFSC (or UPI ID) for automated penny-drop verification.
+              </p>
+              <p className="muted-text">
+                <strong>Security Note:</strong> Raw bank account numbers, passwords, and sensitive banking credentials are never stored on TRAPit servers—only your unique Razorpay Linked Account ID (<code>acc_...</code>) is stored.
+              </p>
+              {payoutAccount ? (
+                <div className="question-card nested-card">
+                  <div className="question-head">
+                    <strong>Linked Account ID: {payoutAccount.linkedAccountId}</strong>
+                    <span className="status-chip success">{payoutAccount.status === "verified" ? "Verified" : "Linked"}</span>
+                  </div>
+                  <p className="muted-text">Updated: {formatShortDateTime(payoutAccount.updatedAt)}</p>
+                </div>
+              ) : (
+                <p className="muted-text">No payout bank account is linked yet.</p>
+              )}
+              {payoutFeedback ? <p className="muted-text" role="status">{payoutFeedback}</p> : null}
+              <div className="inline-actions">
+                <button
+                  className="button"
+                  disabled={isOnboardingPayout}
+                  type="button"
+                  onClick={() => void handleInitiatePayoutOnboarding()}
+                >
+                  {isOnboardingPayout
+                    ? "Connecting to Razorpay..."
+                    : payoutAccount
+                      ? "Update / Re-verify on Razorpay"
+                      : "Add / Link Bank Account"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
+
+      {groupPaymentPromptGroup && typeof document !== "undefined" ? createPortal(
+        <div className="apportion-modal-overlay" role="presentation" onClick={() => setGroupPaymentPromptGroup(null)}>
+          <div
+            aria-labelledby="group-payment-setup-title"
+            aria-modal="true"
+            className="apportion-floating-drawer upgrade-pricing-modal panel"
+            role="dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="workspace-overflow-head">
+              <div>
+                <p className="eyebrow">Group Payment Option</p>
+                <h2 className="section-title" id="group-payment-setup-title">
+                  {groupPaymentPromptGroup.groupName || "Group"} — Monthly Payment
+                </h2>
+              </div>
+              <FloatingWindowCloseButton label="Close Group Payment Setup" onClick={() => setGroupPaymentPromptGroup(null)} />
+            </div>
+            <div className="form-stack">
+              <div className="field">
+                <label htmlFor="group-monthly-payment-amount">Monthly payment amount (INR)</label>
+                <input
+                  id="group-monthly-payment-amount"
+                  min={1}
+                  placeholder="Enter monthly fee in INR (e.g. 500)"
+                  type="number"
+                  value={groupPaymentPromptGroup.amountDraft}
+                  onChange={(event) =>
+                    setGroupPaymentPromptGroup((current) =>
+                      current ? { ...current, amountDraft: event.target.value } : current,
+                    )
+                  }
+                />
+              </div>
+              <div className="question-card nested-card">
+                <div className="question-head">
+                  <strong>Pay Account Settings</strong>
+                  {payoutAccount ? (
+                    <span className="status-chip success">{payoutAccount.linkedAccountId}</span>
+                  ) : (
+                    <span className="status-chip warning">Setup required</span>
+                  )}
+                </div>
+                <p className="muted-text">
+                  {payoutAccount
+                    ? `Peer group payments will be routed to your linked Razorpay account (${payoutAccount.linkedAccountId}).`
+                    : "Please set up your Pay Account Settings via Razorpay so monthly group payments can be settled to your bank account."}
+                </p>
+                <div className="inline-actions">
+                  <button
+                    className="button-secondary small-button"
+                    type="button"
+                    onClick={() => {
+                      setIsPaymentsModalOpen(true);
+                    }}
+                  >
+                    {payoutAccount ? "Manage Pay Account Settings" : "Setup Pay Account Settings"}
+                  </button>
+                </div>
+              </div>
+              {groupPaymentPromptFeedback ? <p className="form-error" role="alert">{groupPaymentPromptFeedback}</p> : null}
+              <div className="inline-actions">
+                <button
+                  className="button"
+                  disabled={isMutating}
+                  type="button"
+                  onClick={() => void handleSaveGroupPaymentSettings(true)}
+                >
+                  {groupPaymentPromptGroup.currentEnabled ? "Update Monthly Payment" : "Enable Monthly Payment"}
+                </button>
+                {groupPaymentPromptGroup.currentEnabled ? (
+                  <button
+                    className="button-secondary"
+                    disabled={isMutating}
+                    type="button"
+                    onClick={() => void handleSaveGroupPaymentSettings(false)}
+                  >
+                    Disable Payment
+                  </button>
+                ) : null}
+              </div>
+            </div>
           </div>
         </div>,
         document.body,
@@ -7622,17 +8158,34 @@ export function AdminQuestionWorkspace({
                         <th>Admin</th>
                         <th>Action</th>
                         <th>Attendance</th>
+                        <th>Payment</th>
                       </tr>
                     </thead>
                     <tbody>
                       {joinedGroupMemberships.length ? (
                         joinedGroupMemberships.map((record, index) => {
                           const offsetWeeks = groupAttendanceOffsetByRecordId[record.id] ?? 0;
+                          const paymentOffsetMonths = groupPaymentOffsetByRecordId[record.id] ?? 0;
                           const joinedGroupObj = participantGroups.find((entry) => entry.id === record.groupId);
                           const isAttendanceEnabled = Boolean(joinedGroupObj?.attendanceTrackingEnabled);
+                          const isPaymentEnabled = Boolean(
+                            joinedGroupObj?.paymentTrackingEnabled && (joinedGroupObj?.monthlyPaymentAmountInr ?? 0) > 0,
+                          );
+                          const monthlyFeeInr = joinedGroupObj?.monthlyPaymentAmountInr ?? 0;
                           const attendanceWindow = buildGroupAttendanceCalendarWindow(
                             offsetWeeks,
                             joinedGroupObj?.createdAt ?? record.createdAt,
+                          );
+                          const paymentWindow = buildGroupPaymentCalendarWindow(
+                            paymentOffsetMonths,
+                            record.joinedAt ?? record.createdAt,
+                          );
+                          const hasMarkedGroupAdmins = Boolean(
+                            (joinedGroupObj?.adminIdentifiers ?? []).some(
+                              (adminId) =>
+                                !joinedGroupObj?.ownerIdentifier
+                                || !participantIdentifiersMatch(adminId, joinedGroupObj.ownerIdentifier),
+                            ),
                           );
                           const introSearchValue = (groupIntroAdminPhoneByRecordId[record.id] ?? "").trim();
                           const matchingIntroAdmin = isCompletePhoneNumberSearch(introSearchValue)
@@ -7667,7 +8220,7 @@ export function AdminQuestionWorkspace({
                                         {formatPhoneNumberForDisplay(record.introducedByAdminIdentifier, { showFullPhoneNumber: true })}
                                       </span>
                                     </div>
-                                  ) : (
+                                  ) : hasMarkedGroupAdmins ? (
                                     <div className="joined-group-admin-search">
                                       <input
                                         aria-label="Search introducing admin by complete phone number"
@@ -7698,6 +8251,8 @@ export function AdminQuestionWorkspace({
                                         )
                                       ) : null}
                                     </div>
+                                  ) : (
+                                    <span className="muted-text">—</span>
                                   )}
                                 </td>
                                 <td>
@@ -7798,13 +8353,85 @@ export function AdminQuestionWorkspace({
                                     </div>
                                   ) : null}
                                 </td>
+                                <td className="group-attendance-column-cell group-payment-column-cell">
+                                  {isPaymentEnabled ? (
+                                    <div className="group-attendance-strip group-payment-strip">
+                                      <button
+                                        aria-label="Previous payment months"
+                                        className="button-secondary small-button"
+                                        disabled={!paymentWindow.canGoPrevious}
+                                        type="button"
+                                        onClick={() =>
+                                          setGroupPaymentOffsetByRecordId((current) => ({
+                                            ...current,
+                                            [record.id]: paymentWindow.clampedOffsetMonths - 1,
+                                          }))
+                                        }
+                                      >
+                                        ◀
+                                      </button>
+                                      <div className="group-attendance-days group-payment-months">
+                                        {paymentWindow.months.map((month) => {
+                                          const paidRecord = record.paymentsByMonthKey?.[month.monthKey] ?? null;
+                                          const paidDateLabel = paidRecord?.paidAt
+                                            ? new Date(paidRecord.paidAt).toLocaleDateString("en-IN", {
+                                                day: "2-digit",
+                                                month: "short",
+                                              })
+                                            : null;
+                                          const slotKey = `${record.id}:${month.monthKey}`;
+                                          return paidRecord ? (
+                                            <span
+                                              className="group-attendance-day group-payment-month is-present"
+                                              key={slotKey}
+                                            >
+                                              <span className="group-attendance-day-weekday">{month.monthLabel}</span>
+                                              <strong>₹{paidRecord.amountInr}</strong>
+                                              <small>{paidDateLabel}</small>
+                                            </span>
+                                          ) : (
+                                            <button
+                                              className="group-attendance-day group-payment-month is-payable"
+                                              disabled={
+                                                record.status !== "member"
+                                                || month.isBeforeBoundary
+                                                || isProcessingGroupPaymentKey === slotKey
+                                              }
+                                              key={slotKey}
+                                              type="button"
+                                              onClick={() => void handlePayGroupMonthlyFee(record, month.monthKey)}
+                                            >
+                                              <span className="group-attendance-day-weekday">{month.monthLabel}</span>
+                                              <strong>₹{monthlyFeeInr}</strong>
+                                              <small>{isProcessingGroupPaymentKey === slotKey ? "..." : "Pay"}</small>
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                      <button
+                                        aria-label="Next payment months"
+                                        className="button-secondary small-button"
+                                        disabled={!paymentWindow.canGoNext}
+                                        type="button"
+                                        onClick={() =>
+                                          setGroupPaymentOffsetByRecordId((current) => ({
+                                            ...current,
+                                            [record.id]: paymentWindow.clampedOffsetMonths + 1,
+                                          }))
+                                        }
+                                      >
+                                        ▶
+                                      </button>
+                                    </div>
+                                  ) : null}
+                                </td>
                               </tr>
                             </Fragment>
                           );
                         })
                       ) : (
                         <tr>
-                          <td colSpan={5} className="muted-text">No joined groups yet.</td>
+                          <td colSpan={6} className="muted-text">No joined groups yet.</td>
                         </tr>
                       )}
                     </tbody>
@@ -7878,8 +8505,14 @@ export function AdminQuestionWorkspace({
                         : [];
 
                       const isAttendanceEnabled = Boolean(group.attendanceTrackingEnabled);
+                      const isPaymentEnabled = Boolean(
+                        group.paymentTrackingEnabled && (group.monthlyPaymentAmountInr ?? 0) > 0,
+                      );
+                      const extraGroupColumns = (isAttendanceEnabled ? 1 : 0) + (isPaymentEnabled ? 1 : 0);
                       const creatorOffsetWeeks = groupAttendanceOffsetByRecordId[group.id] ?? 0;
                       const creatorAttendanceWindow = buildGroupAttendanceCalendarWindow(creatorOffsetWeeks, group.createdAt);
+                      const groupPaymentOffsetMonths = groupPaymentOffsetByRecordId[group.id] ?? 0;
+                      const groupPaymentWindow = buildGroupPaymentCalendarWindow(groupPaymentOffsetMonths, group.createdAt);
 
                       return (
                         <div className="leaderboard-table-wrap workspace-result-table-wrap created-group-table-wrap" key={group.id}>
@@ -7914,18 +8547,29 @@ export function AdminQuestionWorkspace({
                                     }}
                                   />
                                 </th>
-                                <th colSpan={isAttendanceEnabled ? 2 : 1}>
+                                <th colSpan={1 + extraGroupColumns}>
                                   <div className="inline-actions created-group-header-actions">
                                     {isGroupCreator ? (
-                                      <button
-                                        aria-pressed={isAttendanceEnabled}
-                                        className={isAttendanceEnabled ? "button small-button" : "button-secondary small-button"}
-                                        disabled={isMutating}
-                                        type="button"
-                                        onClick={() => handleToggleGroupAttendanceTracking(group.id, !isAttendanceEnabled)}
-                                      >
-                                        Attendance
-                                      </button>
+                                      <>
+                                        <button
+                                          aria-pressed={isAttendanceEnabled}
+                                          className={isAttendanceEnabled ? "button small-button" : "button-secondary small-button"}
+                                          disabled={isMutating}
+                                          type="button"
+                                          onClick={() => handleToggleGroupAttendanceTracking(group.id, !isAttendanceEnabled)}
+                                        >
+                                          Attendance
+                                        </button>
+                                        <button
+                                          aria-pressed={isPaymentEnabled}
+                                          className={isPaymentEnabled ? "button small-button" : "button-secondary small-button"}
+                                          disabled={isMutating}
+                                          type="button"
+                                          onClick={() => handleOpenGroupPaymentPrompt(group)}
+                                        >
+                                          {isPaymentEnabled ? `Payment (₹${group.monthlyPaymentAmountInr}/mo)` : "Payment"}
+                                        </button>
+                                      </>
                                     ) : null}
                                     {groupQrDataUrl ? (
                                       <a
@@ -7966,7 +8610,7 @@ export function AdminQuestionWorkspace({
                                 </th>
                               </tr>
                               <tr className="created-group-header-row-2">
-                                <th colSpan={isAttendanceEnabled ? 4 : 3}>
+                                <th colSpan={3 + extraGroupColumns}>
                                   <div className="created-group-user-search">
                                     <input
                                       aria-label="Search users by complete phone number"
@@ -8007,6 +8651,7 @@ export function AdminQuestionWorkspace({
                                 <th>Member Details</th>
                                 <th>Action</th>
                                 {isAttendanceEnabled ? <th>Attendance</th> : null}
+                                {isPaymentEnabled ? <th>Payment</th> : null}
                               </tr>
                             </thead>
                             <tbody>
@@ -8074,6 +8719,51 @@ export function AdminQuestionWorkspace({
                                           setGroupAttendanceOffsetByRecordId((current) => ({
                                             ...current,
                                             [group.id]: Math.min(0, creatorAttendanceWindow.clampedOffsetWeeks + 1),
+                                          }))
+                                        }
+                                      >
+                                        ▶
+                                      </button>
+                                    </div>
+                                  </td>
+                                ) : null}
+                                {isPaymentEnabled ? (
+                                  <td className="group-attendance-column-cell group-payment-column-cell">
+                                    <div className="group-attendance-strip group-payment-strip">
+                                      <button
+                                        aria-label="Previous payment months"
+                                        className="button-secondary small-button"
+                                        disabled={!groupPaymentWindow.canGoPrevious}
+                                        type="button"
+                                        onClick={() =>
+                                          setGroupPaymentOffsetByRecordId((current) => ({
+                                            ...current,
+                                            [group.id]: groupPaymentWindow.clampedOffsetMonths - 1,
+                                          }))
+                                        }
+                                      >
+                                        ◀
+                                      </button>
+                                      <div className="group-attendance-days group-payment-months">
+                                        {groupPaymentWindow.months.map((month) => (
+                                          <span
+                                            className="group-attendance-day group-payment-month"
+                                            key={`${creatorRecord.id}-${month.monthKey}`}
+                                          >
+                                            <span className="group-attendance-day-weekday">{month.monthLabel}</span>
+                                            <small>Creator</small>
+                                          </span>
+                                        ))}
+                                      </div>
+                                      <button
+                                        aria-label="Next payment months"
+                                        className="button-secondary small-button"
+                                        disabled={!groupPaymentWindow.canGoNext}
+                                        type="button"
+                                        onClick={() =>
+                                          setGroupPaymentOffsetByRecordId((current) => ({
+                                            ...current,
+                                            [group.id]: groupPaymentWindow.clampedOffsetMonths + 1,
                                           }))
                                         }
                                       >
@@ -8241,6 +8931,61 @@ export function AdminQuestionWorkspace({
                                                 setGroupAttendanceOffsetByRecordId((current) => ({
                                                   ...current,
                                                   [group.id]: Math.min(0, attendanceWindow.clampedOffsetWeeks + 1),
+                                                }))
+                                              }
+                                            >
+                                              ▶
+                                            </button>
+                                          </div>
+                                        </td>
+                                      ) : null}
+                                      {isPaymentEnabled ? (
+                                        <td className="group-attendance-column-cell group-payment-column-cell">
+                                          <div className="group-attendance-strip group-payment-strip">
+                                            <button
+                                              aria-label="Previous payment months"
+                                              className="button-secondary small-button"
+                                              disabled={!groupPaymentWindow.canGoPrevious}
+                                              type="button"
+                                              onClick={() =>
+                                                setGroupPaymentOffsetByRecordId((current) => ({
+                                                  ...current,
+                                                  [group.id]: groupPaymentWindow.clampedOffsetMonths - 1,
+                                                }))
+                                              }
+                                            >
+                                              ◀
+                                            </button>
+                                            <div className="group-attendance-days group-payment-months">
+                                              {groupPaymentWindow.months.map((month) => {
+                                                const paidRecord = record.paymentsByMonthKey?.[month.monthKey] ?? null;
+                                                const paidDateLabel = paidRecord?.paidAt
+                                                  ? new Date(paidRecord.paidAt).toLocaleDateString("en-IN", {
+                                                      day: "2-digit",
+                                                      month: "short",
+                                                    })
+                                                  : null;
+                                                return (
+                                                  <span
+                                                    className={`group-attendance-day group-payment-month${paidRecord ? " is-present" : ""}`}
+                                                    key={`${record.id}-${month.monthKey}`}
+                                                  >
+                                                    <span className="group-attendance-day-weekday">{month.monthLabel}</span>
+                                                    <strong>₹{paidRecord ? paidRecord.amountInr : (group.monthlyPaymentAmountInr ?? 0)}</strong>
+                                                    <small>{paidDateLabel ?? "Unpaid"}</small>
+                                                  </span>
+                                                );
+                                              })}
+                                            </div>
+                                            <button
+                                              aria-label="Next payment months"
+                                              className="button-secondary small-button"
+                                              disabled={!groupPaymentWindow.canGoNext}
+                                              type="button"
+                                              onClick={() =>
+                                                setGroupPaymentOffsetByRecordId((current) => ({
+                                                  ...current,
+                                                  [group.id]: groupPaymentWindow.clampedOffsetMonths + 1,
                                                 }))
                                               }
                                             >
@@ -9249,29 +9994,66 @@ export function AdminQuestionWorkspace({
           </div>
 
           {assessmentKind === "standard" ? <div className="field">
-            {!editingScheduledTestId ? <><span className="field-label">Repeat</span><div aria-label="Repeat assessment" className="business-choice-row" role="group">
-              <button className="business-choice-button" aria-pressed={!scheduleRepeats} type="button" onClick={() => { setScheduleRepeats(false); setScheduleRepeatMode("none"); }}>No</button>
-              <button className="business-choice-button" aria-pressed={scheduleRepeats} type="button" onClick={() => { setScheduleRepeats(true); setScheduleRepeatMode("daily"); }}>Yes</button>
-            </div></> : null}
-            {scheduleRepeats ? <>
-            <label htmlFor="schedule-repeat-mode">Repeat schedule</label>
-            <select
-              className="select-field"
-              disabled={Boolean(editingScheduledTestId)}
-              id="schedule-repeat-mode"
-              value={editingScheduledTestId ? "none" : scheduleRepeatMode}
-              onChange={(event) => setScheduleRepeatMode(event.target.value as TestRepeatMode)}
-            >
-              <option value="daily">Every day - 1 test per day, 6 total</option>
-              <option value="weekly">Every week - same weekday, 6 total</option>
-              <option value="monthly">Every month - same date, 6 total</option>
-            </select>
+            {!editingScheduledTestId ? <>
+              <div className="field-row">
+                <div className="field grow-field">
+                  <span className="field-label">Repeat</span>
+                  <div aria-label="Repeat assessment" className="business-choice-row" role="group">
+                    {TEST_REPEAT_MODE_OPTIONS.map((option) => {
+                      const isSelected = scheduleRepeatMode === option.value;
+                      return (
+                        <button
+                          aria-pressed={isSelected}
+                          className="business-choice-button"
+                          key={option.value}
+                          type="button"
+                          onClick={() => {
+                            if (isSelected) {
+                              setScheduleRepeats(false);
+                              setScheduleRepeatMode("none");
+                              setScheduleRepeatInstanceCount("1");
+                            } else {
+                              setScheduleRepeats(true);
+                              setScheduleRepeatMode(option.value);
+                            }
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="field">
+                  <label htmlFor="schedule-repeat-instances">Instances</label>
+                  <select
+                    className="select-field"
+                    disabled={Boolean(editingScheduledTestId)}
+                    id="schedule-repeat-instances"
+                    value={scheduleRepeatInstanceCount}
+                    onChange={(event) => {
+                      const nextCount = event.target.value;
+                      setScheduleRepeatInstanceCount(nextCount);
+                      if (Number(nextCount) > 1 && scheduleRepeatMode === "none") {
+                        setScheduleRepeats(true);
+                        setScheduleRepeatMode("weekly");
+                      }
+                    }}
+                  >
+                    {TEST_REPEAT_INSTANCE_OPTIONS.map((count) => (
+                      <option key={count} value={String(count)}>
+                        {count}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </> : null}
             {!editingScheduledTestId && scheduleRepeatMode !== "none" ? (
               <div className="question-card nested-card">
                 <div className="question-head">
                   <strong>Schedule preview</strong>
-                  <span className="status-chip success">6 tests</span>
+                  <span className="status-chip success">{schedulePreviewInputs.length} {schedulePreviewInputs.length === 1 ? "test" : "tests"}</span>
                 </div>
                 <ol className="question-options compact-question-options">
                   {schedulePreviewInputs.map((previewInput, previewIndex) => {
@@ -9430,7 +10212,7 @@ export function AdminQuestionWorkspace({
           {scheduleFeedback ? <p className="muted-text">{scheduleFeedback}</p> : null}
           <div className="inline-actions">
             <button className="button" disabled={isMutating || !canSubmitSchedule} type="button" onClick={handleScheduleTest}>
-              {isGameMode ? "Start Games" : editingScheduledTestId ? "Update test" : assessmentKind === "instant" ? "Create Instant" : scheduleRepeatMode === "none" ? "Schedule test" : "Schedule 6 tests"}
+              {isGameMode ? "Start Games" : editingScheduledTestId ? "Update test" : assessmentKind === "instant" ? "Create Instant" : scheduleRepeatMode === "none" || parsedScheduleInstanceCount === 1 ? "Schedule test" : `Schedule ${parsedScheduleInstanceCount} tests`}
             </button>
             {editingScheduledTestId ? (
               <button className="button-secondary" disabled={isMutating} type="button" onClick={resetScheduledTestForm}>

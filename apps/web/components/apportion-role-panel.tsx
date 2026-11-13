@@ -194,6 +194,10 @@ export function BusinessAddresses({ business, busy, save }: { business: Business
       return <fieldset className="field business-field-card" disabled={busy || business.role !== "admin"} key={location.id}>
         <legend>Address #{index + 1}</legend>
         <label>Address<input readOnly value={location.address} /></label>
+        <label>Location link<input placeholder="https://maps.google.com/..." type="url" value={location.locationLink ?? ""} onChange={(event) => setBranding((current) => ({
+          ...current,
+          appointmentLocations: current.appointmentLocations?.map((entry) => entry.id === location.id ? { ...entry, locationLink: event.target.value } : entry),
+        }))} /></label>
         <BusinessHoursGrid label={`Address ${index + 1}`} dailyHours={dailyHours} activeWeekdays={activeDays[location.id] ?? []}
           onDayToggle={(weekday) => {
             const enabled = activeDays[location.id]?.includes(weekday);

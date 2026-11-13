@@ -434,13 +434,18 @@ export async function sendWhatsAppTemplateMessage(input: {
   }
 }
 
-function formatLocationDisplay(locationName: string | null | undefined, locationAddress: string | null | undefined): string {
+function formatLocationDisplay(
+  locationName: string | null | undefined,
+  locationAddress: string | null | undefined,
+  locationLink?: string | null,
+): string {
   const name = locationName?.trim() || "";
   const address = locationAddress?.trim() || "";
-  if (name && address && name.toLowerCase() !== address.toLowerCase()) {
-    return `${name}, ${address}`;
-  }
-  return address || name || "Business location";
+  const link = locationLink?.trim() || "";
+  const baseLocation = name && address && name.toLowerCase() !== address.toLowerCase()
+    ? `${name}, ${address}`
+    : address || name || "Business location";
+  return link ? `${baseLocation} - ${link}` : baseLocation;
 }
 
 function formatAppointmentDateTime(startsAt: string, justAddToList?: boolean, bookedQueuePosition?: number): string {
@@ -469,6 +474,7 @@ export async function sendAppointmentBookedWhatsAppNotification(appointment: {
   bookedQueuePosition?: number;
   justAddToList?: boolean;
   locationAddress: string;
+  locationLink?: string | null;
   locationName: string;
   ownerIdentifier: string;
   ownerName: string | null;
@@ -503,7 +509,7 @@ export async function sendAppointmentBookedWhatsAppNotification(appointment: {
     appointment.requesterPhone?.trim() || appointment.requesterIdentifier.trim(),
     formatAppointmentDateTime(appointment.startsAt, appointment.justAddToList, appointment.bookedQueuePosition),
     appointment.serviceName?.trim() || "Consultation",
-    formatLocationDisplay(appointment.locationName, appointment.locationAddress),
+    formatLocationDisplay(appointment.locationName, appointment.locationAddress, appointment.locationLink),
   ];
 
   return sendWhatsAppTemplateMessage({
@@ -532,6 +538,7 @@ export async function sendAppointmentInvitationWhatsAppNotification(invitation: 
   assignedStaffName?: string | null;
   assignedStaffPhone?: string | null;
   locationAddress: string;
+  locationLink?: string | null;
   locationName: string;
   occurrences: Array<{ serviceDateKey: string; startsAt: string }>;
   ownerIdentifier: string;
@@ -574,7 +581,7 @@ export async function sendAppointmentInvitationWhatsAppNotification(invitation: 
     inviterPhoneNumber,
     scheduleDisplay,
     invitation.serviceName?.trim() || "Consultation",
-    formatLocationDisplay(invitation.locationName, invitation.locationAddress),
+    formatLocationDisplay(invitation.locationName, invitation.locationAddress, invitation.locationLink),
   ];
 
   return sendWhatsAppTemplateMessage({

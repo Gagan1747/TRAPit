@@ -59,8 +59,10 @@ describe("assessment scheduling contracts", () => {
     expect(source).toContain('[5, 10, 20, 30, 60].map');
     expect(source).toContain('"Start Games"');
     expect(source).toContain('aria-label="Repeat assessment"');
-    expect(source).toContain('setScheduleRepeats(false)');
-    expect(source).toContain('setScheduleRepeats(true)');
+    expect(source).toContain('"1/week"');
+    expect(source).toContain('"1/2 weeks"');
+    expect(source).toContain('"1/4 week"');
+    expect(source).toContain('id="schedule-repeat-instances"');
   });
   it("uses owned multi-groups and their distinct union, while preserving legacy edits and links", () => {
     expect(source).toContain('id="schedule-groups"');

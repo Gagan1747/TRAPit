@@ -44,8 +44,13 @@ describe("completed results presentation", () => {
 
   it("enforces the updated pricing matrix, Contact Us details, Super Admin Manage Upgrades table, and 3-section Groups Management UI", () => {
     const source = readFileSync(new URL("../../../apps/web/components/admin-question-workspace.tsx", import.meta.url), "utf8");
-    expect(source).toContain("Charges: INR 250/month.");
-    expect(source).toContain("Charges: INR 500/month.");
+    expect(source).toContain("(INR 250/month)");
+    expect(source).toContain("(INR 500/month)");
+    expect(source).not.toContain("Charges: INR 250/month.");
+    expect(source).toContain("Pay Account Settings");
+    expect(source).toContain("group-payment-strip");
+    expect(source).toContain("hasMarkedGroupAdmins");
+    expect(source).toContain("Location link");
     expect(source).toContain("Test: Schedule test / month");
     expect(source).toContain("Apportion: Business Panel (services per address)");
     expect(source).toContain("Poll: Schedule Polls (open to all polls)");
@@ -101,5 +106,8 @@ describe("completed results presentation", () => {
     const bookingSource = readFileSync(new URL("../../../apps/web/components/public-apportion-booking-workspace.tsx", import.meta.url), "utf8");
     expect(bookingSource).toContain("apportion-hold-cross-button");
     expect(bookingSource).toContain("is-on-hold");
+    expect(bookingSource).toContain("is-single-column-scroll");
+    expect(bookingSource).toContain("apportion-date-appointment-count");
+    expect(bookingSource).toContain("apportion-owner-slot-card");
   });
 });

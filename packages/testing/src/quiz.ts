@@ -138,6 +138,7 @@ export type AppointmentLocation = {
   address: string;
   dailyHours?: AppointmentDailyHours[];
   id: string;
+  locationLink?: string;
   name: string;
   workingHours: string;
   workingHoursSecondWindow: string;
@@ -174,6 +175,7 @@ export type WorkspaceBranding = {
   appointmentWeeklyHoursOverrides?: AppointmentWeeklyHoursOverride[];
   appointmentsPerSlot: number | null;
   breakHours: string;
+  createdAt?: string | null;
   imageDataUrl: string | null;
   instituteName: string;
   justAddToList: boolean;
@@ -242,10 +244,12 @@ export type ParticipantGroup = {
   description: string;
   id: string;
   inviteJoinMode: ParticipantGroupInviteJoinMode;
+  monthlyPaymentAmountInr?: number | null;
   name: string;
   ownerIdentifier: string | null;
   ownerLabel?: string | null;
   participantIds: string[];
+  paymentTrackingEnabled?: boolean;
   shareCode: string | null;
   updatedAt: string;
 };
@@ -282,6 +286,13 @@ export type GroupMembershipStatus =
 
 export type GroupAttendanceStatus = "present" | "absent";
 
+export type GroupMonthlyPaymentRecord = {
+  amountInr: number;
+  orderId?: string | null;
+  paidAt: string;
+  paymentId?: string | null;
+};
+
 export type GroupMembershipRecord = {
   attendanceByDateKey?: Record<string, GroupAttendanceStatus>;
   createdAt: string;
@@ -295,6 +306,7 @@ export type GroupMembershipRecord = {
   joinedAt: string | null;
   ownerIdentifier: string;
   ownerLabel: string;
+  paymentsByMonthKey?: Record<string, GroupMonthlyPaymentRecord>;
   requestId?: string | null;
   status: GroupMembershipStatus;
   updatedAt: string;
@@ -819,7 +831,7 @@ export function shuffleWithSeed<T>(items: T[], seedInput: string) {
 }
 
 function isTailLockedOption(option: string) {
-  return /^(all\s+of\s+the\s+above|both\s+[a-e]\s+and\s+[a-e])\b/i.test(option.trim());
+  return /^(all\s+of\s+the\s+above|both\s+[a-e]\s+and\s+[a-e])\b/i.test((option ?? "").trim());
 }
 
 export function shuffleOptionIndexesWithSeed(options: string[], seedInput: string): number[] {
@@ -1088,6 +1100,7 @@ export function normalizeWorkspaceBranding(
           ),
       } : {}),
       id: location.id?.trim() || `location-${index + 1}`,
+      ...(location.locationLink?.trim() ? { locationLink: location.locationLink.trim() } : {}),
       name: location.name?.trim() || `Location ${index + 1}`,
       workingDays: location.workingDays?.trim() ?? "",
       workingHours: location.workingHours?.trim() ?? "",
@@ -1132,9 +1145,10 @@ export function normalizeWorkspaceBranding(
   const appointmentsPerSlot = Number.isFinite(branding.appointmentsPerSlot) && branding.appointmentsPerSlot && branding.appointmentsPerSlot > 0
     ? Math.floor(branding.appointmentsPerSlot)
     : null;
-  const slotDurationMinutes = [5, 10, 15, 30, 45, 60, 120, 180, 240].includes(branding.slotDurationMinutes ?? 0)
+  const slotDurationMinutes = [5, 10, 15, 30, 45, 60, 120, 180, 240, 1440].includes(branding.slotDurationMinutes ?? 0)
     ? branding.slotDurationMinutes
     : null;
+  const createdAt = branding.createdAt?.trim() || null;
 
   if (!instituteName && !address && !imageDataUrl && !profileImageDataUrl && !promotionalImageDataUrls.length && !breakHours && !workingDays && !workingHours && !workingHoursSecondWindow && !appointmentLocations.length && advanceBookingWeeks === null && appointmentsPerSlot === null && slotDurationMinutes === null && !justAddToList && !recurringBookingsEnabled) {
     return null;
@@ -1151,6 +1165,7 @@ export function normalizeWorkspaceBranding(
 		appointmentWeeklyHoursOverrides,
     appointmentsPerSlot,
     breakHours,
+    ...(createdAt ? { createdAt } : {}),
     imageDataUrl,
     instituteName,
     justAddToList,
