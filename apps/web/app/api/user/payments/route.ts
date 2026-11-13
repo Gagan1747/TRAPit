@@ -139,13 +139,14 @@ export async function POST(request: Request) {
       userSub: actor.sub,
     });
 
-    const requestUrl = new URL(request.url);
-    const callbackUrl = new URL("/user", requestUrl.origin);
-    callbackUrl.searchParams.set("payoutOnboarding", "callback");
-    callbackUrl.searchParams.set("accountId", payoutAccount.linkedAccountId);
+    const callbackParams = new URLSearchParams({
+      payoutOnboarding: "callback",
+      accountId: payoutAccount.linkedAccountId,
+    });
+    const callbackUrl = `/user?${callbackParams.toString()}`;
 
     return NextResponse.json({
-      callbackUrl: callbackUrl.toString(),
+      callbackUrl,
       linkedAccountId: payoutAccount.linkedAccountId,
       payoutAccount,
     });
@@ -201,15 +202,13 @@ export async function POST(request: Request) {
       userSub: actor.sub,
     });
 
-    const requestUrl = new URL(request.url);
-    const onboardingPortalUrl = new URL("/payments/onboarding", requestUrl.origin);
-    if (existing?.linkedAccountId) {
-      onboardingPortalUrl.searchParams.set("accountId", existing.linkedAccountId);
-    }
+    const onboardingUrl = existing?.linkedAccountId
+      ? `/payments/onboarding?accountId=${encodeURIComponent(existing.linkedAccountId)}`
+      : "/payments/onboarding";
 
     return NextResponse.json({
       linkedAccountId: existing?.linkedAccountId ?? null,
-      onboardingUrl: onboardingPortalUrl.toString(),
+      onboardingUrl,
       payoutAccount: existing ?? null,
     });
   }
