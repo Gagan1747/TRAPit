@@ -5599,10 +5599,9 @@ export function AdminQuestionWorkspace({
     setPayoutFeedback(null);
     try {
       const payload = await readJson<{
-        callbackUrl: string;
-        linkedAccountId: string;
+        linkedAccountId: string | null;
         onboardingUrl: string;
-        payoutAccount: { linkedAccountId: string; status: "created" | "onboarding" | "verified"; updatedAt: string };
+        payoutAccount: { linkedAccountId: string; status: "created" | "onboarding" | "verified"; updatedAt: string } | null;
       }>(
         await fetch("/api/user/payments", {
           method: "POST",
@@ -5610,10 +5609,11 @@ export function AdminQuestionWorkspace({
           body: JSON.stringify({ action: "initiate-onboarding" }),
         }),
       );
-      setPayoutAccount(payload.payoutAccount);
-      setPayoutFeedback(`Linked account (${payload.linkedAccountId}) initialized. Redirecting to Razorpay portal...`);
+      if (payload.payoutAccount) {
+        setPayoutAccount(payload.payoutAccount);
+      }
       if (typeof window !== "undefined" && payload.onboardingUrl) {
-        window.open(payload.onboardingUrl, "_blank", "noopener,noreferrer");
+        window.location.assign(payload.onboardingUrl);
       }
     } catch (error) {
       setPayoutFeedback(error instanceof Error ? error.message : "Unable to initiate Razorpay account onboarding.");
