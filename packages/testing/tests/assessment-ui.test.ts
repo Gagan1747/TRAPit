@@ -44,6 +44,31 @@ describe("assessment log UI", () => {
     expect(html).not.toContain("Marks: 45");
   });
 
+  it("orders uncompleted Rapid/Instant tests first, then upcoming/live nearest first, then completed most-recent first", () => {
+    const html = renderToStaticMarkup(createElement(AssessmentLogTable, {
+      rows: [
+        { ...row(100), id: "completed-old", test: "Completed Old", isCompleted: true, sortTime: 100 },
+        { ...row(300), id: "upcoming-far", test: "Upcoming Far", isCompleted: false, status: "Upcoming", sortTime: 300 },
+        { ...row(200), id: "completed-recent", test: "Completed Recent", isCompleted: true, sortTime: 200 },
+        { ...row(150), id: "upcoming-near", test: "Upcoming Near", isCompleted: false, status: "Upcoming", sortTime: 150 },
+        { ...row(500), id: "rapid-live", test: "Rapid Challenge", testType: "Rapid", isCompleted: false, isImmediateUncompleted: true, status: "Live", sortTime: 500 },
+        { ...row(400), id: "instant-live", test: "Instant Quiz", testType: "Instant", isCompleted: false, isImmediateUncompleted: true, status: "Accept", sortTime: 400 },
+      ],
+    }));
+    const posInstant = html.indexOf("Instant Instant Quiz");
+    const posRapid = html.indexOf("Rapid Rapid Challenge");
+    const posUpcomingNear = html.indexOf("Upcoming Near");
+    const posUpcomingFar = html.indexOf("Upcoming Far");
+    const posCompletedRecent = html.indexOf("Completed Recent");
+    const posCompletedOld = html.indexOf("Completed Old");
+
+    expect(posInstant).toBeLessThan(posRapid);
+    expect(posRapid).toBeLessThan(posUpcomingNear);
+    expect(posUpcomingNear).toBeLessThan(posUpcomingFar);
+    expect(posUpcomingFar).toBeLessThan(posCompletedRecent);
+    expect(posCompletedRecent).toBeLessThan(posCompletedOld);
+  });
+
   it("renders an empty state and never installs dynamic log timers", () => {
     expect(renderToStaticMarkup(createElement(AssessmentLogTable, { rows: [] }))).toContain("No tests or games match this view yet.");
     const source = readFileSync(new URL("../../../apps/web/components/assessment-log-table.tsx", import.meta.url), "utf8");
@@ -59,9 +84,10 @@ describe("assessment scheduling contracts", () => {
     expect(source).toContain('[5, 10, 20, 30, 60].map');
     expect(source).toContain('"Start Games"');
     expect(source).toContain('aria-label="Repeat assessment"');
-    expect(source).toContain('"1/week"');
-    expect(source).toContain('"1/2 weeks"');
-    expect(source).toContain('"1/4 week"');
+    expect(source).toContain('<span className="field-label">Repeat once every</span>');
+    expect(source).toContain('"1 week"');
+    expect(source).toContain('"2 weeks"');
+    expect(source).toContain('"4 weeks"');
     expect(source).toContain('id="schedule-repeat-instances"');
   });
   it("uses owned multi-groups and their distinct union, while preserving legacy edits and links", () => {

@@ -67,6 +67,7 @@ type CachedTemplateMetadata = {
   language: string;
   parameterFormat: "NAMED" | "POSITIONAL";
   bodyParamNames: string[];
+  hasLocationHeader?: boolean;
 };
 
 const templateMetadataCache = new Map<string, CachedTemplateMetadata>();
@@ -213,6 +214,7 @@ async function resolveTemplateMetadataFromWaba(
         parameter_format?: string;
         components?: Array<{
           type?: string;
+          format?: string;
           text?: string;
           example?: {
             body_text_named_params?: Array<{ param_name?: string }>;
@@ -226,6 +228,8 @@ async function resolveTemplateMetadataFromWaba(
       return null;
     }
 
+    const headerComponent = match.components?.find((comp) => comp.type?.toUpperCase() === "HEADER");
+    const hasLocationHeader = headerComponent?.format?.toUpperCase() === "LOCATION";
     const bodyComponent = match.components?.find((comp) => comp.type?.toUpperCase() === "BODY");
     const explicitNamedParams = (bodyComponent?.example?.body_text_named_params ?? [])
       .map((entry) => entry.param_name?.trim() || "")
@@ -242,6 +246,7 @@ async function resolveTemplateMetadataFromWaba(
       language: match.language || config.templateLanguage,
       parameterFormat: isPositional ? "POSITIONAL" : "NAMED",
       bodyParamNames: variableMatches,
+      hasLocationHeader,
     };
     templateMetadataCache.set(templateName, metadata);
     return metadata;
@@ -255,15 +260,69 @@ type TemplateParameterInput = {
   value: string;
 };
 
+type TemplateLocationHeaderInput = {
+  address: string;
+  latitude: number;
+  longitude: number;
+  name: string;
+};
+
+function parseCoordinatesFromLocationLink(locationLink?: string | null): { latitude: number; longitude: number } | null {
+  const link = locationLink?.trim() || "";
+  if (!link) return null;
+
+  const patterns = [
+    /@(-?\d{1,2}\.\d+),(-?\d{1,3}\.\d+)/,
+    /[?&](?:q|query|ll)=(-?\d{1,2}\.\d+)(?:%2C|,)(-?\d{1,3}\.\d+)/i,
+    /!3d(-?\d{1,2}\.\d+)!4d(-?\d{1,3}\.\d+)/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = link.match(pattern);
+    if (match) {
+      const latitude = Number.parseFloat(match[1]);
+      const longitude = Number.parseFloat(match[2]);
+      if (Number.isFinite(latitude) && Number.isFinite(longitude) && Math.abs(latitude) <= 90 && Math.abs(longitude) <= 180) {
+        return { latitude, longitude };
+      }
+    }
+  }
+
+  return null;
+}
+
+function buildLocationHeaderInput(
+  locationName: string | null | undefined,
+  locationAddress: string | null | undefined,
+  locationLink?: string | null,
+): TemplateLocationHeaderInput {
+  const parsedCoords = parseCoordinatesFromLocationLink(locationLink);
+  const name = sanitizeWhatsAppTemplateParam(locationName || locationAddress || "TRAPit Appointment Location", "TRAPit Appointment Location");
+  const address = sanitizeWhatsAppTemplateParam(
+    locationLink?.trim()
+      ? `${locationAddress?.trim() || locationName?.trim() || "Location"} (${locationLink.trim()})`
+      : (locationAddress?.trim() || locationName?.trim() || "Appointment Location"),
+    "Appointment Location",
+  );
+
+  return {
+    address,
+    latitude: parsedCoords?.latitude ?? 20.5937,
+    longitude: parsedCoords?.longitude ?? 78.9629,
+    name,
+  };
+}
+
 async function postWhatsAppTemplateMessage(options: {
   to: string;
   templateName: string;
   languageCode: string;
   parameters: TemplateParameterInput[];
   parameterFormat: "NAMED" | "POSITIONAL";
+  locationHeader?: TemplateLocationHeaderInput | null;
   config: ReturnType<typeof getWhatsAppConfig>;
 }): Promise<{ ok: boolean; status: number; messageId?: string | null; errorCode?: number; errorMessage?: string }> {
-  const { config, languageCode, parameterFormat, parameters, templateName, to } = options;
+  const { config, languageCode, locationHeader, parameterFormat, parameters, templateName, to } = options;
   const endpoint = `https://graph.facebook.com/${encodeURIComponent(config.apiVersion)}/${encodeURIComponent(config.phoneNumberId)}/messages`;
 
   const bodyParameters = parameters.map((param) =>
@@ -279,6 +338,30 @@ async function postWhatsAppTemplateMessage(options: {
         },
   );
 
+  const components: Array<Record<string, unknown>> = [];
+  if (locationHeader) {
+    components.push({
+      type: "header",
+      parameters: [
+        {
+          type: "location",
+          location: {
+            latitude: String(locationHeader.latitude),
+            longitude: String(locationHeader.longitude),
+            name: locationHeader.name,
+            address: locationHeader.address,
+          },
+        },
+      ],
+    });
+  }
+  if (bodyParameters.length) {
+    components.push({
+      type: "body",
+      parameters: bodyParameters,
+    });
+  }
+
   const requestBody = {
     messaging_product: "whatsapp",
     recipient_type: "individual",
@@ -289,14 +372,7 @@ async function postWhatsAppTemplateMessage(options: {
       language: {
         code: languageCode,
       },
-      components: bodyParameters.length
-        ? [
-            {
-              type: "body",
-              parameters: bodyParameters,
-            },
-          ]
-        : [],
+      components,
     },
   };
 
@@ -341,6 +417,7 @@ export async function sendWhatsAppTemplateMessage(input: {
   templateName: string;
   parameters: TemplateParameterInput[];
   languageCode?: string;
+  locationHeader?: TemplateLocationHeaderInput | null;
 }): Promise<WhatsAppSendResult> {
   const config = getWhatsAppConfig();
   if (!config.configured) {
@@ -361,7 +438,7 @@ export async function sendWhatsAppTemplateMessage(input: {
     }
     const initialLanguage = input.languageCode?.trim() || discovered?.language || config.templateLanguage;
     const initialFormat = discovered?.parameterFormat || config.parameterFormat;
-    const resolvedParameters = discovered
+    const resolvedParameters = discovered && discovered.bodyParamNames.length > 0
       ? discovered.bodyParamNames.map((discoveredName, index) => {
           const byExactName = input.parameters.find((param) => param.name === discoveredName);
           return {
@@ -370,15 +447,35 @@ export async function sendWhatsAppTemplateMessage(input: {
           };
         })
       : input.parameters;
+    const effectiveLocationHeader = discovered
+      ? (discovered.hasLocationHeader ? input.locationHeader ?? null : null)
+      : (input.locationHeader ?? null);
 
     let attempt = await postWhatsAppTemplateMessage({
       config,
       languageCode: initialLanguage,
+      locationHeader: effectiveLocationHeader,
       parameterFormat: initialFormat,
       parameters: resolvedParameters,
       templateName: input.templateName,
       to: normalizedPhone,
     });
+
+    // If WABA wasn't queried and locationHeader caused a header mismatch error (or vice versa), retry without/with locationHeader
+    if (!attempt.ok && !discovered && input.locationHeader && (attempt.errorCode === 132000 || attempt.errorCode === 132012 || attempt.errorCode === 131008 || attempt.errorCode === 100)) {
+      const withoutHeaderAttempt = await postWhatsAppTemplateMessage({
+        config,
+        languageCode: initialLanguage,
+        locationHeader: null,
+        parameterFormat: initialFormat,
+        parameters: resolvedParameters,
+        templateName: input.templateName,
+        to: normalizedPhone,
+      });
+      if (withoutHeaderAttempt.ok) {
+        attempt = withoutHeaderAttempt;
+      }
+    }
 
     // Fallback if language code in Meta is "en_US" instead of "en" (or vice versa) — Error #132001
     if (!attempt.ok && attempt.errorCode === 132001) {
@@ -387,6 +484,7 @@ export async function sendWhatsAppTemplateMessage(input: {
         attempt = await postWhatsAppTemplateMessage({
           config,
           languageCode: fallbackLanguage,
+          locationHeader: effectiveLocationHeader,
           parameterFormat: initialFormat,
           parameters: resolvedParameters,
           templateName: input.templateName,
@@ -400,6 +498,7 @@ export async function sendWhatsAppTemplateMessage(input: {
       const positionalAttempt = await postWhatsAppTemplateMessage({
         config,
         languageCode: initialLanguage,
+        locationHeader: null,
         parameterFormat: "POSITIONAL",
         parameters: resolvedParameters,
         templateName: input.templateName,
@@ -441,11 +540,14 @@ function formatLocationDisplay(
 ): string {
   const name = locationName?.trim() || "";
   const address = locationAddress?.trim() || "";
-  const link = locationLink?.trim() || "";
+  const rawLink = locationLink?.trim() || "";
+  const normalizedLink = rawLink
+    ? (/^https?:\/\//i.test(rawLink) ? rawLink : `https://${rawLink}`)
+    : "";
   const baseLocation = name && address && name.toLowerCase() !== address.toLowerCase()
     ? `${name}, ${address}`
     : address || name || "Business location";
-  return link ? `${baseLocation} - ${link}` : baseLocation;
+  return normalizedLink ? `${baseLocation} - ${normalizedLink}` : baseLocation;
 }
 
 function formatAppointmentDateTime(startsAt: string, justAddToList?: boolean, bookedQueuePosition?: number): string {
@@ -526,12 +628,12 @@ export async function sendAppointmentBookedWhatsAppNotification(appointment: {
  * Sends Template 2 (`appointment_invitation_on_trapit`) to the invited business user.
  *
  * Template body:
- * *Appointment Invitation on TRAPit.in*
  * Hello {{requester_name}}, {{owner_staff_name}} ({{owner_staff_number}}) has invited you for an appointment,
  * Scheduled for: {{date_and_time}}.
  * Purpose: {{service_name}}
  * Location: {{address}}
- * Please sign in to TRAPit.in to accept or decline this invitation and to see the real time status of this appointment before it expires.
+ * Please sign in to TRAPit.in to accept or decline this invitation before it expires.
+ * *Appointment Invitation on TRAPit.in*
  */
 export async function sendAppointmentInvitationWhatsAppNotification(invitation: {
   assignedStaffIdentifier?: string | null;
@@ -575,16 +677,27 @@ export async function sendAppointmentInvitationWhatsAppNotification(invitation: 
     DEFAULT_INVITATION_PARAM_NAMES,
   );
 
+  const rawRequesterName = invitation.requesterName?.trim() || "";
+  const resolvedRequesterName = !rawRequesterName || rawRequesterName.toLowerCase() === "unregistered"
+    ? "There"
+    : rawRequesterName;
+
+  const effectiveLocationLink = invitation.locationLink?.trim()
+    || (invitation.locationAddress?.trim()
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(invitation.locationAddress.trim())}`
+      : null);
+
   const values = [
-    invitation.requesterName?.trim() || "Customer",
+    resolvedRequesterName,
     inviterDisplayName,
     inviterPhoneNumber,
     scheduleDisplay,
     invitation.serviceName?.trim() || "Consultation",
-    formatLocationDisplay(invitation.locationName, invitation.locationAddress, invitation.locationLink),
+    formatLocationDisplay(invitation.locationName, invitation.locationAddress, effectiveLocationLink),
   ];
 
   return sendWhatsAppTemplateMessage({
+    locationHeader: buildLocationHeaderInput(invitation.locationName, invitation.locationAddress, effectiveLocationLink),
     recipientPhone,
     templateName: config.invitationTemplate,
     parameters: paramNames.map((name, index) => ({

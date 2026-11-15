@@ -85,6 +85,7 @@ export type PersistentQuestion = ObjectiveQuestion & {
   isTaggedIncorrect?: boolean;
   poolIds: string[];
   source: QuestionImportSource;
+  tagDescription?: string | null;
   updatedAt: string;
 };
 
@@ -241,9 +242,11 @@ export type ParticipantGroup = {
   adminShareCodesByIdentifier?: Record<string, string>;
   attendanceTrackingEnabled?: boolean;
   createdAt: string;
+  creatorPayoutReady?: boolean;
   description: string;
   id: string;
   inviteJoinMode: ParticipantGroupInviteJoinMode;
+  linkedPayoutAccountId?: string | null;
   monthlyPaymentAmountInr?: number | null;
   name: string;
   ownerIdentifier: string | null;
@@ -295,6 +298,13 @@ export type GroupMonthlyPaymentRecord = {
 
 export type GroupMembershipRecord = {
   attendanceByDateKey?: Record<string, GroupAttendanceStatus>;
+  autopayCancelledAt?: string | null;
+  autopayEnabled?: boolean;
+  autopayExpiresAt?: string | null;
+  autopayMonths?: number | null;
+  autopayStartedAt?: string | null;
+  autopayStatus?: "active" | "cancelled" | null;
+  autopaySubscriptionId?: string | null;
   createdAt: string;
   endedAt: string | null;
   groupId: string;

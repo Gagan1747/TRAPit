@@ -53,6 +53,7 @@ export async function PATCH(
       draft?: QuestionDraft;
       isTaggedIncorrect?: boolean;
       poolIds?: string[];
+      tagDescription?: string | null;
     };
 
     if (typeof body.isTaggedIncorrect === "boolean") {
@@ -61,6 +62,7 @@ export async function PATCH(
         body.isTaggedIncorrect,
         actor.sub,
         actor.identifier,
+        body.tagDescription,
       );
       return NextResponse.json({ questions: questions.map((question) => decorateQuestion(question, actor.sub)) });
     }

@@ -20,7 +20,7 @@ export async function PATCH(request: Request) {
       throw new ApportionInvitationError("A valid invitation ID and action are required.");
     }
     if (action === "cancel" && (typeof reason !== "string" || !reason.trim())) throw new ApportionInvitationError("A cancellation reason is required.");
-    const result = await respondToApportionInvitation({ actorIdentifier: actor.identifier, invitationId: invitationId.trim(), action, reason: typeof reason === "string" ? reason : undefined });
+    const result = await respondToApportionInvitation({ actorIdentifier: actor.identifier, actorDisplayName: actor.displayName, invitationId: invitationId.trim(), action, reason: typeof reason === "string" ? reason : undefined });
     publishWorkspaceEvent("apportion");
     return NextResponse.json({ invitations: await listApportionInvitationsForActor(actor.identifier), appointmentIds: result.appointmentIds });
   } catch (error) {

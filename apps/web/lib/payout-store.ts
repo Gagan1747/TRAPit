@@ -96,10 +96,17 @@ function normalizeState(parsed: Partial<PayoutStoreState>): PayoutStoreState {
   };
 }
 
+let cachedPayoutStore: { path: string; rawContent: string; state: PayoutStoreState } | null = null;
+
 async function readState(): Promise<PayoutStoreState> {
   try {
     const raw = await readFile(STORE_PATH, "utf8");
-    return normalizeState(JSON.parse(raw) as Partial<PayoutStoreState>);
+    if (cachedPayoutStore && cachedPayoutStore.path === STORE_PATH && cachedPayoutStore.rawContent === raw) {
+      return structuredClone(cachedPayoutStore.state);
+    }
+    const normalized = normalizeState(JSON.parse(raw) as Partial<PayoutStoreState>);
+    cachedPayoutStore = { path: STORE_PATH, rawContent: raw, state: structuredClone(normalized) };
+    return normalized;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return { accounts: [] };
@@ -111,8 +118,21 @@ async function readState(): Promise<PayoutStoreState> {
 async function writeState(state: PayoutStoreState) {
   await mkdir(path.dirname(STORE_PATH), { recursive: true });
   const stagingPath = `${STORE_PATH}.${process.pid}.${Date.now()}.tmp`;
-  await writeFile(stagingPath, JSON.stringify(state, null, 2), "utf8");
+  const serializedState = JSON.stringify(state, null, 2);
+  await writeFile(stagingPath, serializedState, "utf8");
   await rename(stagingPath, STORE_PATH);
+  cachedPayoutStore = { path: STORE_PATH, rawContent: serializedState, state: structuredClone(state) };
+}
+
+export async function listAllPayoutAccounts(): Promise<UserPayoutAccountRecord[]> {
+  return serialized(async () => {
+    const state = await readState();
+    return state.accounts;
+  });
+}
+
+export function isPayoutAccountVerifiedAndReady(account: UserPayoutAccountRecord | null | undefined): boolean {
+  return Boolean(account && account.status === "verified" && isValidLinkedAccountId(account.linkedAccountId));
 }
 
 export async function getPayoutAccountForUser(input: {

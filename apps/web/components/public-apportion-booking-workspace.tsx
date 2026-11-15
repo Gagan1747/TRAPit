@@ -553,7 +553,8 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
   const lookupContextRef = useRef("");
   const lookupVersionRef = useRef(0);
   const [targetPhone, setTargetPhone] = useState("");
-  const [verifiedTarget, setVerifiedTarget] = useState<{ identifier: string; name: string; context: string } | null>(null);
+  const [verifiedTarget, setVerifiedTarget] = useState<{ identifier: string; name: string; context: string; isUnregistered?: boolean } | null>(null);
+  const [pendingUnregisteredConfirm, setPendingUnregisteredConfirm] = useState<{ identifier: string; context: string } | null>(null);
   const [isLookingUp, setIsLookingUp] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [carouselIndex, setCarouselIndex] = useState(0);
@@ -620,6 +621,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
   useEffect(() => {
     lookupVersionRef.current += 1;
     setVerifiedTarget(null);
+    setPendingUnregisteredConfirm(null);
     setLookupError(null);
     setRecurrenceMode("none");
     setRecurringMonthDays([]);
@@ -629,6 +631,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
   async function lookupTarget() {
     if (lookupPendingRef.current || !canInvite) return;
     setVerifiedTarget(null);
+    setPendingUnregisteredConfirm(null);
     setLookupError(null);
     if (!/^(?:\+[1-9]\d{7,14}|\d{10})$/.test(normalizedTargetPhone)) {
       setLookupError("Enter a full registered phone number.");
@@ -640,8 +643,25 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
     setIsLookingUp(true);
     try {
       const query = new URLSearchParams({ lookupPhone: normalizedTargetPhone, ownerIdentifier: selectedOwnerIdentifier, serviceId: selectedServiceId });
-      const result = await readJson<{ user: { identifier: string; name: string } }>(await fetch(`/api/apportion/${encodeURIComponent(shareCode)}?${query}`));
-      if (lookupVersionRef.current === version && lookupContextRef.current === context) setVerifiedTarget({ ...result.user, context });
+      const response = await fetch(`/api/apportion/${encodeURIComponent(shareCode)}?${query}`);
+      const payloadJson = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        unregistered?: boolean;
+        unregisteredPhone?: string;
+        user?: { identifier: string; name: string };
+      };
+      if (response.ok && payloadJson.user) {
+        if (lookupVersionRef.current === version && lookupContextRef.current === context) {
+          setVerifiedTarget({ ...payloadJson.user, context });
+        }
+      } else if (response.status === 404 && payloadJson.unregistered) {
+        if (lookupVersionRef.current === version && lookupContextRef.current === context) {
+          const candidatePhone = payloadJson.unregisteredPhone || normalizedTargetPhone;
+          setPendingUnregisteredConfirm({ identifier: candidatePhone, context });
+        }
+      } else {
+        throw new Error(payloadJson.error ?? "Unable to find this user.");
+      }
     } catch (error) {
       if (lookupVersionRef.current === version && lookupContextRef.current === context) setLookupError(error instanceof Error ? error.message : "Unable to find this user.");
     } finally {
@@ -882,6 +902,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
             slotDateKey: selectedDateKey,
             notes,
             targetPhone: isTargeted ? normalizedTargetPhone : undefined,
+            ...(isTargeted && verifiedTarget?.isUnregistered ? { confirmUnregisteredInvite: true } : {}),
             recurrence: isTargeted && recurrenceMode !== "none" && canInvite
               && payload.business.recurringBookingsEnabled
               ? {
@@ -1412,6 +1433,7 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                     lookupVersionRef.current += 1;
                     setTargetPhone(event.target.value);
                     setVerifiedTarget(null);
+                    setPendingUnregisteredConfirm(null);
                     setLookupError(null);
                     setRecurrenceMode("none");
                   }} />
@@ -1420,6 +1442,40 @@ export function PublicApportionBookingWorkspace({ shareCode, initialServiceId, i
                   </button>
                 </div>
                 {targetIsVerified ? <strong role="status">{verifiedTarget?.name}</strong> : null}
+                {pendingUnregisteredConfirm && pendingUnregisteredConfirm.context === lookupContext && !targetIsVerified ? (
+                  <div className="apportion-unregistered-confirm-banner" role="region" aria-label="Confirm unregistered user invitation">
+                    <p className="muted-text">
+                      This number ({formatPhoneNumberForDisplay(pendingUnregisteredConfirm.identifier, { showFullPhoneNumber: true })}) is not registered on TRAPit. Do you want to invite this number?
+                    </p>
+                    <div className="inline-actions">
+                      <button
+                        className="button small-button"
+                        type="button"
+                        onClick={() => {
+                          setVerifiedTarget({
+                            identifier: pendingUnregisteredConfirm.identifier,
+                            name: "Unregistered",
+                            context: pendingUnregisteredConfirm.context,
+                            isUnregistered: true,
+                          });
+                          setPendingUnregisteredConfirm(null);
+                          setLookupError(null);
+                        }}
+                      >
+                        Yes, Invite
+                      </button>
+                      <button
+                        className="button-secondary small-button"
+                        type="button"
+                        onClick={() => {
+                          setPendingUnregisteredConfirm(null);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
                 {lookupError ? <p className="apportion-queue-warning" role="alert">{lookupError}</p> : null}
               </div>
             ) : null}

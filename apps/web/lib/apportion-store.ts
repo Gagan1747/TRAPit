@@ -896,6 +896,21 @@ export async function listApportionAppointmentsForActor(identifier: string) {
         appointment.ownerName = context.branding.instituteName;
         snapshotsChanged = true;
       }
+      if (!appointment.requesterName?.trim() || appointment.requesterName.trim().toLowerCase() === "unregistered") {
+        if (!contacts.has(appointment.requesterIdentifier)) {
+          contacts.set(appointment.requesterIdentifier, await resolveApportionProviderContact(appointment.requesterIdentifier));
+        }
+        const requesterContact = contacts.get(appointment.requesterIdentifier)!;
+        if (
+          requesterContact?.name
+          && requesterContact.name.trim()
+          && !participantIdentifiersMatch(requesterContact.name, appointment.requesterIdentifier)
+          && requesterContact.name.trim().toLowerCase() !== "unregistered"
+        ) {
+          appointment.requesterName = requesterContact.name.trim();
+          snapshotsChanged = true;
+        }
+      }
     }
     if (snapshotsChanged) await writeState(state);
     const projections = state.appointments.map((appointment) => {
@@ -953,13 +968,66 @@ export async function createApportionAppointment(input: ApportionAppointmentInpu
     await writeState(state);
     return created;
   });
-  const canSendWhatsApp = await getWhatsAppNotificationPreference({
-    identifier: appointment.requesterIdentifier,
-  });
-  if (canSendWhatsApp) {
-    await sendAppointmentBookedWhatsAppNotification(appointment);
+  const isSelfAppointment = participantIdentifiersMatch(appointment.requesterIdentifier, appointment.ownerIdentifier)
+    || Boolean(
+      appointment.assignedStaffIdentifier
+      && participantIdentifiersMatch(appointment.requesterIdentifier, appointment.assignedStaffIdentifier),
+    );
+  if (!isSelfAppointment) {
+    const canSendWhatsApp = await getWhatsAppNotificationPreference({
+      identifier: appointment.requesterIdentifier,
+    });
+    if (canSendWhatsApp) {
+      await sendAppointmentBookedWhatsAppNotification(appointment);
+    }
   }
   return appointment;
+}
+
+export async function reconcileUnregisteredApportionRecordsForUser(input: {
+  identifier: string | null | undefined;
+  registeredName: string | null | undefined;
+}) {
+  const identifier = input.identifier?.trim() || "";
+  const registeredName = input.registeredName?.trim() || "";
+  if (!identifier || !registeredName || registeredName.toLowerCase() === "unregistered") {
+    return false;
+  }
+
+  return withAppointmentLock(async () => {
+    const state = await readState(false);
+    let changed = false;
+
+    for (const invitation of state.invitations) {
+      if (
+        participantIdentifiersMatch(invitation.requesterIdentifier, identifier)
+        && (!invitation.requesterName?.trim()
+          || invitation.requesterName.trim().toLowerCase() === "unregistered"
+          || participantIdentifiersMatch(invitation.requesterName, identifier))
+      ) {
+        invitation.requesterName = registeredName;
+        changed = true;
+      }
+    }
+
+    for (const appointment of state.appointments) {
+      if (
+        participantIdentifiersMatch(appointment.requesterIdentifier, identifier)
+        && (!appointment.requesterName?.trim()
+          || appointment.requesterName.trim().toLowerCase() === "unregistered"
+          || participantIdentifiersMatch(appointment.requesterName, identifier))
+      ) {
+        appointment.requesterName = registeredName;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      await writeState(state);
+    }
+
+    return changed;
+  });
 }
 
 async function buildApportionAppointment(state: ApportionState, input: ApportionAppointmentInput, allowStartedSlot = false, validatedBooking?: Awaited<ReturnType<typeof resolveBookingContext>>) {
@@ -1138,10 +1206,33 @@ function estimateInvitationQueueStart(state: ApportionState, invitation: Apporti
 }
 
 export async function listApportionInvitationsForActor(identifier: string) {
-  return withAppointmentLock(async () => (await readState()).invitations
-    .filter((invitation) => matchApportionIdentity(invitation.ownerIdentifier, identifier) || matchApportionIdentity(invitation.requesterIdentifier, identifier))
-    .map((invitation) => invitationProjection(invitation, identifier))
-    .sort((first, second) => second.createdAt.localeCompare(first.createdAt)));
+  return withAppointmentLock(async () => {
+    const state = await readState();
+    let changed = false;
+    const hasUnregistered = state.invitations.some(
+      (inv) =>
+        (matchApportionIdentity(inv.ownerIdentifier, identifier) || matchApportionIdentity(inv.requesterIdentifier, identifier))
+        && (!inv.requesterName?.trim() || inv.requesterName.trim().toLowerCase() === "unregistered"),
+    );
+    if (hasUnregistered) {
+      for (const inv of state.invitations) {
+        if (!inv.requesterName?.trim() || inv.requesterName.trim().toLowerCase() === "unregistered") {
+          const contact = await resolveApportionProviderContact(inv.requesterIdentifier);
+          if (contact?.name && contact.name.trim() && !participantIdentifiersMatch(contact.name, inv.requesterIdentifier) && contact.name.trim().toLowerCase() !== "unregistered") {
+            inv.requesterName = contact.name.trim();
+            changed = true;
+          }
+        }
+      }
+      if (changed) {
+        await writeState(state);
+      }
+    }
+    return state.invitations
+      .filter((invitation) => matchApportionIdentity(invitation.ownerIdentifier, identifier) || matchApportionIdentity(invitation.requesterIdentifier, identifier))
+      .map((invitation) => invitationProjection(invitation, identifier))
+      .sort((first, second) => second.createdAt.localeCompare(first.createdAt));
+  });
 }
 
 export async function createApportionInvitation(input: {
@@ -1244,7 +1335,7 @@ export async function createApportionInvitation(input: {
   });
 }
 
-export async function respondToApportionInvitation(input: { actorIdentifier: string; invitationId: string; action: "accept" | "decline" | "cancel"; reason?: string }) {
+export async function respondToApportionInvitation(input: { actorIdentifier: string; actorDisplayName?: string | null; invitationId: string; action: "accept" | "decline" | "cancel"; reason?: string }) {
   return withAppointmentLock(async () => {
     if (!["accept", "decline", "cancel"].includes(input.action)) throw new ApportionInvitationError("Choose a valid invitation action.");
     const state = await readState();
@@ -1257,6 +1348,13 @@ export async function respondToApportionInvitation(input: { actorIdentifier: str
     if (invitation.status === nextStatus) return { invitation: invitationProjection(invitation, input.actorIdentifier), appointmentIds: [...invitation.appointmentIds] };
     if (invitation.status !== "pending") throw new ApportionInvitationError("This invitation is no longer pending.");
     const timestamp = new Date().toISOString();
+    if (
+      input.actorDisplayName?.trim()
+      && input.action !== "cancel"
+      && (!invitation.requesterName?.trim() || invitation.requesterName.trim().toLowerCase() === "unregistered")
+    ) {
+      invitation.requesterName = input.actorDisplayName.trim();
+    }
     const staged: ApportionState = { ...state, appointments: [...state.appointments] };
     const appointments: ApportionAppointment[] = [];
     if (input.action === "accept") {

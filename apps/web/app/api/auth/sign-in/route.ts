@@ -1,6 +1,7 @@
-import { getDashboardPath } from "@trapit/auth";
+import { getDashboardPath, getSessionDisplayName, getSessionIdentifier } from "@trapit/auth";
 import { NextResponse } from "next/server";
 
+import { reconcileUnregisteredApportionRecordsForUser } from "../../../../lib/apportion-store";
 import { getCognitoErrorMessage, signInWithCognito, verifyWebTokens } from "../../../../lib/cognito";
 import { createWebSession, getWebSession, recordWebSignIn } from "../../../../lib/session";
 import { hasAcceptedCurrentTerms, recordTermsConsentForSession } from "../../../../lib/terms-consent-store";
@@ -61,6 +62,10 @@ export async function POST(request: Request) {
     await createWebSession(tokens);
     await recordTermsConsentForSession(resolvedSession);
     const signInActivity = await recordWebSignIn(resolvedSession);
+    await reconcileUnregisteredApportionRecordsForUser({
+      identifier: getSessionIdentifier(resolvedSession) ?? resolvedSession.phoneNumber,
+      registeredName: getSessionDisplayName(resolvedSession),
+    }).catch(() => undefined);
 
     return NextResponse.json({
       previousSignInAt: signInActivity.previousSignInAt,

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
-import { confirmCognitoSignUp, getCognitoErrorCode, getCognitoErrorMessage } from "../../../../lib/cognito";
+import { confirmCognitoSignUp, getCognitoErrorCode, getCognitoErrorMessage, listRegisteredDirectoryUsers } from "../../../../lib/cognito";
+import { reconcileUnregisteredApportionRecordsForUser } from "../../../../lib/apportion-store";
+import { participantIdentifiersMatch } from "@trapit/testing";
 
 function maskPhoneForLogs(phoneNumber: string | null) {
   if (!phoneNumber) {
@@ -36,6 +38,18 @@ export async function POST(request: Request) {
     }
 
     await confirmCognitoSignUp(phoneNumber, code);
+    try {
+      const directoryUsers = await listRegisteredDirectoryUsers();
+      const matchedUser = directoryUsers.find((entry) => participantIdentifiersMatch(entry.identifier, phoneNumber));
+      if (matchedUser?.label) {
+        await reconcileUnregisteredApportionRecordsForUser({
+          identifier: matchedUser.identifier,
+          registeredName: matchedUser.label,
+        });
+      }
+    } catch {
+      // Ignore directory lookup error after confirmation
+    }
     console.info("[auth/confirm-sign-up] Confirmation completed", {
       phoneSuffix: maskPhoneForLogs(phoneNumberForLog),
     });

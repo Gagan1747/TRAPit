@@ -6,6 +6,8 @@ import { ArrowLeft, ArrowRight } from "lucide-react";
 export type AssessmentLogRow = {
   groups: string;
   id: string;
+  isCompleted?: boolean;
+  isImmediateUncompleted?: boolean;
   marksOrPoints: ReactNode;
   participantName: string;
   questionPool: string;
@@ -29,7 +31,33 @@ type AssessmentLogTableProps = {
 export function AssessmentLogTable({ emptyMessage = "No tests or games match this view yet.", rows }: AssessmentLogTableProps) {
   const [page, setPage] = useState(0);
   const sortedRows = useMemo(
-    () => [...rows].sort((left, right) => right.sortTime - left.sortTime),
+    () =>
+      [...rows].sort((left, right) => {
+        const resolveCompleted = (item: AssessmentLogRow) =>
+          item.isCompleted !== undefined ? item.isCompleted : item.status === "Results";
+        const leftCompleted = resolveCompleted(left);
+        const rightCompleted = resolveCompleted(right);
+        const leftImmediateUncompleted = Boolean(
+          left.isImmediateUncompleted ?? (!leftCompleted && (left.testType === "Instant" || left.testType === "Rapid")),
+        );
+        const rightImmediateUncompleted = Boolean(
+          right.isImmediateUncompleted ?? (!rightCompleted && (right.testType === "Instant" || right.testType === "Rapid")),
+        );
+
+        if (leftImmediateUncompleted !== rightImmediateUncompleted) {
+          return leftImmediateUncompleted ? -1 : 1;
+        }
+
+        if (leftCompleted !== rightCompleted) {
+          return leftCompleted ? 1 : -1;
+        }
+
+        if (!leftCompleted) {
+          return left.sortTime - right.sortTime;
+        }
+
+        return right.sortTime - left.sortTime;
+      }),
     [rows],
   );
   if (!rows.length) {

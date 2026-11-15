@@ -144,9 +144,9 @@ const IST_OFFSET_MINUTES = 5 * 60 + 30;
 type TestRepeatMode = "none" | "weekly" | "biweekly" | "four-weekly";
 
 const TEST_REPEAT_MODE_OPTIONS: ReadonlyArray<{ label: string; value: Exclude<TestRepeatMode, "none">; stepDays: number }> = [
-  { label: "1/week", stepDays: 7, value: "weekly" },
-  { label: "1/2 weeks", stepDays: 14, value: "biweekly" },
-  { label: "1/4 week", stepDays: 28, value: "four-weekly" },
+  { label: "1 week", stepDays: 7, value: "weekly" },
+  { label: "2 weeks", stepDays: 14, value: "biweekly" },
+  { label: "4 weeks", stepDays: 28, value: "four-weekly" },
 ];
 
 const TEST_REPEAT_INSTANCE_OPTIONS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
@@ -5531,16 +5531,92 @@ export function AdminQuestionWorkspace({
     };
   }
 
+  function getMemberLeaveCutoffKeys(record: GroupMembershipRecord): {
+    leaveDateKey: string | null;
+    leaveMonthKey: string | null;
+  } {
+    if (record.status !== "left" && record.status !== "removed") {
+      return { leaveDateKey: null, leaveMonthKey: null };
+    }
+    const endedSource = record.endedAt ?? record.updatedAt;
+    const parsed = endedSource ? new Date(endedSource) : null;
+    if (!parsed || Number.isNaN(parsed.getTime())) {
+      return { leaveDateKey: "0000-01-01", leaveMonthKey: "0000-01" };
+    }
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    const day = String(parsed.getDate()).padStart(2, "0");
+    return {
+      leaveDateKey: `${year}-${month}-${day}`,
+      leaveMonthKey: `${year}-${month}`,
+    };
+  }
+
+  function getPendingMonthsUpToTarget(
+    record: GroupMembershipRecord,
+    groupCreatedAt: string | null | undefined,
+    targetMonthKey: string,
+  ): string[] {
+    const match = targetMonthKey.match(/^(\d{4})-(\d{2})$/);
+    if (!match) return [targetMonthKey];
+    const targetYear = Number.parseInt(match[1], 10);
+    const targetMonth0 = Number.parseInt(match[2], 10) - 1;
+    const targetMonthIndex = targetYear * 12 + targetMonth0;
+
+    const boundaryCandidates: number[] = [];
+    for (const iso of [record.joinedAt, record.createdAt, groupCreatedAt]) {
+      if (!iso) continue;
+      const parsed = new Date(iso);
+      if (!Number.isNaN(parsed.getTime())) {
+        boundaryCandidates.push(parsed.getFullYear() * 12 + parsed.getMonth());
+      }
+    }
+    const startMonthIndex = boundaryCandidates.length > 0
+      ? Math.max(...boundaryCandidates)
+      : targetMonthIndex;
+    if (targetMonthIndex < startMonthIndex) return [];
+
+    const pending: string[] = [];
+    const payments = record.paymentsByMonthKey ?? {};
+    for (let idx = startMonthIndex; idx <= targetMonthIndex; idx += 1) {
+      const y = Math.floor(idx / 12);
+      const m0 = ((idx % 12) + 12) % 12;
+      const key = `${y}-${String(m0 + 1).padStart(2, "0")}`;
+      if (!payments[key]) {
+        pending.push(key);
+      }
+    }
+    return pending;
+  }
+
   function handleOpenGroupPaymentPrompt(group: ParticipantGroup) {
-    if (!isSuperAdmin && effectiveUserCategory === "trapit-normal") {
-      openUpgradePanel({
-        featureLabel: "Group Payments",
-        message: "Upgrade to Pro or Pro max",
-        showProButton: true,
-        showProMaxButton: true,
-        targetCategory: "trapit-pro",
-      });
-      return;
+    const isAlreadyEnabled = Boolean(group.paymentTrackingEnabled && (group.monthlyPaymentAmountInr ?? 0) > 0);
+    if (!isSuperAdmin && !isAlreadyEnabled) {
+      const maxAllowed = effectiveUserCategory === "trapit-pro-max"
+        ? 10
+        : effectiveUserCategory === "trapit-pro"
+          ? 4
+          : 0;
+      const currentEnabledCount = participantGroups.filter(
+        (entry) =>
+          entry.id !== group.id
+          && entry.ownerIdentifier
+          && currentAdminIdentifier
+          && participantIdentifiersMatch(entry.ownerIdentifier, currentAdminIdentifier)
+          && entry.paymentTrackingEnabled
+          && (entry.monthlyPaymentAmountInr ?? 0) > 0,
+      ).length;
+
+      if (maxAllowed === 0 || currentEnabledCount >= maxAllowed) {
+        openUpgradePanel({
+          featureLabel: "Group Payments",
+          message: effectiveUserCategory === "trapit-normal" ? "Upgrade to Pro or Pro max" : "Upgrade to Pro max",
+          showProButton: effectiveUserCategory === "trapit-normal",
+          showProMaxButton: effectiveUserCategory !== "trapit-pro-max",
+          targetCategory: effectiveUserCategory === "trapit-normal" ? "trapit-pro" : "trapit-pro-max",
+        });
+        return;
+      }
     }
 
     setGroupPaymentPromptFeedback(null);
@@ -5557,6 +5633,12 @@ export function AdminQuestionWorkspace({
     const parsedAmount = Math.round(Number(groupPaymentPromptGroup.amountDraft));
     if (enable && (!Number.isFinite(parsedAmount) || parsedAmount <= 0)) {
       setGroupPaymentPromptFeedback("Enter a valid monthly payment amount in INR.");
+      return;
+    }
+    if (enable && (!payoutAccount || payoutAccount.status !== "verified" || !payoutAccount.linkedAccountId)) {
+      setGroupPaymentPromptFeedback(
+        "Your bank details must be up to date, verified, and linked in Pay Account Settings before activating payments for this group.",
+      );
       return;
     }
 
@@ -6229,6 +6311,8 @@ export function AdminQuestionWorkspace({
           : `${joinedCount} joined / ${scheduledTest?.resolvedParticipantIdentifiers.length ?? participantTest?.sharedCount ?? 0} shared`,
         groups,
         id: `test-${test.id}`,
+        isCompleted: test.status === "completed",
+        isImmediateUncompleted: isInstant && test.status !== "completed",
         marksOrPoints: hasParticipantResult && participantResult
           ? `${participantResult.marks}`
           : "—",
@@ -6242,7 +6326,9 @@ export function AdminQuestionWorkspace({
             ? `${leaderboard?.submittedCount ?? 0} appeared`
             : "—",
         scheduled: formatShortDateTime(test.startsAt),
-        sortTime: new Date(test.startsAt).getTime(),
+        sortTime: test.status === "completed"
+          ? new Date(test.startsAt).getTime() + (test.durationMinutes * 60_000)
+          : new Date(test.startsAt).getTime(),
         status: test.status === "scheduled"
           ? isInstant
             ? <a className="button-secondary small-button" href={`/user/test/${encodeURIComponent(test.id)}`} rel="noreferrer" target="_blank">{instantStarted ? "Live" : "Accept"}</a>
@@ -6287,6 +6373,8 @@ export function AdminQuestionWorkspace({
           : `${game.acceptedCount} joined / ${game.participantCount} shared`,
         groups: game.groupName,
         id: `game-${game.id}`,
+        isCompleted: game.status === "completed",
+        isImmediateUncompleted: game.status !== "completed",
         marksOrPoints: useParticipantScope && game.status === "completed" && ownResult ? `${ownResult.points}` : "—",
         participantName: useParticipantScope ? participant?.label?.trim() || currentAdminIdentifier || "—" : "—",
         questionPool: game.poolName,
@@ -6296,7 +6384,9 @@ export function AdminQuestionWorkspace({
             ? `${game.leaderboard.length} appeared`
             : "—",
         scheduled: formatShortDateTime(game.startedAt ?? game.createdAt),
-        sortTime: new Date(game.startedAt ?? game.createdAt).getTime(),
+        sortTime: game.status === "completed"
+          ? new Date(game.completedAt ?? game.startedAt ?? game.createdAt).getTime()
+          : new Date(game.startedAt ?? game.createdAt).getTime(),
         status: game.status === "upcoming"
           ? useParticipantScope
             ? participant?.accepted
@@ -7101,11 +7191,14 @@ export function AdminQuestionWorkspace({
       const orderPayload = await readJson<{
         amount: number;
         amountInr: number;
+        autopayMonths?: number;
+        autopaySubscriptionId?: string | null;
         currency: string;
         groupId: string;
         groupName: string;
         keyId: string;
         monthKey: string;
+        monthKeys?: string[];
         orderId: string;
       }>(
         await fetch("/api/admin/participants", {
@@ -7123,6 +7216,10 @@ export function AdminQuestionWorkspace({
       if (typeof window !== "undefined") {
         const RazorpayConstructor = await ensureRazorpayCheckoutLoaded();
         const normalizedContact = normalizeRazorpayContactPhone(currentAdminIdentifier);
+        const paidMonthsList = orderPayload.monthKeys?.length ? orderPayload.monthKeys : [orderPayload.monthKey];
+        const monthsSummary = paidMonthsList.length > 1
+          ? `${paidMonthsList[0]} to ${paidMonthsList[paidMonthsList.length - 1]} (${paidMonthsList.length} months)`
+          : orderPayload.monthKey;
 
         const rzp = new RazorpayConstructor({
           amount: orderPayload.amount,
@@ -7134,7 +7231,7 @@ export function AdminQuestionWorkspace({
             },
           },
           currency: orderPayload.currency,
-          description: `${orderPayload.groupName} (${orderPayload.monthKey})`,
+          description: `${orderPayload.groupName} (${monthsSummary} · 6M Autopay)`,
           handler: async (response: {
             razorpay_order_id?: string;
             razorpay_payment_id?: string;
@@ -7150,9 +7247,11 @@ export function AdminQuestionWorkspace({
                     membershipId: record.id,
                     mode: "verify-group-payment",
                     monthKey,
+                    monthKeys: paidMonthsList,
                     razorpayOrderId: response.razorpay_order_id,
                     razorpayPaymentId: response.razorpay_payment_id,
                     razorpaySignature: response.razorpay_signature,
+                    razorpaySubscriptionId: orderPayload.autopaySubscriptionId ?? null,
                   }),
                 }),
               );
@@ -7161,7 +7260,7 @@ export function AdminQuestionWorkspace({
               setGroupJoinRequests(payload.groupJoinRequests);
               setJoinedGroupMemberships(payload.joinedGroupMemberships ?? []);
               setOwnedGroupMemberships(payload.ownedGroupMemberships ?? []);
-              setGroupFeedback(`Payment of INR ${orderPayload.amountInr} for ${monthKey} completed.`);
+              setGroupFeedback(`Payment of INR ${orderPayload.amountInr} for ${monthsSummary} completed (6-month Autopay active).`);
               await loadWorkspace({ silent: true });
             } catch (verifyError) {
               setGroupFeedback(
@@ -7511,6 +7610,13 @@ export function AdminQuestionWorkspace({
                         <td className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined}>-</td>
                         <td className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined}>10</td>
                       </tr>
+                      <tr>
+                        <td>4</td>
+                        <td>Group: Groups with payment options</td>
+                        <td className={effectiveUserCategory === "trapit-normal" ? "is-current-category" : undefined}>0</td>
+                        <td className={effectiveUserCategory === "trapit-pro" ? "is-current-category" : undefined}>4</td>
+                        <td className={effectiveUserCategory === "trapit-pro-max" ? "is-current-category" : undefined}>10</td>
+                      </tr>
                     </tbody>
                   </table>
                 </div>
@@ -7642,7 +7748,7 @@ export function AdminQuestionWorkspace({
               <div className="inline-actions">
                 <button
                   className="button"
-                  disabled={isMutating}
+                  disabled={isMutating || !payoutAccount || payoutAccount.status !== "verified"}
                   type="button"
                   onClick={() => void handleSaveGroupPaymentSettings(true)}
                 >
@@ -8169,9 +8275,12 @@ export function AdminQuestionWorkspace({
                           const joinedGroupObj = participantGroups.find((entry) => entry.id === record.groupId);
                           const isAttendanceEnabled = Boolean(joinedGroupObj?.attendanceTrackingEnabled);
                           const isPaymentEnabled = Boolean(
-                            joinedGroupObj?.paymentTrackingEnabled && (joinedGroupObj?.monthlyPaymentAmountInr ?? 0) > 0,
+                            joinedGroupObj?.paymentTrackingEnabled
+                            && (joinedGroupObj?.monthlyPaymentAmountInr ?? 0) > 0
+                            && joinedGroupObj?.creatorPayoutReady !== false,
                           );
                           const monthlyFeeInr = joinedGroupObj?.monthlyPaymentAmountInr ?? 0;
+                          const { leaveDateKey: memberLeaveDateKey, leaveMonthKey: memberLeaveMonthKey } = getMemberLeaveCutoffKeys(record);
                           const attendanceWindow = buildGroupAttendanceCalendarWindow(
                             offsetWeeks,
                             joinedGroupObj?.createdAt ?? record.createdAt,
@@ -8319,17 +8428,18 @@ export function AdminQuestionWorkspace({
                                       </button>
                                       <div className="group-attendance-days">
                                         {attendanceWindow.days.map((day) => {
-                                          const mark = record.attendanceByDateKey?.[day.dateKey] ?? null;
+                                          const isPostLeaveDate = Boolean(memberLeaveDateKey && day.dateKey >= memberLeaveDateKey);
+                                          const mark = isPostLeaveDate ? null : (record.attendanceByDateKey?.[day.dateKey] ?? null);
                                           return (
                                             <span
-                                              className={`group-attendance-day${mark === "present" ? " is-present" : mark === "absent" ? " is-absent" : ""}`}
+                                              className={`group-attendance-day${isPostLeaveDate ? " is-inactive-post-leave" : mark === "present" ? " is-present" : mark === "absent" ? " is-absent" : ""}`}
                                               key={`${record.id}-${day.dateKey}`}
                                             >
                                               <span className="group-attendance-day-weekday">{day.weekdayLabel}</span>
                                               <small>{day.dateLabel}</small>
-                                              {mark === "present" ? (
+                                              {!isPostLeaveDate && mark === "present" ? (
                                                 <strong className="group-attendance-mark is-tick">✓</strong>
-                                              ) : mark === "absent" ? (
+                                              ) : !isPostLeaveDate && mark === "absent" ? (
                                                 <strong className="group-attendance-mark is-cross">✕</strong>
                                               ) : null}
                                             </span>
@@ -8372,7 +8482,8 @@ export function AdminQuestionWorkspace({
                                       </button>
                                       <div className="group-attendance-days group-payment-months">
                                         {paymentWindow.months.map((month) => {
-                                          const paidRecord = record.paymentsByMonthKey?.[month.monthKey] ?? null;
+                                          const isPostLeaveMonth = Boolean(memberLeaveMonthKey && month.monthKey >= memberLeaveMonthKey);
+                                          const paidRecord = isPostLeaveMonth ? null : (record.paymentsByMonthKey?.[month.monthKey] ?? null);
                                           const paidDateLabel = paidRecord?.paidAt
                                             ? new Date(paidRecord.paidAt).toLocaleDateString("en-IN", {
                                                 day: "2-digit",
@@ -8380,7 +8491,24 @@ export function AdminQuestionWorkspace({
                                               })
                                             : null;
                                           const slotKey = `${record.id}:${month.monthKey}`;
-                                          return paidRecord ? (
+                                          const pendingCumulativeMonths = !isPostLeaveMonth && !paidRecord && !month.isBeforeBoundary
+                                            ? getPendingMonthsUpToTarget(record, joinedGroupObj?.createdAt, month.monthKey)
+                                            : [];
+                                          const cumulativeAmountInr = Math.max(1, pendingCumulativeMonths.length) * monthlyFeeInr;
+                                          const isCumulativeMultiMonth = pendingCumulativeMonths.length > 1;
+
+                                          return isPostLeaveMonth ? (
+                                            <button
+                                              className="group-attendance-day group-payment-month is-payable is-inactive-post-leave"
+                                              disabled
+                                              key={slotKey}
+                                              type="button"
+                                            >
+                                              <span className="group-attendance-day-weekday">{month.monthLabel}</span>
+                                              <strong>₹{monthlyFeeInr}</strong>
+                                              <small>Inactive</small>
+                                            </button>
+                                          ) : paidRecord ? (
                                             <span
                                               className="group-attendance-day group-payment-month is-present"
                                               key={slotKey}
@@ -8398,12 +8526,23 @@ export function AdminQuestionWorkspace({
                                                 || isProcessingGroupPaymentKey === slotKey
                                               }
                                               key={slotKey}
+                                              title={
+                                                isCumulativeMultiMonth
+                                                  ? `Includes ${pendingCumulativeMonths.length} pending months (${pendingCumulativeMonths.join(", ")}) — Total ₹${cumulativeAmountInr}`
+                                                  : undefined
+                                              }
                                               type="button"
                                               onClick={() => void handlePayGroupMonthlyFee(record, month.monthKey)}
                                             >
                                               <span className="group-attendance-day-weekday">{month.monthLabel}</span>
-                                              <strong>₹{monthlyFeeInr}</strong>
-                                              <small>{isProcessingGroupPaymentKey === slotKey ? "..." : "Pay"}</small>
+                                              <strong>₹{isCumulativeMultiMonth ? cumulativeAmountInr : monthlyFeeInr}</strong>
+                                              <small>
+                                                {isProcessingGroupPaymentKey === slotKey
+                                                  ? "..."
+                                                  : isCumulativeMultiMonth
+                                                    ? `Pay (${pendingCumulativeMonths.length}m)`
+                                                    : "Pay"}
+                                              </small>
                                             </button>
                                           );
                                         })}
@@ -8902,20 +9041,25 @@ export function AdminQuestionWorkspace({
                                             </button>
                                             <div className="group-attendance-days">
                                               {attendanceWindow.days.map((day) => {
-                                                const mark = record.attendanceByDateKey?.[day.dateKey] ?? null;
+                                                const { leaveDateKey } = getMemberLeaveCutoffKeys(record);
+                                                const isPostLeaveDate = Boolean(leaveDateKey && day.dateKey >= leaveDateKey);
+                                                const mark = isPostLeaveDate ? null : (record.attendanceByDateKey?.[day.dateKey] ?? null);
                                                 return (
                                                   <button
-                                                    className={`group-attendance-day${mark === "present" ? " is-present" : mark === "absent" ? " is-absent" : ""}`}
-                                                    disabled={!isGroupCreator || isMutating}
+                                                    className={`group-attendance-day${isPostLeaveDate ? " is-inactive-post-leave" : mark === "present" ? " is-present" : mark === "absent" ? " is-absent" : ""}`}
+                                                    disabled={!isGroupCreator || isMutating || isPostLeaveDate}
                                                     key={`${record.id}-${day.dateKey}`}
                                                     type="button"
-                                                    onClick={() => handleCycleGroupMemberAttendance(group.id, record, day.dateKey)}
+                                                    onClick={() => {
+                                                      if (isPostLeaveDate) return;
+                                                      handleCycleGroupMemberAttendance(group.id, record, day.dateKey);
+                                                    }}
                                                   >
                                                     <span className="group-attendance-day-weekday">{day.weekdayLabel}</span>
                                                     <small>{day.dateLabel}</small>
-                                                    {mark === "present" ? (
+                                                    {!isPostLeaveDate && mark === "present" ? (
                                                       <strong className="group-attendance-mark is-tick">✓</strong>
-                                                    ) : mark === "absent" ? (
+                                                    ) : !isPostLeaveDate && mark === "absent" ? (
                                                       <strong className="group-attendance-mark is-cross">✕</strong>
                                                     ) : null}
                                                   </button>
@@ -8958,7 +9102,9 @@ export function AdminQuestionWorkspace({
                                             </button>
                                             <div className="group-attendance-days group-payment-months">
                                               {groupPaymentWindow.months.map((month) => {
-                                                const paidRecord = record.paymentsByMonthKey?.[month.monthKey] ?? null;
+                                                const { leaveMonthKey } = getMemberLeaveCutoffKeys(record);
+                                                const isPostLeaveMonth = Boolean(leaveMonthKey && month.monthKey >= leaveMonthKey);
+                                                const paidRecord = isPostLeaveMonth ? null : (record.paymentsByMonthKey?.[month.monthKey] ?? null);
                                                 const paidDateLabel = paidRecord?.paidAt
                                                   ? new Date(paidRecord.paidAt).toLocaleDateString("en-IN", {
                                                       day: "2-digit",
@@ -8967,12 +9113,12 @@ export function AdminQuestionWorkspace({
                                                   : null;
                                                 return (
                                                   <span
-                                                    className={`group-attendance-day group-payment-month${paidRecord ? " is-present" : ""}`}
+                                                    className={`group-attendance-day group-payment-month${isPostLeaveMonth ? " is-inactive-post-leave" : paidRecord ? " is-present" : ""}`}
                                                     key={`${record.id}-${month.monthKey}`}
                                                   >
                                                     <span className="group-attendance-day-weekday">{month.monthLabel}</span>
                                                     <strong>₹{paidRecord ? paidRecord.amountInr : (group.monthlyPaymentAmountInr ?? 0)}</strong>
-                                                    <small>{paidDateLabel ?? "Unpaid"}</small>
+                                                    <small>{isPostLeaveMonth ? "Inactive" : (paidDateLabel ?? "Unpaid")}</small>
                                                   </span>
                                                 );
                                               })}
@@ -9526,6 +9672,14 @@ export function AdminQuestionWorkspace({
                           </button>
                         </div>
                       </div>
+                      {question.isTaggedIncorrect ? (
+                        <div className="question-tag-description-banner">
+                          <span className="status-chip warning">Tagged</span>
+                          {question.tagDescription ? (
+                            <span className="question-tag-description-text">{question.tagDescription}</span>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {duplicateGroup || question.isShared ? (
                         <div className="duplicate-question-banner">
                           {duplicateGroup ? (
@@ -9997,7 +10151,7 @@ export function AdminQuestionWorkspace({
             {!editingScheduledTestId ? <>
               <div className="field-row">
                 <div className="field grow-field">
-                  <span className="field-label">Repeat</span>
+                  <span className="field-label">Repeat once every</span>
                   <div aria-label="Repeat assessment" className="business-choice-row" role="group">
                     {TEST_REPEAT_MODE_OPTIONS.map((option) => {
                       const isSelected = scheduleRepeatMode === option.value;

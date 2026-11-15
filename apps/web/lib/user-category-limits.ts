@@ -58,6 +58,26 @@ export function assertCanManageGroup(category: NormalUserCategory) {
   }
 }
 
+export function getGroupPaymentLimitForCategory(category: NormalUserCategory): number {
+  return getNormalUserCategoryDefinition(category).group.maxPaymentEnabledGroups;
+}
+
+export function assertCanEnableGroupPayment(category: NormalUserCategory, currentPaymentEnabledGroupCount: number) {
+  const definition = getNormalUserCategoryDefinition(category);
+  const limit = definition.group.maxPaymentEnabledGroups;
+
+  if (limit <= 0 || currentPaymentEnabledGroupCount >= limit) {
+    throwLimitExceeded(
+      "Group - Groups with payment options",
+      category,
+      getUpgradeTargetCategory(
+        category,
+        (candidateDefinition) => candidateDefinition.group.maxPaymentEnabledGroups > limit,
+      ) ?? getNextNormalUserCategory(category),
+    );
+  }
+}
+
 export function assertCanCreatePollQuestions(category: NormalUserCategory) {
   void category;
 }

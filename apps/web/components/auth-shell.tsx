@@ -20,7 +20,15 @@ export function AuthShell({
       <div className="hero-grid">
         <section className="panel hero-copy">
           {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
-          <h1 className="hero-title">{title}</h1>
+          <h1 className="hero-title auth-heading-with-logo">
+            <img
+              alt="TRAPit logo"
+              className="auth-heading-logo"
+              decoding="async"
+              src="/trapit-logo.jpeg"
+            />
+            <span>{title}</span>
+          </h1>
           {description ? <p className="hero-text">{description}</p> : null}
           {heroVisual ? <div className="hero-visual-wrap">{heroVisual}</div> : null}
           {showHeroLinks ? (

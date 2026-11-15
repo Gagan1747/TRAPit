@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  authCopy,
   combinePhoneNumber,
   DEFAULT_PHONE_COUNTRY_CODE,
   formatPhoneCountryLabel,
@@ -393,6 +394,15 @@ export function AuthForm({ mode }: AuthFormProps) {
   return (
     <form className="form-stack" onSubmit={handleSubmit}>
       <div>
+        <h2 className="auth-heading-with-logo">
+          <img
+            alt="TRAPit logo"
+            className="auth-heading-logo"
+            decoding="async"
+            src="/trapit-logo.jpeg"
+          />
+          <span>{mode === "sign-up" ? authCopy.signUpTitle : authCopy.signInTitle}</span>
+        </h2>
         {!authConfigured ? <p className="muted-text">{getPublicWebAuthSetupMessage()}</p> : null}
       </div>
 

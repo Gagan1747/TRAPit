@@ -57,6 +57,14 @@ async function resolveRegisteredTarget(phone: string) {
   return users.find((entry) => matchApportionIdentity(entry.identifier, normalizedPhone));
 }
 
+function formatCanonicalUnregisteredPhone(phone: string) {
+  const normalizedPhone = phone.trim().replace(/[\s()-]/g, "");
+  if (normalizedPhone.startsWith("+")) return normalizedPhone;
+  const digits = normalizedPhone.replace(/\D/g, "");
+  if (digits.length === 10) return `+91${digits}`;
+  return `+${digits}`;
+}
+
 async function resolveServiceBusiness(ownerIdentifier: string, serviceId: string, savedContext?: Awaited<ReturnType<typeof getApportionBusinessContext>>) {
   const ownerContext = savedContext === undefined ? await getApportionBusinessContext(ownerIdentifier) : savedContext;
   if (!ownerContext) throw new Error("Appointment business is unavailable.");
@@ -431,7 +439,17 @@ export async function GET(
     if (!canInvite) return NextResponse.json({ error: "Only the business owner on their own booking page can invite users." }, { status: 403 });
     try {
       const user = await resolveRegisteredTarget(lookupPhone);
-      if (!user) return NextResponse.json({ error: "No registered user was found for that phone number." }, { status: 404 });
+      if (!user) {
+        const canonicalPhone = formatCanonicalUnregisteredPhone(lookupPhone);
+        return NextResponse.json(
+          {
+            error: "No registered user was found for that phone number.",
+            unregistered: true,
+            unregisteredPhone: canonicalPhone,
+          },
+          { status: 404 },
+        );
+      }
       return NextResponse.json({ user: { identifier: user.identifier, name: user.label } });
     } catch (error) {
       return NextResponse.json({ error: error instanceof Error ? error.message : "Unable to look up user." }, { status: 400 });
@@ -677,6 +695,7 @@ export async function POST(
     locationId?: string;
     notes?: string | null;
     targetPhone?: string;
+    confirmUnregisteredInvite?: boolean;
     recurrence?: ApportionRecurrence | null;
     slotDateKey?: string;
     startsAt?: string;
@@ -759,8 +778,14 @@ export async function POST(
       return NextResponse.json({ error: "Only the business owner on their own booking page can invite users." }, { status: 403 });
     }
     try {
-      const target = await resolveRegisteredTarget(body.targetPhone);
-      if (!target) throw new Error("No registered user was found for that phone number.");
+      const registeredTarget = await resolveRegisteredTarget(body.targetPhone);
+      if (!registeredTarget && !body.confirmUnregisteredInvite) {
+        throw new Error("No registered user was found for that phone number.");
+      }
+      const target = registeredTarget ?? {
+        identifier: formatCanonicalUnregisteredPhone(body.targetPhone),
+        label: "Unregistered",
+      };
       assertApportionRecurringWeekdays(body.recurrence, [location,
         business.ownerContext.branding.appointmentLocations!.find((entry) => entry.id === location.id)!]);
       const requestedStart = new Date(body.startsAt ?? "");

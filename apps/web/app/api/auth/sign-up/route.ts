@@ -10,6 +10,7 @@ import {
   resendCognitoConfirmationCode,
   signUpWithCognito,
 } from "../../../../lib/cognito";
+import { reconcileUnregisteredApportionRecordsForUser } from "../../../../lib/apportion-store";
 import { recordTermsConsentForPhone } from "../../../../lib/terms-consent-store";
 
 function maskPhoneForLogs(phoneNumber: string | null) {
@@ -82,6 +83,10 @@ export async function POST(request: Request) {
     }
 
     await recordTermsConsentForPhone(phoneNumber);
+    await reconcileUnregisteredApportionRecordsForUser({
+      identifier: phoneNumber,
+      registeredName: fullName,
+    }).catch(() => undefined);
 
     try {
       await addUserToDefaultGroup(phoneNumber);

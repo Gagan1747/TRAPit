@@ -211,6 +211,20 @@ main {
   line-height: 1.02;
 }
 
+.auth-heading-with-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+}
+
+.auth-heading-logo {
+  width: 1.08em;
+  height: 1.08em;
+  object-fit: contain;
+  border-radius: 0.2em;
+  flex-shrink: 0;
+}
+
 .hero-kicker {
   margin: 10px 0 0;
   color: var(--accent-deep);
@@ -1864,6 +1878,27 @@ main {
 
 :is(.apportion-service-choice, .apportion-location-card, .apportion-calendar-day, .apportion-slot-chip) :is(span, strong, small) {
   color: inherit;
+}
+
+.apportion-calendar-day strong,
+.apportion-calendar-day:not(.is-selected) strong,
+.apportion-calendar-day:disabled strong {
+  color: #ffffff;
+  background: #183b43;
+  border-radius: 999px;
+  min-width: 1.85em;
+  height: 1.85em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 0.35em;
+  line-height: 1;
+  opacity: 1;
+}
+
+.apportion-calendar-day.is-selected strong {
+  background: transparent;
+  color: #ffffff;
 }
 
 :is(.apportion-service-choice, .apportion-location-card, .apportion-calendar-day, .apportion-slot-chip):focus-visible {
@@ -5507,4 +5542,41 @@ span.group-attendance-day {
 .joined-group-not-admin {
   font-size: 0.82rem;
   font-weight: 600;
+}
+
+.group-attendance-day.is-inactive-post-leave,
+.group-payment-month.is-inactive-post-leave,
+button.group-attendance-day.is-inactive-post-leave:disabled {
+  background: #e9eeed;
+  border-color: rgba(24, 59, 67, 0.14);
+  color: #8a9693;
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.question-tag-description-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(217, 119, 6, 0.28);
+}
+
+.question-tag-description-text {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.apportion-unregistered-confirm-banner {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(24, 59, 67, 0.22);
+  background: rgba(24, 59, 67, 0.05);
 }

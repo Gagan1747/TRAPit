@@ -1697,10 +1697,35 @@ function isQuestionExcludedFromTests(state: TestingWorkspaceState, question: Per
 }
 
 function hydrateQuestionTagState(state: TestingWorkspaceState, questions: PersistentQuestion[]): PersistentQuestion[] {
-  return questions.map((question) => ({
-    ...question,
-    isTaggedIncorrect: isQuestionExcludedFromTests(state, question),
-  }));
+  const openReportReasonByQuestionId = new Map<string, string>();
+  const latestReportReasonByQuestionId = new Map<string, string>();
+
+  for (const report of state.questionReports) {
+    const trimmedReason = report.reason?.trim() || "";
+    if (!trimmedReason) continue;
+    if (!latestReportReasonByQuestionId.has(report.questionId)) {
+      latestReportReasonByQuestionId.set(report.questionId, trimmedReason);
+    }
+    if (report.status === "open" && !openReportReasonByQuestionId.has(report.questionId)) {
+      openReportReasonByQuestionId.set(report.questionId, trimmedReason);
+    }
+  }
+
+  return questions.map((question) => {
+    const isTagged = Boolean(question.isTaggedIncorrect || openReportReasonByQuestionId.has(question.id));
+    const resolvedDescription = isTagged
+      ? (question.tagDescription?.trim()
+        || openReportReasonByQuestionId.get(question.id)
+        || latestReportReasonByQuestionId.get(question.id)
+        || null)
+      : null;
+
+    return {
+      ...question,
+      isTaggedIncorrect: isTagged,
+      tagDescription: resolvedDescription,
+    };
+  });
 }
 
 export async function listQuestions(
@@ -1760,7 +1785,7 @@ export async function createQuestion(
 
   return {
     newPoolId: newPool?.id ?? null,
-    questions: filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier),
+    questions: hydrateQuestionTagState(state, filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier)),
   };
 }
 
@@ -1818,7 +1843,7 @@ export async function importQuestions(
 
   return {
     newPoolId: newPool?.id ?? null,
-    questions: filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier),
+    questions: hydrateQuestionTagState(state, filterQuestionsForActor(state.questions, actorId, state.pools, actorIdentifier)),
   };
 }
 
@@ -1876,16 +1901,21 @@ export async function toggleQuestionIncorrectTag(
   isTaggedIncorrect: boolean,
   actorId: string | null = null,
   actorIdentifier: string | null = null,
+  tagDescription?: string | null,
 ) {
   const state = await readStore();
   ensureActorOwnsQuestion(state, questionId, actorId);
   const timestamp = new Date().toISOString();
+  const normalizedTagDescription = isTaggedIncorrect
+    ? (tagDescription !== undefined ? (tagDescription?.trim() || null) : undefined)
+    : null;
 
   state.questions = state.questions.map((question) =>
     question.id === questionId
       ? {
           ...question,
           isTaggedIncorrect,
+          ...(normalizedTagDescription !== undefined ? { tagDescription: normalizedTagDescription } : {}),
           updatedAt: timestamp,
         }
       : question,
@@ -1961,7 +1991,7 @@ export async function deleteQuestion(questionId: string, actorId: string | null 
   }));
   await writeStore(state);
 
-  return filterQuestionsForActor(state.questions, actorId);
+  return hydrateQuestionTagState(state, filterQuestionsForActor(state.questions, actorId));
 }
 
 export async function deleteQuestions(questionIds: string[], actorId: string | null = null) {
@@ -1989,7 +2019,7 @@ export async function deleteQuestions(questionIds: string[], actorId: string | n
   }));
   await writeStore(state);
 
-  return filterQuestionsForActor(state.questions, actorId);
+  return hydrateQuestionTagState(state, filterQuestionsForActor(state.questions, actorId));
 }
 
 export async function clearQuestions(actorId: string | null = null) {
@@ -2954,6 +2984,7 @@ export async function removeGroupMember(input: {
   );
 
   let didMarkRemoved = false;
+  let cancelledSubscriptionId: string | null = null;
   state.groupMemberships = (state.groupMemberships ?? []).map((record) => {
     if (didMarkRemoved) return record;
     const matchesRecord = input.membershipId
@@ -2961,8 +2992,18 @@ export async function removeGroupMember(input: {
       : record.groupId === group.id && record.status === "member" && identifiersMatch(record.userIdentifier, input.memberIdentifier);
     if (!matchesRecord) return record;
     didMarkRemoved = true;
+    if (record.autopaySubscriptionId && record.autopayStatus !== "cancelled") {
+      cancelledSubscriptionId = record.autopaySubscriptionId;
+    }
     return {
       ...record,
+      ...(record.autopayEnabled || record.autopayStatus === "active" || record.autopaySubscriptionId
+        ? {
+            autopayCancelledAt: timestamp,
+            autopayEnabled: false,
+            autopayStatus: "cancelled" as const,
+          }
+        : {}),
       endedAt: timestamp,
       status: "removed",
       updatedAt: timestamp,
@@ -2971,6 +3012,10 @@ export async function removeGroupMember(input: {
 
   refreshScheduledAssessmentsForGroup(state, group.id);
   await writeStore(state);
+
+  if (cancelledSubscriptionId) {
+    void cancelRazorpayAutopaySubscription(cancelledSubscriptionId);
+  }
 
   return state.participantGroups;
 }
@@ -3015,6 +3060,7 @@ export async function leaveParticipantGroup(input: {
   );
 
   let didMarkLeft = false;
+  let cancelledSubscriptionId: string | null = null;
   state.groupMemberships = (state.groupMemberships ?? []).map((record) => {
     if (didMarkLeft) return record;
     const matchesRecord = input.membershipId
@@ -3022,8 +3068,18 @@ export async function leaveParticipantGroup(input: {
       : record.groupId === group.id && record.status === "member" && identifiersMatch(record.userIdentifier, input.userIdentifier);
     if (!matchesRecord) return record;
     didMarkLeft = true;
+    if (record.autopaySubscriptionId && record.autopayStatus !== "cancelled") {
+      cancelledSubscriptionId = record.autopaySubscriptionId;
+    }
     return {
       ...record,
+      ...(record.autopayEnabled || record.autopayStatus === "active" || record.autopaySubscriptionId
+        ? {
+            autopayCancelledAt: timestamp,
+            autopayEnabled: false,
+            autopayStatus: "cancelled" as const,
+          }
+        : {}),
       endedAt: timestamp,
       status: "left",
       updatedAt: timestamp,
@@ -3033,7 +3089,30 @@ export async function leaveParticipantGroup(input: {
   refreshScheduledAssessmentsForGroup(state, group.id);
   await writeStore(state);
 
+  if (cancelledSubscriptionId) {
+    void cancelRazorpayAutopaySubscription(cancelledSubscriptionId);
+  }
+
   return listParticipantGroupsForOwner(input.userIdentifier, { includeUnowned: true });
+}
+
+async function cancelRazorpayAutopaySubscription(subscriptionId: string) {
+  const keyId = process.env.RAZORPAY_KEY_ID?.trim() || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID?.trim() || "";
+  const keySecret = process.env.RAZORPAY_KEY_SECRET?.trim() || "";
+  if (!keyId || !keySecret || !subscriptionId.trim()) return;
+  try {
+    const authHeader = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
+    await fetch(`https://api.razorpay.com/v1/subscriptions/${encodeURIComponent(subscriptionId.trim())}/cancel`, {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${authHeader}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ cancel_at_cycle_end: 0 }),
+    });
+  } catch {
+    // Ignore external network errors after local autopay cancellation state is saved
+  }
 }
 
 export async function listGroupMembershipsForActor(actorIdentifier: string) {
@@ -3104,6 +3183,7 @@ export async function toggleGroupAttendanceTracking(input: {
 export async function toggleGroupPaymentTracking(input: {
   enabled?: boolean;
   groupId: string;
+  linkedPayoutAccountId?: string | null;
   monthlyPaymentAmountInr?: number | null;
   ownerIdentifier: string;
 }) {
@@ -3132,11 +3212,16 @@ export async function toggleGroupPaymentTracking(input: {
     throw new Error("Enter a valid monthly payment amount in INR.");
   }
 
+  const nextLinkedPayoutAccountId = nextEnabled
+    ? (input.linkedPayoutAccountId?.trim() || group.linkedPayoutAccountId?.trim() || null)
+    : (group.linkedPayoutAccountId ?? null);
+
   const timestamp = new Date().toISOString();
   state.participantGroups = state.participantGroups.map((entry) =>
     entry.id === group.id
       ? {
           ...entry,
+          linkedPayoutAccountId: nextLinkedPayoutAccountId,
           monthlyPaymentAmountInr: nextAmount,
           paymentTrackingEnabled: nextEnabled,
           updatedAt: timestamp,
@@ -3148,12 +3233,66 @@ export async function toggleGroupPaymentTracking(input: {
   return state.participantGroups;
 }
 
+export function getPendingCumulativeGroupMonths(input: {
+  groupCreatedAt?: string | null;
+  membership: GroupMembershipRecord;
+  targetMonthKey: string;
+}): string[] {
+  const targetMatch = input.targetMonthKey.trim().match(/^(\d{4})-(\d{2})$/);
+  if (!targetMatch) {
+    throw new Error("A valid payment month (YYYY-MM) is required.");
+  }
+  const targetYear = Number.parseInt(targetMatch[1], 10);
+  const targetMonth0 = Number.parseInt(targetMatch[2], 10) - 1;
+  if (!Number.isFinite(targetYear) || !Number.isFinite(targetMonth0) || targetMonth0 < 0 || targetMonth0 > 11) {
+    throw new Error("A valid payment month (YYYY-MM) is required.");
+  }
+  const targetMonthIndex = targetYear * 12 + targetMonth0;
+
+  if (input.membership.status === "left" || input.membership.status === "removed") {
+    throw new Error("Inactive or former group members cannot make group payments.");
+  }
+
+  const boundaryCandidates: number[] = [];
+  for (const iso of [input.membership.joinedAt, input.membership.createdAt, input.groupCreatedAt]) {
+    if (!iso) continue;
+    const parsed = new Date(iso);
+    if (!Number.isNaN(parsed.getTime())) {
+      boundaryCandidates.push(parsed.getFullYear() * 12 + parsed.getMonth());
+    }
+  }
+  const startMonthIndex = boundaryCandidates.length > 0
+    ? Math.max(...boundaryCandidates)
+    : targetMonthIndex;
+
+  if (targetMonthIndex < startMonthIndex) {
+    throw new Error("Payment cannot be made for months before joining the group.");
+  }
+
+  const pendingMonthKeys: string[] = [];
+  const paymentsByMonthKey = input.membership.paymentsByMonthKey ?? {};
+
+  for (let idx = startMonthIndex; idx <= targetMonthIndex; idx += 1) {
+    const year = Math.floor(idx / 12);
+    const month0 = ((idx % 12) + 12) % 12;
+    const key = `${year}-${String(month0 + 1).padStart(2, "0")}`;
+    if (!paymentsByMonthKey[key]) {
+      pendingMonthKeys.push(key);
+    }
+  }
+
+  return pendingMonthKeys;
+}
+
 export async function recordGroupMonthlyPayment(input: {
   amountInr: number;
+  autopayMonths?: number;
+  autopaySubscriptionId?: string | null;
   groupId: string;
   memberIdentifier: string;
   membershipId?: string | null;
   monthKey: string;
+  monthKeys?: string[];
   orderId?: string | null;
   paidAt?: string;
   paymentId?: string | null;
@@ -3171,12 +3310,17 @@ export async function recordGroupMonthlyPayment(input: {
     throw new Error("A valid payment month (YYYY-MM) is required.");
   }
 
-  const amountInr = Math.round(Number(input.amountInr));
-  if (!Number.isFinite(amountInr) || amountInr <= 0) {
+  const perMonthFeeInr = Math.round(Number(group.monthlyPaymentAmountInr || input.amountInr));
+  if (!Number.isFinite(perMonthFeeInr) || perMonthFeeInr <= 0) {
     throw new Error("A valid payment amount is required.");
   }
 
   const paidAt = input.paidAt?.trim() || new Date().toISOString();
+  const autopayMonths = input.autopayMonths ?? 6;
+  const autopayExpiryDate = new Date(paidAt);
+  autopayExpiryDate.setMonth(autopayExpiryDate.getMonth() + autopayMonths);
+  const autopayExpiresAt = autopayExpiryDate.toISOString();
+
   let matched = false;
   state.groupMemberships = (state.groupMemberships ?? []).map((record) => {
     if (matched) return record;
@@ -3185,17 +3329,35 @@ export async function recordGroupMonthlyPayment(input: {
       : record.groupId === group.id && identifiersMatch(record.userIdentifier, input.memberIdentifier);
     if (!isTarget) return record;
     matched = true;
-    const nextPayments = {
-      ...(record.paymentsByMonthKey ?? {}),
-      [monthKey]: {
-        amountInr,
+
+    const computedPendingMonths = getPendingCumulativeGroupMonths({
+      groupCreatedAt: group.createdAt,
+      membership: record,
+      targetMonthKey: monthKey,
+    });
+    const monthsToRecord = Array.isArray(input.monthKeys) && input.monthKeys.length > 0
+      ? input.monthKeys.filter((key) => /^\d{4}-\d{2}$/.test(key))
+      : (computedPendingMonths.length > 0 ? computedPendingMonths : [monthKey]);
+
+    const nextPayments = { ...(record.paymentsByMonthKey ?? {}) };
+    for (const key of monthsToRecord) {
+      nextPayments[key] = {
+        amountInr: perMonthFeeInr,
         orderId: input.orderId?.trim() || null,
         paidAt,
         paymentId: input.paymentId?.trim() || null,
-      },
-    };
+      };
+    }
+
     return {
       ...record,
+      autopayCancelledAt: null,
+      autopayEnabled: true,
+      autopayExpiresAt,
+      autopayMonths,
+      autopayStartedAt: record.autopayStartedAt ?? paidAt,
+      autopayStatus: "active" as const,
+      autopaySubscriptionId: input.autopaySubscriptionId?.trim() || record.autopaySubscriptionId || null,
       paymentsByMonthKey: nextPayments,
       updatedAt: paidAt,
     };
@@ -3335,6 +3497,23 @@ export async function markGroupMemberAttendance(input: {
     earliestMonthStart.setHours(0, 0, 0, 0);
     if (targetDate < earliestMonthStart) {
       throw new Error("Attendance cannot be marked before the month in which the group was created.");
+    }
+  }
+
+  const targetMembership = (state.groupMemberships ?? []).find((record) =>
+    input.membershipId
+      ? record.id === input.membershipId
+      : record.groupId === group.id && identifiersMatch(record.userIdentifier, input.memberIdentifier),
+  );
+  if (targetMembership && (targetMembership.status === "left" || targetMembership.status === "removed")) {
+    const endedDate = targetMembership.endedAt ? new Date(targetMembership.endedAt) : null;
+    if (endedDate && !Number.isNaN(endedDate.getTime())) {
+      const leaveDateKey = `${endedDate.getFullYear()}-${String(endedDate.getMonth() + 1).padStart(2, "0")}-${String(endedDate.getDate()).padStart(2, "0")}`;
+      if (dateKey >= leaveDateKey) {
+        throw new Error("Attendance cannot be marked from the date the member left or was removed from the group.");
+      }
+    } else {
+      throw new Error("Attendance cannot be marked for a member who has left or been removed from the group.");
     }
   }
 
@@ -5822,6 +6001,7 @@ export async function reportTestQuestion(input: {
       ? {
           ...question,
           isTaggedIncorrect: true,
+          tagDescription: reason,
           updatedAt: timestamp,
         }
       : question,
@@ -5907,6 +6087,7 @@ export async function reportPostTestQuestion(input: {
       ? {
           ...question,
           isTaggedIncorrect: true,
+          tagDescription: reason,
           updatedAt: timestamp,
         }
       : question,
@@ -5993,6 +6174,7 @@ export async function reportPostGameQuestion(input: {
       ? {
           ...question,
           isTaggedIncorrect: true,
+          tagDescription: reason,
           updatedAt: timestamp,
         }
       : question,

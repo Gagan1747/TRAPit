@@ -16,6 +16,7 @@ export type NormalUserCategoryDefinition = {
     create: boolean;
     join: boolean;
     manage: boolean;
+    maxPaymentEnabledGroups: number;
   };
   home: boolean;
   label: string;
@@ -46,6 +47,7 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
       create: true,
       join: true,
       manage: true,
+      maxPaymentEnabledGroups: 0,
     },
     home: true,
     label: "TRAPit normal users",
@@ -72,6 +74,7 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
       create: true,
       join: true,
       manage: true,
+      maxPaymentEnabledGroups: 4,
     },
     home: true,
     label: "TRAPit Pro users",
@@ -98,6 +101,7 @@ export const normalUserCategoryDefinitions: Record<NormalUserCategory, NormalUse
       create: true,
       join: true,
       manage: true,
+      maxPaymentEnabledGroups: 10,
     },
     home: true,
     label: "TRAPit Pro Max users",

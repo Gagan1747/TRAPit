@@ -22,7 +22,15 @@ export default function HomePage({ searchParams }: { searchParams?: Record<strin
     >
       <div className="form-stack">
         <div>
-          <h2>Welcome to TRAPit</h2>
+          <h2 className="auth-heading-with-logo">
+            <img
+              alt="TRAPit logo"
+              className="auth-heading-logo"
+              decoding="async"
+              src="/trapit-logo.jpeg"
+            />
+            <span>Welcome to TRAPit</span>
+          </h2>
           <p className="muted-text">
             Tests, Apportions and Polls Simplified, Smart, and Precise.
           </p>

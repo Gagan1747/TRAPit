@@ -1,16 +1,18 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { participantIdentifiersMatch } from "@trapit/testing";
 import { NextResponse } from "next/server";
 
 import { getWorkspaceActor } from "../../../../lib/workspace-actor";
 import { isWebAuthConfigured } from "../../../../lib/auth-config";
 import { listRegisteredDirectoryUsers } from "../../../../lib/cognito";
-import { getPayoutAccountForUser } from "../../../../lib/payout-store";
-import { assertCanCreateGroup, assertCanManageGroup } from "../../../../lib/user-category-limits";
+import { getPayoutAccountForUser, isPayoutAccountVerifiedAndReady, listAllPayoutAccounts } from "../../../../lib/payout-store";
+import { assertCanCreateGroup, assertCanEnableGroupPayment, assertCanManageGroup } from "../../../../lib/user-category-limits";
 import {
   addGroupMemberDirect,
   createGroup,
   createParticipant,
   declareGroupIntroducingAdmin,
+  getPendingCumulativeGroupMonths,
   leaveParticipantGroup,
   listGroupJoinRequestsForAdmin,
   listGroupMembershipsForActor,
@@ -113,9 +115,11 @@ type ParticipantBody =
       membershipId?: string;
       mode?: "verify-group-payment";
       monthKey?: string;
+      monthKeys?: string[];
       razorpayOrderId?: string;
       razorpayPaymentId?: string;
       razorpaySignature?: string;
+      razorpaySubscriptionId?: string | null;
     };
 
 function isCreateGroupBody(
@@ -155,7 +159,7 @@ function isLeaveGroupBody(
 }
 
 async function buildParticipantsPayload(actorIdentifier: string | null, participantsOverride?: Awaited<ReturnType<typeof listParticipants>>) {
-  const [participants, participantGroups, groupJoinRequests, memberships] = await Promise.all([
+  const [participants, rawParticipantGroups, groupJoinRequests, memberships, payoutAccounts] = await Promise.all([
     participantsOverride ? Promise.resolve(participantsOverride) : listParticipants(),
     actorIdentifier
       ? listParticipantGroupsForOwner(actorIdentifier, { includeUnowned: true })
@@ -164,7 +168,27 @@ async function buildParticipantsPayload(actorIdentifier: string | null, particip
     actorIdentifier
       ? listGroupMembershipsForActor(actorIdentifier)
       : Promise.resolve({ joinedGroupMemberships: [], ownedGroupMemberships: [] }),
+    listAllPayoutAccounts(),
   ]);
+
+  const participantGroups = rawParticipantGroups.map((group) => {
+    const ownerIdentifier = group.ownerIdentifier?.trim() || null;
+    const creatorPayout = ownerIdentifier
+      ? payoutAccounts.find((account) => account.userIdentifier && participantIdentifiersMatch(account.userIdentifier, ownerIdentifier))
+      : null;
+    const isCreatorPayoutVerified = isPayoutAccountVerifiedAndReady(creatorPayout);
+    const isLinkedToGroup = Boolean(
+      isCreatorPayoutVerified
+      && creatorPayout
+      && (!group.linkedPayoutAccountId || group.linkedPayoutAccountId === creatorPayout.linkedAccountId),
+    );
+
+    return {
+      ...group,
+      creatorPayoutReady: Boolean(group.paymentTrackingEnabled && (group.monthlyPaymentAmountInr ?? 0) > 0 && isLinkedToGroup),
+      linkedPayoutAccountId: group.linkedPayoutAccountId ?? (isCreatorPayoutVerified ? creatorPayout?.linkedAccountId ?? null : null),
+    };
+  });
 
   return {
     groupJoinRequests,
@@ -433,16 +457,57 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Owner identifier is required." }, { status: 400 });
       }
 
-      if (body.enabled !== false && !actor.isSuperAdmin && actor.userCategory === "trapit-normal") {
-        return NextResponse.json(
-          { error: "Pro or Pro Max membership is required to enable group payments." },
-          { status: 403 },
-        );
+      const allGroups = await listParticipantGroups();
+      const targetGroup = allGroups.find((entry) => entry.id === body.groupId);
+      if (!targetGroup) {
+        return NextResponse.json({ error: "Group not found." }, { status: 404 });
+      }
+
+      const nextEnabled = typeof body.enabled === "boolean"
+        ? body.enabled
+        : !Boolean(targetGroup.paymentTrackingEnabled);
+
+      let linkedPayoutAccountId: string | null = targetGroup.linkedPayoutAccountId ?? null;
+
+      if (nextEnabled) {
+        if (!actor.isSuperAdmin) {
+          const currentEnabledGroupCount = allGroups.filter(
+            (entry) =>
+              entry.id !== targetGroup.id
+              && entry.ownerIdentifier
+              && participantIdentifiersMatch(entry.ownerIdentifier, actor.identifier!)
+              && entry.paymentTrackingEnabled
+              && (entry.monthlyPaymentAmountInr ?? 0) > 0,
+          ).length;
+          try {
+            assertCanEnableGroupPayment(actor.userCategory, currentEnabledGroupCount);
+          } catch (limitError) {
+            return NextResponse.json(
+              { error: limitError instanceof Error ? limitError.message : "Upgrade your plan to enable payments for more groups." },
+              { status: 403 },
+            );
+          }
+        }
+
+        const creatorPayoutAccount = await getPayoutAccountForUser({
+          userIdentifier: actor.identifier,
+          userSub: actor.sub,
+        });
+        if (!isPayoutAccountVerifiedAndReady(creatorPayoutAccount) || !creatorPayoutAccount) {
+          return NextResponse.json(
+            {
+              error: "Your bank details must be up to date, verified, and linked in Pay Account Settings before activating payments for this group.",
+            },
+            { status: 400 },
+          );
+        }
+        linkedPayoutAccountId = creatorPayoutAccount.linkedAccountId;
       }
 
       await toggleGroupPaymentTracking({
-        enabled: body.enabled,
+        enabled: nextEnabled,
         groupId: body.groupId,
+        linkedPayoutAccountId,
         monthlyPaymentAmountInr: body.monthlyPaymentAmountInr,
         ownerIdentifier: actor.identifier,
       });
@@ -460,10 +525,44 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "User identifier is required." }, { status: 400 });
       }
 
-      const allGroups = await listParticipantGroups();
+      const [allGroups, memberships] = await Promise.all([
+        listParticipantGroups(),
+        listGroupMembershipsForActor(actor.identifier),
+      ]);
       const group = allGroups.find((entry) => entry.id === groupId);
       if (!group || !group.paymentTrackingEnabled || !group.monthlyPaymentAmountInr || group.monthlyPaymentAmountInr <= 0) {
         return NextResponse.json({ error: "This group does not have monthly payments enabled." }, { status: 400 });
+      }
+
+      const creatorPayoutAccount = group.ownerIdentifier
+        ? await getPayoutAccountForUser({ userIdentifier: group.ownerIdentifier })
+        : null;
+      const isCreatorBankVerifiedForGroup = Boolean(
+        isPayoutAccountVerifiedAndReady(creatorPayoutAccount)
+        && creatorPayoutAccount
+        && (!group.linkedPayoutAccountId || group.linkedPayoutAccountId === creatorPayoutAccount.linkedAccountId),
+      );
+      if (!isCreatorBankVerifiedForGroup || !creatorPayoutAccount) {
+        return NextResponse.json(
+          { error: "Payments are not active for this group until the group creator's bank details are verified and linked." },
+          { status: 400 },
+        );
+      }
+
+      const membership = memberships.joinedGroupMemberships.find((record) =>
+        body.membershipId ? record.id === body.membershipId : record.groupId === group.id,
+      );
+      if (!membership || membership.status !== "member") {
+        return NextResponse.json({ error: "Active group membership is required to make a payment." }, { status: 403 });
+      }
+
+      const pendingMonthKeys = getPendingCumulativeGroupMonths({
+        groupCreatedAt: group.createdAt,
+        membership,
+        targetMonthKey: monthKey,
+      });
+      if (!pendingMonthKeys.length) {
+        return NextResponse.json({ error: "The selected month is already paid." }, { status: 400 });
       }
 
       const keyId = process.env.RAZORPAY_KEY_ID?.trim() || process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID?.trim() || "";
@@ -475,23 +574,80 @@ export async function POST(request: Request) {
         );
       }
 
-      const amountPaise = Math.round(group.monthlyPaymentAmountInr * 100);
-      const creatorPayoutAccount = group.ownerIdentifier
-        ? await getPayoutAccountForUser({ userIdentifier: group.ownerIdentifier })
-        : null;
+      const cumulativeAmountInr = Math.round(group.monthlyPaymentAmountInr * pendingMonthKeys.length);
+      const amountPaise = Math.round(cumulativeAmountInr * 100);
       const receipt = `grp_${group.id.slice(-8)}_${monthKey}_${Date.now()}`.slice(0, 40);
       const authHeader = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
+
+      // Create a 6-month Razorpay Autopay subscription when supported, alongside the cumulative order
+      let autopaySubscriptionId: string | null = membership.autopaySubscriptionId ?? null;
+      if (!autopaySubscriptionId || membership.autopayStatus === "cancelled") {
+        try {
+          const planResponse = await fetch("https://api.razorpay.com/v1/plans", {
+            method: "POST",
+            headers: {
+              Authorization: `Basic ${authHeader}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              period: "monthly",
+              interval: 1,
+              item: {
+                name: `${group.name} Monthly Membership`,
+                amount: Math.round(group.monthlyPaymentAmountInr * 100),
+                currency: "INR",
+                description: `Monthly Autopay (6 months) for ${group.name}`,
+              },
+            }),
+          });
+          if (planResponse.ok) {
+            const planPayload = (await planResponse.json().catch(() => ({}))) as { id?: string };
+            if (planPayload.id) {
+              const subResponse = await fetch("https://api.razorpay.com/v1/subscriptions", {
+                method: "POST",
+                headers: {
+                  Authorization: `Basic ${authHeader}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                  plan_id: planPayload.id,
+                  total_count: 6,
+                  quantity: 1,
+                  customer_notify: 1,
+                  notes: {
+                    groupId: group.id,
+                    groupName: group.name,
+                    linkedAccountId: creatorPayoutAccount.linkedAccountId,
+                    memberIdentifier: actor.identifier,
+                  },
+                }),
+              });
+              if (subResponse.ok) {
+                const subPayload = (await subResponse.json().catch(() => ({}))) as { id?: string };
+                if (subPayload.id) {
+                  autopaySubscriptionId = subPayload.id;
+                }
+              }
+            }
+          }
+        } catch {
+          // Continue with cumulative order checkout when subscription API is unavailable on test keys
+        }
+      }
 
       const baseOrderBody: Record<string, unknown> = {
         amount: amountPaise,
         currency: "INR",
         notes: {
+          autopayMonths: "6",
+          ...(autopaySubscriptionId ? { autopaySubscriptionId } : {}),
           groupId: group.id,
           groupName: group.name,
+          linkedAccountId: creatorPayoutAccount.linkedAccountId,
           memberIdentifier: actor.identifier,
           monthKey,
+          monthKeys: pendingMonthKeys.join(","),
           ownerIdentifier: group.ownerIdentifier ?? "",
-          ...(creatorPayoutAccount?.linkedAccountId ? { linkedAccountId: creatorPayoutAccount.linkedAccountId } : {}),
         },
         receipt,
       };
@@ -547,13 +703,17 @@ export async function POST(request: Request) {
 
       return NextResponse.json({
         amount: orderPayload.amount ?? amountPaise,
-        amountInr: group.monthlyPaymentAmountInr,
+        amountInr: cumulativeAmountInr,
+        autopayMonths: 6,
+        autopaySubscriptionId,
         currency: orderPayload.currency ?? "INR",
         groupId: group.id,
         groupName: group.name,
         keyId,
         linkedAccountId: creatorPayoutAccount?.linkedAccountId ?? null,
         monthKey,
+        monthKeys: pendingMonthKeys,
+        monthlyFeeInr: group.monthlyPaymentAmountInr,
         orderId: orderPayload.id,
       });
     }
@@ -595,10 +755,13 @@ export async function POST(request: Request) {
 
       await recordGroupMonthlyPayment({
         amountInr,
+        autopayMonths: 6,
+        autopaySubscriptionId: body.razorpaySubscriptionId ?? null,
         groupId: group.id,
         memberIdentifier: actor.identifier,
         membershipId: body.membershipId,
         monthKey,
+        monthKeys: body.monthKeys,
         orderId,
         paymentId,
       });
